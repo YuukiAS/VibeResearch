@@ -1,11 +1,55 @@
+# Python bytecode and caches
 __pycache__/
 *.py[cod]
+*$py.class
+
+# Test, type-checker, and linter caches
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 .mypy_cache/
 .ruff_cache/
+.pyre/
+
+# Virtual environments and local interpreters
 .venv/
 .venv-vibe/
+venv/
+env/
 env_vibe_research/
+
+# Packaging and build outputs
 build/
 dist/
 *.egg-info/
+*.egg
+
+# VibeResearch local-only state and generated heavy artifacts
+.vibe/config.local.yaml
+.vibe/config.detected.yaml
+.vibe/runtime/
+.vibe/site/
+.vibe/reports/meeting/
+.vibe/research/papers.sqlite*
+.vibe/research/raw/
+.vibe/runs/*/artifacts/
+.vibe/runs/*/launch.json
+.vibe/runs/*/monitor.jsonl
+.vibe/runs/*/dryrun.json
+.vibe/runs/*/provenance.json
+
+# Generated root portal mirrors when this repository is used as a target repo
+RUN.md
+VIBE_STATUS.md
+VIBE_TODO.md
+VIBE_TIMELINE.md
+VIBE_LEADERBOARD.md
+
+# Local logs, editor state, and OS files
+*.log
+*.tmp
+*.swp
+.DS_Store
+.idea/
+.vscode/
