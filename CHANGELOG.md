@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-05-29
+
+- Add a maintained `.vibe/ideas/` pool with lifecycle CLI commands, stable `idea_001` IDs, generated Markdown views, and dashboard idea intake.
+- Link `vibe idea` and `vibe ask` raw inbox entries into the idea pool, and require idea pool update sections in run/cycle revised plans.
+- Add contextual deep research requests from ideas and support Markdown/PDF deep research ingest with idea pool, wiki, paper DB, and repo queue updates.
+
 ## 0.4.0 - 2026-05-29
 
 - Add alignment audit, config schema/local/detect/show/validate/edit commands, and detected environment suggestions.

@@ -5,7 +5,9 @@ from __future__ import annotations
 from .dashboard import sync_dashboard
 import re
 
-from .io import append_jsonl, read_json, read_jsonl, utc_now, write_json, write_text
+from .ideas import create_idea as create_pool_idea
+from .ideas import sync_plan_idea_updates
+from .io import append_jsonl, ensure_dir, read_json, read_jsonl, utc_now, write_json, write_text
 from .papers import add_paper
 from .paths import VibePaths
 from .timeline import record_event
@@ -68,6 +70,9 @@ no
 ## Deep research decision
 no
 
+## Idea pool update
+- no changes
+
 ## Portfolio implication
 Keep direction status unchanged until cycle reflection.
 
@@ -80,6 +85,8 @@ Stop if repeated runs fail guardrails or provenance.
     revised_path = paths.runs / run_id / "revised_plan.md"
     if not keep_existing or not revised_path.exists() or not revised_path.read_text().strip():
         write_text(revised_path, text)
+    ensure_idea_update_section(revised_path)
+    sync_plan_idea_updates(paths, revised_path.read_text())
     run["status"] = "revised"
     state["runs"][run_id] = run
     state["next_action"] = f"vibe reflect-cycle {run.get('cycle_id', '')}"
@@ -127,6 +134,9 @@ Use current scheduler budget.
 ## Literature and deep research decision
 Literature refresh: no. Deep research: no.
 
+## Idea pool update
+- no changes
+
 ## User decision needed
 none
 
@@ -136,6 +146,8 @@ Stop or shrink directions after repeated provenance or guardrail failures.
     revised_path = paths.cycles / cycle_id / "cycle_revised_plan.md"
     if not keep_existing or not revised_path.exists() or not revised_path.read_text().strip():
         write_text(revised_path, text)
+    ensure_idea_update_section(revised_path)
+    sync_plan_idea_updates(paths, revised_path.read_text())
     state.setdefault("cycles", {}).setdefault(cycle_id, {})["status"] = "revised"
     state["portfolio_mode"] = next_mode
     state["next_action"] = "vibe plan-cycle"
@@ -220,10 +232,14 @@ Evidence table, method map, repo/weight list, risk assessment, recommended next 
     return request_id
 
 
-def ingest_deep_research(paths: VibePaths, request_id: str) -> None:
+def ingest_deep_research(paths: VibePaths, request_id: str, *, kind: str = "science") -> None:
     result_path = paths.research / "raw" / "deep_reports" / f"{request_id}_result.md"
+    pdf_path = paths.research / "raw" / "deep_reports" / f"{request_id}_result.pdf"
     if not result_path.exists():
-        raise FileNotFoundError(f"Expected report at {result_path}")
+        if pdf_path.exists():
+            result_path = extract_deep_report_pdf(paths, request_id, pdf_path)
+        else:
+            raise FileNotFoundError(f"Expected report at {result_path} or {pdf_path}")
     report = result_path.read_text()
     synthesis = paths.research / "wiki" / "synthesis" / f"{request_id}.md"
     write_text(synthesis, f"# Deep Research Synthesis: {request_id}\n\n{report[:12000]}\n")
@@ -250,15 +266,17 @@ def ingest_deep_research(paths: VibePaths, request_id: str) -> None:
             text = line.strip("-* ")
             if text:
                 ideas.append(text[:300])
+                pool = create_pool_idea(paths, text[:300], source="deep_research", status="triaged")
                 append_jsonl(
                     paths.inbox / "triage.jsonl",
                     {
-                        "idea_id": f"{request_id}_idea{len(ideas):03d}",
+                        "idea_id": pool["idea_id"],
                         "created_at": utc_now(),
                         "source": "deep_research",
                         "raw_text": text[:300],
                         "status": "new",
                         "linked_deep_request_id": request_id,
+                        "linked_pool_idea_id": pool["idea_id"],
                         "triage_decision": "experiment_candidate",
                     },
                 )
@@ -272,11 +290,29 @@ def ingest_deep_research(paths: VibePaths, request_id: str) -> None:
             row["result_path"] = str(result_path)
             row["ingested_at"] = utc_now()
             row["wiki_updates"] = [str(synthesis), str(comparison), str(gaps), str(datasets_path)]
-            row["decision_impact"] = "updated_wiki_papers_repos_datasets_inbox"
+            row["decision_impact"] = f"updated_{kind}_wiki_papers_repos_datasets_inbox"
+            row["kind"] = kind
         updated.append(row)
     write_text(registry_path, "".join(__import__("json").dumps(row, sort_keys=True) + "\n" for row in updated))
     record_event(paths, "deep_research_ingested", f"Ingested {request_id}", status="ingested", payload={"synthesis": str(synthesis), "papers": paper_ids, "repos": repo_urls, "ideas": ideas})
     sync_dashboard(paths)
+
+
+def extract_deep_report_pdf(paths: VibePaths, request_id: str, pdf_path) -> object:
+    md = paths.research / "raw" / "deep_reports" / f"{request_id}_result.md"
+    ensure_dir(md.parent)
+    text = ""
+    method = "unavailable"
+    try:
+        import fitz  # type: ignore
+
+        doc = fitz.open(str(pdf_path))
+        text = "\n".join(page.get_text() for page in doc)
+        method = "pymupdf"
+    except Exception as exc:
+        text = f"PDF text extraction unavailable: {exc}"
+    write_text(md, f"# Deep Research PDF Extract: {request_id}\n\nExtraction method: {method}\nSource PDF: {pdf_path}\n\n{text[:200000]}\n")
+    return md
 
 
 def extract_tagged_lines(text: str, tags: list[str]) -> list[str]:
@@ -287,3 +323,9 @@ def extract_tagged_lines(text: str, tags: list[str]) -> list[str]:
         if clean and any(tag in lowered for tag in tags):
             rows.append(clean[:500])
     return rows
+
+
+def ensure_idea_update_section(path) -> None:
+    text = path.read_text() if path.exists() else ""
+    if "## Idea pool update" not in text:
+        path.write_text(text.rstrip() + "\n\n## Idea pool update\n- no changes\n")

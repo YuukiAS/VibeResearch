@@ -9,7 +9,7 @@ from vibe_research.artifacts import validate_artifact
 from vibe_research.codex_adapter import run_codex
 from vibe_research.cli import app
 from vibe_research.config import detect_config
-from vibe_research.io import read_json, read_yaml
+from vibe_research.io import read_json, read_jsonl, read_yaml
 from vibe_research.paths import VibePaths
 from vibe_research.portal import GENERATED_NOTICE
 
@@ -44,7 +44,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.4.0" in show.output
+    assert "0.5.0" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -146,8 +146,87 @@ def test_literature_and_deep_research_interfaces(tmp_path: Path):
     request = next((tmp_path / ".vibe" / "research" / "deep_requests").glob("dr*.md"))
     result_path = tmp_path / ".vibe" / "research" / "raw" / "deep_reports" / f"{request.stem}_result.md"
     result_path.write_text("# Report\n\nUse route A.")
-    assert invoke("ingest-deep-research", request.stem, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("ingest-deep-research", request.stem, "--target", str(tmp_path), "--kind", "science").exit_code == 0
     assert (tmp_path / ".vibe" / "research" / "wiki" / "synthesis" / f"{request.stem}.md").exists()
+
+
+def test_idea_pool_lifecycle_and_dashboard_intake(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("idea", "compare topology losses with deep research", "--target", str(tmp_path)).exit_code == 0
+    ideas = read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")
+    assert ideas[0]["idea_id"] == "idea_001"
+    assert ideas[0]["linked_raw_id"] == "raw_001"
+    assert invoke("ideas", "triage", "--target", str(tmp_path)).exit_code == 0
+    ideas = read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")
+    assert ideas[0]["status"] == "needs_deep_research"
+    assert "Idea Intake" in (tmp_path / "VIBE_TODO.md").read_text()
+    assert invoke("ideas", "promote", "idea_001", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("ideas", "reject", "idea_001", "--target", str(tmp_path), "--reason", "not now").exit_code == 0
+    assert "idea_001" in (tmp_path / ".vibe" / "ideas" / "rejected.md").read_text()
+    assert invoke("ideas", "archive", "idea_001", "--target", str(tmp_path), "--reason", "recorded").exit_code == 0
+    assert "idea_001" in (tmp_path / ".vibe" / "ideas" / "archive.md").read_text()
+    assert invoke("ideas", "clean", "--target", str(tmp_path)).exit_code == 0
+
+
+def test_deep_request_from_idea_contextual_request(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("idea", "compare nnU-Net and SAM-style repo options", "--target", str(tmp_path)).exit_code == 0
+    result = invoke("deep-request-from-idea", "idea_001", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    registry = read_jsonl(tmp_path / ".vibe" / "research" / "deep_requests" / "registry.jsonl")
+    request_id = registry[-1]["request_id"]
+    request_text = (tmp_path / ".vibe" / "research" / "deep_requests" / f"{request_id}.md").read_text()
+    assert "compare nnU-Net" in request_text
+    assert "Paper DB" in request_text
+    assert "Scheduler and resource constraints" in request_text
+    ideas = read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")
+    assert ideas[0]["linked_deep_request_id"] == request_id
+
+
+def test_revised_plan_includes_idea_pool_update(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
+    run_id = sorted(read_json(tmp_path / ".vibe" / "state" / "state.json", {})["runs"])[0]
+    assert invoke("reflect", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("revise-plan", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert "## Idea pool update" in (tmp_path / ".vibe" / "runs" / run_id / "revised_plan.md").read_text()
+    assert invoke("reflect-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("revise-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert "## Idea pool update" in (tmp_path / ".vibe" / "cycles" / "c001" / "cycle_revised_plan.md").read_text()
+
+
+def test_markdown_deep_research_ingest_updates_idea_pool(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("deep-request", "benchmark comparison", "--target", str(tmp_path), "--offline").exit_code == 0
+    request = next((tmp_path / ".vibe" / "research" / "deep_requests").glob("dr*.md"))
+    result_path = tmp_path / ".vibe" / "research" / "raw" / "deep_reports" / f"{request.stem}_result.md"
+    result_path.write_text("# Report\n\nRecommendation: try robust benchmark reranking.\nGitHub: https://github.com/example/repo\n")
+    assert invoke("ingest-deep-research", request.stem, "--target", str(tmp_path), "--kind", "benchmark").exit_code == 0
+    ideas = read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")
+    assert any("robust benchmark" in row["raw_text"] for row in ideas)
+    registry = read_jsonl(tmp_path / ".vibe" / "research" / "deep_requests" / "registry.jsonl")
+    assert registry[-1]["kind"] == "benchmark"
+
+
+def test_pdf_deep_research_ingest_with_mocked_extractor(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("deep-request", "repo comparison", "--target", str(tmp_path), "--offline").exit_code == 0
+    request = next((tmp_path / ".vibe" / "research" / "deep_requests").glob("dr*.md"))
+    pdf_path = tmp_path / ".vibe" / "research" / "raw" / "deep_reports" / f"{request.stem}_result.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 tiny placeholder")
+
+    import vibe_research.research as research_module
+
+    def fake_extract(paths, request_id, pdf_path):
+        md = paths.research / "raw" / "deep_reports" / f"{request_id}_result.md"
+        md.write_text("# Extracted\n\nRecommendation: try repo smoke test.\n")
+        return md
+
+    monkeypatch.setattr(research_module, "extract_deep_report_pdf", fake_extract)
+    assert invoke("ingest-deep-research", request.stem, "--target", str(tmp_path), "--kind", "repo").exit_code == 0
+    assert (tmp_path / ".vibe" / "research" / "raw" / "deep_reports" / f"{request.stem}_result.md").exists()
 
 
 def test_expanded_operator_commands(tmp_path: Path):
@@ -233,6 +312,7 @@ def test_todo_cli_commands_exist():
         "init",
         "audit",
         "config",
+        "ideas",
         "portal",
         "status",
         "idea",
@@ -256,6 +336,7 @@ def test_todo_cli_commands_exist():
         "lit-refresh-cycle",
         "deep-request",
         "deep-request-cycle",
+        "deep-request-from-idea",
         "ingest-deep-research",
         "wiki-ingest",
         "leaderboard",

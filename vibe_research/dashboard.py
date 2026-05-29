@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .ideas import ensure_idea_pool, read_ideas, render_idea_views
 from .io import read_json, read_jsonl, write_json, write_text
 from .paths import VibePaths
 from .portal import build_portal, write_portal_text
@@ -54,6 +55,7 @@ def render_status(paths: VibePaths) -> str:
 def render_todo(paths: VibePaths) -> str:
     state = read_json(paths.state / "state.json", {})
     ideas = read_jsonl(paths.inbox / "triage.jsonl")
+    pool = read_ideas(paths) if paths.ideas.exists() else []
     lines = ["# Vibe TODO", "", "## NOW", ""]
     lines.append(f"- [ ] Run `{state.get('next_action', 'vibe next')}`")
     lines.extend(["", "## NEXT", ""])
@@ -65,6 +67,29 @@ def render_todo(paths: VibePaths) -> str:
     lines.extend(["", "## BLOCKED", ""])
     if state.get("blocked_reason"):
         lines.append(f"- [ ] {state['blocked_reason']}")
+    else:
+        lines.append("None.")
+    lines.extend(["", "## Idea Intake", ""])
+    lines.append('Submit a raw prompt with `vibe idea "..."`.')
+    lines.extend(["", "### Recent raw inbox prompts", ""])
+    if ideas:
+        for idea in ideas[-8:]:
+            linked = idea.get("linked_pool_idea_id", idea.get("idea_id", ""))
+            lines.append(f"- `{linked}` from `{idea.get('source', '')}`: {idea.get('raw_text', '')[:160]}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "### Recently triaged idea pool entries", ""])
+    recent_pool = pool[-8:]
+    if recent_pool:
+        for idea in recent_pool:
+            lines.append(f"- `{idea.get('idea_id', '')}` `{idea.get('status', '')}` next: {idea.get('next_action', '')} - {idea.get('raw_text', '')[:140]}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "### Deep Research Decisions", ""])
+    candidates = [idea for idea in pool if idea.get("status") == "needs_deep_research"]
+    if candidates:
+        for idea in candidates:
+            lines.append(f"- [ ] `{idea.get('idea_id', '')}` run `vibe deep-request-from-idea {idea.get('idea_id', '')}`")
     else:
         lines.append("None.")
     lines.extend(["", "## DONE", ""])
@@ -111,6 +136,8 @@ def render_run_table(paths: VibePaths) -> list[dict[str, Any]]:
 
 
 def sync_dashboard(paths: VibePaths) -> None:
+    ensure_idea_pool(paths)
+    render_idea_views(paths)
     status = render_status(paths)
     todo = render_todo(paths)
     leaderboard = render_leaderboard(paths)

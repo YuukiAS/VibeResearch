@@ -23,6 +23,9 @@ from .daemon import daemon_start, daemon_status, daemon_stop
 from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .directions import set_direction_status
 from .git_ops import abandon_run, create_branch, git_available, git_current_branch, git_diff_text, merge_review, merge_run, protected_diff_paths
+from .ideas import archive_idea as archive_pool_idea
+from .ideas import build_deep_request_from_idea
+from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
 from .io import read_json
 from .manifest import validate_manifest
 from .next_action import compute_next_action
@@ -41,10 +44,12 @@ daemon_app = typer.Typer(help="Manage tmux-backed VibeResearch daemon.")
 config_app = typer.Typer(help="Inspect, validate, detect, and edit VibeResearch config.")
 portal_app = typer.Typer(help="Build root portal mirrors from .vibe/portal.")
 audit_app = typer.Typer(help="Generate alignment audit reports.")
+ideas_app = typer.Typer(help="Manage the maintained research idea pool.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
 app.add_typer(audit_app, name="audit")
+app.add_typer(ideas_app, name="ideas")
 console = Console()
 
 
@@ -214,6 +219,81 @@ def ask(text: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> 
 
     record = add_idea(paths(target), text, source="question")
     console.print(f"Recorded question {record.idea_id}")
+
+
+@ideas_app.command("list")
+def ideas_list(target: Path = typer.Option(Path("."), "--target", "-t"), status: Optional[str] = typer.Option(None, "--status")) -> None:
+    """List maintained idea pool entries."""
+
+    rows = read_ideas(paths(target))
+    table = Table(title="Ideas")
+    for col in ["Idea", "Status", "Priority", "Confidence", "Next action", "Text"]:
+        table.add_column(col)
+    for row in rows:
+        if status and row.get("status") != status:
+            continue
+        table.add_row(
+            row.get("idea_id", ""),
+            row.get("status", ""),
+            row.get("priority", ""),
+            row.get("confidence", ""),
+            row.get("next_action", ""),
+            row.get("raw_text", "")[:80],
+        )
+    console.print(table)
+
+
+@ideas_app.command("triage")
+def ideas_triage(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Deterministically triage new idea pool entries."""
+
+    changed = triage_ideas(paths(target))
+    console.print(f"Triaged {len(changed)} idea(s)")
+
+
+@ideas_app.command("promote")
+def ideas_promote(idea_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Promote an idea into active planning."""
+
+    row = promote_idea(paths(target), idea_id)
+    sync_dashboard(paths(target))
+    console.print(f"Promoted {row['idea_id']}")
+
+
+@ideas_app.command("reject")
+def ideas_reject(idea_id: str, target: Path = typer.Option(Path("."), "--target", "-t"), reason: str = typer.Option("", "--reason")) -> None:
+    """Reject an idea with an optional reason."""
+
+    row = reject_idea(paths(target), idea_id, reason)
+    sync_dashboard(paths(target))
+    console.print(f"Rejected {row['idea_id']}")
+
+
+@ideas_app.command("archive")
+def ideas_archive(idea_id: str, target: Path = typer.Option(Path("."), "--target", "-t"), reason: str = typer.Option("", "--reason")) -> None:
+    """Archive an idea with an optional reason."""
+
+    row = archive_pool_idea(paths(target), idea_id, reason)
+    sync_dashboard(paths(target))
+    console.print(f"Archived {row['idea_id']}")
+
+
+@ideas_app.command("clean")
+def ideas_clean(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Mark duplicate idea text as superseded and rebuild idea views."""
+
+    result = clean_ideas(paths(target))
+    sync_dashboard(paths(target))
+    console.print(result)
+
+
+@ideas_app.command("build-deep-request")
+def ideas_build_deep_request(idea_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Build a contextual deep research request for an idea."""
+
+    request_id = build_deep_request_from_idea(paths(target), idea_id)
+    sync_dashboard(paths(target))
+    console.print(f"Created {request_id}")
 
 
 @app.command()
@@ -675,11 +755,33 @@ def deep_request_cycle_cmd(
     console.print(f"Created {request_id}")
 
 
+@app.command("deep-request-from-idea")
+def deep_request_from_idea_cmd(
+    idea_id: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    offline: bool = typer.Option(False, "--offline"),
+) -> None:
+    """Generate a contextual deep research request from a maintained idea."""
+
+    p = paths(target)
+    del offline
+    get_idea(p, idea_id)
+    request_id = build_deep_request_from_idea(p, idea_id)
+    sync_dashboard(p)
+    console.print(f"Created {request_id}")
+
+
 @app.command("ingest-deep-research")
-def ingest_deep_research_cmd(request_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+def ingest_deep_research_cmd(
+    request_id: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    kind: str = typer.Option("science", "--kind", help="science, workflow, repo, or benchmark"),
+) -> None:
     """Ingest a returned deep research report from raw/deep_reports."""
 
-    ingest_deep_research(paths(target), request_id)
+    if kind not in {"science", "workflow", "repo", "benchmark"}:
+        raise typer.BadParameter("--kind must be science, workflow, repo, or benchmark")
+    ingest_deep_research(paths(target), request_id, kind=kind)
     console.print(f"Ingested {request_id}")
 
 

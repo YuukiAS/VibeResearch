@@ -7,6 +7,9 @@ from typing import Any
 
 from .dashboard import sync_dashboard
 from .config import write_config_schema
+from .ideas import create_idea as create_pool_idea
+from .ideas import ensure_idea_pool
+from .ideas import render_idea_views
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, slugify, utc_now, write_json, write_text, write_yaml
 from .models import IdeaRecord, ProjectConfig, RunManifest, default_budget, default_state
 from .papers import connect
@@ -18,6 +21,7 @@ from .timeline import record_event
 DIRS = [
     "inbox",
     "state",
+    "ideas",
     "cycles",
     "runs",
     "directions",
@@ -83,6 +87,8 @@ def init_project(
     write_text(paths.inbox / "user_prompts.md", "# User Prompts\n\n")
     write_text(paths.inbox / "questions.md", "# Questions\n\n")
     touch_jsonl(paths.inbox / "triage.jsonl")
+    ensure_idea_pool(paths)
+    render_idea_views(paths)
 
     touch_jsonl(paths.directions / "registry.jsonl")
     write_json(paths.branches / "active.json", {})
@@ -227,13 +233,17 @@ def write_default_prompts(paths: VibePaths) -> None:
 
 def add_idea(paths: VibePaths, text: str, *, source: str = "cli") -> IdeaRecord:
     paths.require_initialized()
-    existing = [row["idea_id"] for row in read_jsonl(paths.inbox / "triage.jsonl")]
-    idea_id = next_numeric_id(existing, "idea")
-    record = IdeaRecord(idea_id=idea_id, created_at=utc_now(), source=source, raw_text=text)
-    append_jsonl(paths.inbox / "triage.jsonl", record.model_dump())
+    existing = [row.get("raw_id", row.get("idea_id", "")) for row in read_jsonl(paths.inbox / "triage.jsonl")]
+    raw_id = next_numeric_id(existing, "raw_")
+    pool_record = create_pool_idea(paths, text, source=source, linked_raw_id=raw_id)
+    record = IdeaRecord(idea_id=pool_record["idea_id"], created_at=utc_now(), source=source, raw_text=text)
+    raw_record = record.model_dump()
+    raw_record["raw_id"] = raw_id
+    raw_record["linked_pool_idea_id"] = pool_record["idea_id"]
+    append_jsonl(paths.inbox / "triage.jsonl", raw_record)
     with (paths.inbox / "ideas.md").open("a") as handle:
-        handle.write(f"- [ ] {idea_id}: {text}\n")
-    record_event(paths, "idea_received", text[:180], status="new", payload={"idea_id": idea_id})
+        handle.write(f"- [ ] {pool_record['idea_id']} ({raw_id}): {text}\n")
+    record_event(paths, "idea_received", text[:180], status="new", payload={"idea_id": pool_record["idea_id"], "raw_id": raw_id})
     sync_dashboard(paths)
     return record
 

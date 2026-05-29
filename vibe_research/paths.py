@@ -13,6 +13,7 @@ class VibePaths:
         self.state = self.vibe / "state"
         self.cycles = self.vibe / "cycles"
         self.runs = self.vibe / "runs"
+        self.ideas = self.vibe / "ideas"
         self.directions = self.vibe / "directions"
         self.branches = self.vibe / "branches"
         self.leaderboard = self.vibe / "leaderboard"
