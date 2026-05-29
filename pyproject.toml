@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vibe-research"
+version = "0.1.0"
+description = "Repo-specific sustained research orchestration framework"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2",
+  "typer>=0.9",
+  "rich>=13",
+]
+
+[project.optional-dependencies]
+full = [
+  "pyyaml",
+  "jinja2",
+  "requests",
+  "httpx",
+  "beautifulsoup4",
+  "feedparser",
+  "python-dotenv",
+  "sqlite-utils",
+  "pandas",
+  "tabulate",
+  "GitPython",
+  "psutil",
+  "jsonschema",
+  "tqdm",
+  "arxiv",
+  "semanticscholar",
+  "pymupdf",
+  "markdownify",
+  "networkx",
+  "plotly",
+]
+test = ["pytest"]
+
+[project.scripts]
+vibe = "vibe_research.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["vibe_research*"]
+
