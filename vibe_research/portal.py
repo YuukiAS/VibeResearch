@@ -38,7 +38,7 @@ def with_notice(text: str) -> str:
 
 
 def write_portal_text(paths: VibePaths, name: str, text: str) -> Path:
-    if name not in ROOT_MIRRORS and name not in {"AGENTS.md", "AGENTS_SNIPPET.md"}:
+    if name not in ROOT_MIRRORS and name not in {"AGENTS.md", "AGENTS_SNIPPET.md", "INSTALL.md", "USAGE.md"}:
         raise ValueError(f"Unsupported portal file: {name}")
     target = paths.portal / name
     write_text(target, with_notice(text))

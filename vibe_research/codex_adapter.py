@@ -216,6 +216,7 @@ def context_packet(paths: VibePaths, target_id: str) -> str:
         "VIBE_STATUS.md",
         "VIBE_LEADERBOARD.md",
         "VIBE_TODO.md",
+        ".vibe/project/brief.md",
         ".vibe/inbox/triage.jsonl",
         ".vibe/ideas/registry.jsonl",
         ".vibe/state/state.json",
@@ -245,7 +246,7 @@ def offline_artifact(role: str, target_id: str) -> str:
     if role == "reviewer":
         return f"# Run Review for {target_id}\n\nVerdict: APPROVE_WITH_GUARDS\n\nGuards: dry-run must pass and metric provenance must be collected.\n"
     if role == "portfolio_planner":
-        return f"# Portfolio Plan for {target_id or 'next cycle'}\n\n## Stage\nexploration\n\n## Current leaderboard summary\nUse current VIBE_LEADERBOARD.md.\n\n## User ideas and directives considered\nSee inbox.\n\n## Candidate directions\n- baseline\n- diagnostics\n- experiment\n\n## Selected runs\n- baseline check\n- diagnostic check\n- first hypothesis\n\n## Dependency graph\nCheap diagnostics first.\n\n## Resource budget\nUse scheduler budget.\n\n## Portfolio success criteria\nAt least one trusted result or actionable direction decision.\n\n## Stop or shrink criteria\nStop repeated guardrail failures.\n"
+        return f"# Portfolio Plan for {target_id or 'next cycle'}\n\n## Stage\nexploration\n\n## Current leaderboard summary\nUse current VIBE_LEADERBOARD.md.\n\n## User ideas and directives considered\nSee inbox.\n\n## Candidate directions\n- baseline\n- diagnostics\n- experiment\n\n## Selected runs\n- baseline check\n- diagnostic check\n- first hypothesis\n\n## Dependency graph\nCheap diagnostics first.\n\n## Resource budget\nUse scheduler budget.\n\n## Portfolio success criteria\nAt least one trusted result or actionable direction decision.\n\n## Stop or shrink criteria\nStop repeated guardrail failures.\n\n## Idea pool update\n- no changes\n"
     if role == "reflect":
         return f"# Reflect for {target_id}\n\n## Result interpretation\nOffline fallback; inspect metrics.json.\n\n## Hypothesis status\nneeds evidence\n\n## Failure or success analysis\nRequire revised plan before next action.\n"
     if role == "cycle_reflect":

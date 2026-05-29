@@ -28,6 +28,7 @@ REQUIRED_SECTIONS = {
         "## Resource budget",
         "## Portfolio success criteria",
         "## Stop or shrink criteria",
+        "## Idea pool update",
     ],
     "portfolio_reviewer": ["Verdict:"],
     "reviewer": ["Verdict:"],

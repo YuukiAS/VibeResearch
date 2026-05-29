@@ -12,14 +12,28 @@ from .paths import VibePaths
 from .timeline import record_event
 
 
-IDEA_STATUSES = {"new", "triaged", "active", "needs_deep_research", "backlog", "rejected", "archived", "superseded"}
+IDEA_STATUSES = {
+    "new",
+    "triaged",
+    "active",
+    "actionable_next_run",
+    "queued_for_cycle",
+    "needs_literature_refresh",
+    "needs_deep_research",
+    "waiting_user_decision",
+    "implemented",
+    "backlog",
+    "rejected",
+    "archived",
+    "superseded",
+}
 IDEA_FILES = {
-    "pool.md": {"new", "triaged", "active", "needs_deep_research", "backlog"},
-    "active.md": {"active"},
+    "pool.md": {"new", "triaged", "active", "actionable_next_run", "queued_for_cycle", "needs_literature_refresh", "needs_deep_research", "waiting_user_decision", "backlog"},
+    "active.md": {"active", "actionable_next_run", "queued_for_cycle"},
     "deep_research_candidates.md": {"needs_deep_research"},
-    "backlog.md": {"backlog", "new", "triaged"},
+    "backlog.md": {"backlog", "new", "triaged", "needs_literature_refresh", "waiting_user_decision"},
     "rejected.md": {"rejected"},
-    "archive.md": {"archived", "superseded"},
+    "archive.md": {"archived", "superseded", "implemented"},
 }
 
 
@@ -187,16 +201,23 @@ def clean_ideas(paths: VibePaths) -> dict[str, int]:
     seen: set[str] = set()
     kept: list[dict[str, Any]] = []
     duplicates = 0
+    evidence_gaps = 0
     for row in read_ideas(paths):
         key = " ".join(row.get("raw_text", "").lower().split())
         if key and key in seen:
             row["status"] = "superseded"
             row["archive_reason"] = "duplicate idea text"
             duplicates += 1
+        if row.get("status") in {"active", "actionable_next_run", "queued_for_cycle"} and not row.get("linked_evidence"):
+            row["current_evidence"] = (row.get("current_evidence", "") + " | needs linked evidence").strip(" |")
+            evidence_gaps += 1
+        if row.get("status") == "implemented":
+            row["status"] = "archived"
+            row["archive_reason"] = row.get("archive_reason") or "implemented idea archived by clean"
         seen.add(key)
         kept.append(row)
     write_ideas(paths, kept)
-    return {"duplicates_marked": duplicates, "total": len(kept)}
+    return {"duplicates_marked": duplicates, "evidence_gaps_marked": evidence_gaps, "total": len(kept)}
 
 
 def build_deep_request_from_idea(paths: VibePaths, idea_id: str) -> str:
@@ -204,6 +225,7 @@ def build_deep_request_from_idea(paths: VibePaths, idea_id: str) -> str:
     state = (paths.state / "state.json").read_text() if (paths.state / "state.json").exists() else "{}"
     leaderboard = (paths.leaderboard / "best_by_direction.json").read_text() if (paths.leaderboard / "best_by_direction.json").exists() else "{}"
     wiki_index = (paths.research / "wiki" / "index.md").read_text() if (paths.research / "wiki" / "index.md").exists() else ""
+    project_brief = (paths.project / "brief.md").read_text() if (paths.project / "brief.md").exists() else ""
     papers = list_papers(paths)[:20]
     open_questions = (paths.state / "open_questions.jsonl").read_text() if (paths.state / "open_questions.jsonl").exists() else ""
     reviewer_notes = collect_existing_text(paths.runs, ["review.md", "reflect.md", "revised_plan.md"], limit=12000)
@@ -215,6 +237,9 @@ def build_deep_request_from_idea(paths: VibePaths, idea_id: str) -> str:
 
 ## Idea
 {idea.get('raw_text', '')}
+
+## Project context
+{project_brief or 'No project brief found.'}
 
 ## Idea metadata
 - Status: `{idea.get('status', '')}`
@@ -237,7 +262,7 @@ def build_deep_request_from_idea(paths: VibePaths, idea_id: str) -> str:
 Paper DB:
 {format_papers(papers)}
 
-## Repo architecture summary
+## Current architecture / workflow
 {repo_architecture_summary(paths)}
 
 ## Scheduler and resource constraints

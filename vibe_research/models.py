@@ -12,7 +12,16 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.5.0"
+    vibe_version: str = "0.6.0"
+    project: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "name": "Generic Research Repo",
+            "goal": "",
+            "background": "",
+            "brief_path": ".vibe/project/brief.md",
+            "brief_missing": True,
+        }
+    )
     portal: dict[str, Any] = Field(
         default_factory=lambda: {
             "root_mode": "copy",
@@ -84,6 +93,31 @@ class ProjectConfig(BaseModel):
             "loop_interval_seconds": 300,
             "auto_next": False,
             "log_tail_lines": 80,
+        }
+    )
+    dashboard: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enabled": True,
+            "static_site_dir": ".vibe/site",
+            "serve_host": "127.0.0.1",
+            "serve_port": 8765,
+            "codex_quota_display": "unknown/manual",
+        }
+    )
+    ideas: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enabled": True,
+            "max_active_ideas": 20,
+            "stale_after_days": 30,
+            "require_cleanup_each_cycle": True,
+        }
+    )
+    deep_research: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enabled": True,
+            "default_blocking": False,
+            "allow_pdf_ingest": True,
+            "allow_markdown_ingest": True,
         }
     )
     research: dict[str, Any] = Field(
@@ -190,4 +224,7 @@ def default_budget() -> dict[str, Any]:
         "max_walltime_hours_per_cycle": 48,
         "max_failed_runs_before_pause": 3,
         "queue_policy": "priority_then_resource_fit",
+        "partition_priority": {},
+        "fallback_partitions": ["gpu", "a100", "general_gpu"],
+        "cancel_rules": [],
     }

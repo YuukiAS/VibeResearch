@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS papers (
   tags TEXT,
   related_cycle_ids TEXT,
   related_run_ids TEXT,
+  related_idea_ids TEXT,
   related_deep_request_ids TEXT,
   repo_urls TEXT,
   weight_urls TEXT,
@@ -54,8 +55,16 @@ def connect(paths: VibePaths) -> sqlite3.Connection:
     ensure_dir(paths.research)
     conn = sqlite3.connect(db_path(paths))
     conn.execute(SCHEMA)
+    ensure_paper_columns(conn)
     conn.commit()
     return conn
+
+
+def ensure_paper_columns(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(papers)").fetchall()}
+    for name, ddl in {"related_idea_ids": "TEXT"}.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE papers ADD COLUMN {name} {ddl}")
 
 
 def paper_search(paths: VibePaths, query: str, *, source: str = "arxiv", limit: int = 10, offline: bool = False, add_candidates: bool = False) -> list[dict[str, Any]]:
@@ -200,6 +209,7 @@ def add_paper(paths: VibePaths, metadata: dict[str, Any]) -> str:
         "tags": json.dumps(metadata.get("tags", [])),
         "related_cycle_ids": json.dumps(metadata.get("related_cycle_ids", [])),
         "related_run_ids": json.dumps(metadata.get("related_run_ids", [])),
+        "related_idea_ids": json.dumps(metadata.get("related_idea_ids", [])),
         "related_deep_request_ids": json.dumps(metadata.get("related_deep_request_ids", [])),
         "repo_urls": json.dumps(metadata.get("repo_urls", [])),
         "weight_urls": json.dumps(metadata.get("weight_urls", [])),
@@ -284,6 +294,8 @@ Pending synthesis update.
 """,
     )
     append_wiki_page(paths.research / "wiki" / "concepts" / "paper-methods.md", paper_id, title)
+    append_wiki_page(paths.research / "wiki" / "entities" / "papers-and-datasets.md", paper_id, title)
+    append_wiki_page(paths.research / "wiki" / "comparisons" / "paper-comparisons.md", paper_id, "Comparison pending extraction.")
     append_wiki_page(paths.research / "wiki" / "gaps" / "questions.md", paper_id, "Questions and gaps pending extraction.")
     append_wiki_page(paths.research / "wiki" / "synthesis" / "field-map.md", paper_id, title)
     with (paths.research / "wiki" / "index.md").open("a") as handle:

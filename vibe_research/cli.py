@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 from typing import Optional
 
@@ -21,6 +22,7 @@ from .codex_adapter import artifact_path, prompt_packet, run_codex
 from .config import detect_config, load_config, migrate_project, validate_config
 from .daemon import daemon_start, daemon_status, daemon_stop
 from .dashboard import render_leaderboard, render_status, sync_dashboard
+from .dashboard_site import build_dashboard_site, serve_dashboard_site
 from .directions import set_direction_status
 from .git_ops import abandon_run, create_branch, git_available, git_current_branch, git_diff_text, merge_review, merge_run, protected_diff_paths
 from .ideas import archive_idea as archive_pool_idea
@@ -28,12 +30,14 @@ from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
 from .io import read_json
 from .manifest import validate_manifest
+from .meeting import export_meeting_report
 from .next_action import compute_next_action
 from .papers import add_paper, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
 from .portal import build_portal
-from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio
+from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio, vendor_runtime
 from .research import deep_request, ingest_deep_research, literature_refresh, reflect, reflect_cycle, revise_cycle, revise_plan
+from .reports import generate_alignment_after_changes, generate_dogfood_reports, write_portal_docs
 from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
 from .scheduler import queue_run, review_cycle, review_run, run_dryrun, submit_queue
@@ -45,11 +49,13 @@ config_app = typer.Typer(help="Inspect, validate, detect, and edit VibeResearch 
 portal_app = typer.Typer(help="Build root portal mirrors from .vibe/portal.")
 audit_app = typer.Typer(help="Generate alignment audit reports.")
 ideas_app = typer.Typer(help="Manage the maintained research idea pool.")
+dashboard_app = typer.Typer(help="Build and serve the read-only static dashboard.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
 app.add_typer(audit_app, name="audit")
 app.add_typer(ideas_app, name="ideas")
+app.add_typer(dashboard_app, name="dashboard")
 console = Console()
 
 
@@ -67,10 +73,18 @@ def init(
     root_portal: str = typer.Option("copy", "--root-portal", help="Root mirror mode: copy, symlink, or none."),
     no_root_portal: bool = typer.Option(False, "--no-root-portal", help="Do not create root mirror files."),
     install_agents_snippet: bool = typer.Option(False, "--install-agents-snippet", help="Append the generated snippet to root AGENTS.md."),
+    goal: str = typer.Option("", "--goal", help="Project research goal."),
+    background: str = typer.Option("", "--background", help="Project background and constraints."),
+    brief_file: Optional[Path] = typer.Option(None, "--brief-file", help="Markdown file to import as .vibe/project/brief.md."),
+    idea: list[str] = typer.Option([], "--idea", help="Initial idea; may be repeated."),
+    idea_file: Optional[Path] = typer.Option(None, "--idea-file", help="File containing initial ideas, one per line."),
 ) -> None:
     """Initialize `.vibe/` and root progress files in a target repo."""
 
-    del auto
+    if not auto and not minimal and not brief_file and not goal and sys.stdin.isatty():
+        goal = typer.prompt("Project goal")
+    if not auto and not minimal and not brief_file and not background and sys.stdin.isatty():
+        background = typer.prompt("Project background")
     selected_portal = "none" if no_root_portal else root_portal
     if selected_portal not in {"copy", "symlink", "none"}:
         raise typer.BadParameter("--root-portal must be copy, symlink, or none")
@@ -81,8 +95,21 @@ def init(
         minimal=minimal,
         root_portal=selected_portal,
         install_agents=install_agents_snippet,
+        goal=goal,
+        background=background,
+        brief_file=brief_file,
+        initial_ideas=idea,
+        idea_file=idea_file,
     )
     console.print(f"Initialized VibeResearch at [bold]{p.root}[/bold]")
+
+
+@app.command("vendor-runtime")
+def vendor_runtime_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Write a repo-local runtime scaffold under .vibe/runtime."""
+
+    path = vendor_runtime(paths(target))
+    console.print(f"Vendored runtime scaffold at {path}")
 
 
 @config_app.command("show")
@@ -152,12 +179,61 @@ def portal_build(
     console.print(f"Built {len(written)} root portal mirror(s)")
 
 
+@dashboard_app.command("build")
+def dashboard_build(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Build the read-only static dashboard."""
+
+    index = build_dashboard_site(paths(target))
+    console.print(f"Built {index}")
+
+
+@dashboard_app.command("serve")
+def dashboard_serve(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8765, "--port"),
+    once: bool = typer.Option(False, "--once", help="Build and print URL without blocking; useful for smoke tests."),
+) -> None:
+    """Serve the read-only static dashboard on a local interface."""
+
+    console.print(serve_dashboard_site(paths(target), host=host, port=port, once=once))
+
+
 @audit_app.command("current")
 def audit_current(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
     """Write the current alignment audit report."""
 
     report = current_alignment_audit(paths(target))
     console.print(f"Wrote {report}")
+
+
+@app.command("export-meeting")
+def export_meeting_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    date: Optional[str] = typer.Option(None, "--date", help="YYYYMMDD output folder name."),
+) -> None:
+    """Export a meeting story pack from existing local evidence."""
+
+    out = export_meeting_report(paths(target), date=date)
+    console.print(f"Exported {out}")
+
+
+@app.command("dogfood")
+def dogfood_cmd(target: Optional[Path] = typer.Option(None, "--target", "-t", help="Optional target; defaults to a temp repo.")) -> None:
+    """Run a cheap local/mock dogfood cycle and generate reports."""
+
+    from .reports import dogfood_mock_cycle
+
+    result = dogfood_mock_cycle(target)
+    console.print_json(data=result)
+
+
+@app.command("finalize-reports")
+def finalize_reports_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Generate final alignment, test-summary placeholder, portal docs, dashboard, and meeting report."""
+
+    result = generate_dogfood_reports(paths(target))
+    console.print_json(data=result)
 
 
 @app.command()

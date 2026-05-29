@@ -10,6 +10,13 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     state = read_json(paths.state / "state.json", {})
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
     queue = read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued", [])
+    if state.get("project_brief_missing"):
+        return "add project goal/background with vibe init --goal ... --background ...", "project_brief_missing"
+    if any(row.get("status") == "new" for row in read_jsonl(paths.ideas / "registry.jsonl")):
+        return "vibe ideas triage", ""
+    if any(row.get("status") == "needs_deep_research" and not row.get("linked_deep_request_id") for row in read_jsonl(paths.ideas / "registry.jsonl")):
+        idea_id = next(row.get("idea_id", "<idea_id>") for row in read_jsonl(paths.ideas / "registry.jsonl") if row.get("status") == "needs_deep_research" and not row.get("linked_deep_request_id"))
+        return f"vibe deep-request-from-idea {idea_id}", ""
     if active:
         return "vibe monitor", ""
     for request in read_jsonl(paths.research / "deep_requests" / "registry.jsonl"):

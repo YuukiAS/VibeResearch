@@ -21,6 +21,7 @@ from .timeline import record_event
 DIRS = [
     "inbox",
     "state",
+    "project",
     "ideas",
     "cycles",
     "runs",
@@ -44,6 +45,7 @@ DIRS = [
     "research/wiki/gaps",
     "research/wiki/synthesis",
     "dashboard",
+    "site",
     "portal",
     "reports/dev",
     "prompts",
@@ -58,6 +60,11 @@ def init_project(
     minimal: bool = False,
     root_portal: str = "copy",
     install_agents: bool = False,
+    goal: str = "",
+    background: str = "",
+    brief_file: str | Path | None = None,
+    initial_ideas: list[str] | None = None,
+    idea_file: str | Path | None = None,
 ) -> VibePaths:
     paths = VibePaths(target)
     ensure_dir(paths.root)
@@ -66,17 +73,30 @@ def init_project(
     for rel in DIRS:
         ensure_dir(paths.vibe / rel)
 
+    project_brief = load_project_brief(paths, goal=goal, background=background, brief_file=brief_file, minimal=minimal)
     config = ProjectConfig(project_name=project_name or paths.root.name)
     config_data = config.model_dump()
+    config_data["project_name"] = project_name or paths.root.name
+    config_data["project"] = {
+        "name": project_name or paths.root.name,
+        "goal": project_brief["goal"],
+        "background": project_brief["background"],
+        "brief_path": ".vibe/project/brief.md",
+        "brief_missing": project_brief["missing"],
+    }
     config_data.setdefault("portal", {})["root_mode"] = root_portal
     write_yaml(paths.vibe / "config.yaml", config_data)
     write_json(paths.vibe / "config.json", config_data)
     write_yaml(paths.vibe / "config.local.yaml", {"local": {"notes": "local-only overrides; not auto-merged into config.yaml"}})
+    write_text(paths.vibe / ".gitignore", "config.local.yaml\nconfig.detected.yaml\nruntime/env\n")
     write_config_schema(paths)
 
     state = default_state()
     state["updated_at"] = utc_now()
     state["next_action"] = "vibe plan-cycle"
+    state["project_brief_missing"] = project_brief["missing"]
+    if project_brief["missing"]:
+        state["next_action"] = "add project goal/background with vibe init --goal ... --background ..."
     write_json(paths.state / "state.json", state)
     write_json(paths.state / "lock.json", {"locked": False, "updated_at": utc_now()})
     write_text(paths.state / "memory.md", "# Vibe Memory\n\n")
@@ -89,6 +109,9 @@ def init_project(
     touch_jsonl(paths.inbox / "triage.jsonl")
     ensure_idea_pool(paths)
     render_idea_views(paths)
+    write_project_brief(paths, project_brief)
+    for text in collect_initial_ideas(initial_ideas or [], idea_file):
+        add_idea(paths, text, source="init")
 
     touch_jsonl(paths.directions / "registry.jsonl")
     write_json(paths.branches / "active.json", {})
@@ -110,6 +133,7 @@ def init_project(
     connect(paths).close()
     write_text(paths.research / "wiki" / "index.md", "# Research Wiki\n\n")
     write_text(paths.research / "wiki" / "log.md", "# Research Wiki Log\n\n")
+    write_text(paths.research / "wiki" / "overview.md", "# Research Overview\n\n")
     write_text(paths.research / "deep_requests" / "registry.jsonl", "")
 
     write_default_templates(paths)
@@ -129,6 +153,87 @@ def touch_jsonl(path: Path) -> None:
     ensure_dir(path.parent)
     if not path.exists():
         path.write_text("")
+
+
+def load_project_brief(
+    paths: VibePaths,
+    *,
+    goal: str = "",
+    background: str = "",
+    brief_file: str | Path | None = None,
+    minimal: bool = False,
+) -> dict[str, Any]:
+    if brief_file:
+        source = Path(brief_file).expanduser()
+        text = source.read_text()
+        parsed_goal = first_nonempty_after(text, ["# Goal", "## Goal", "Goal:"]) or goal
+        parsed_background = first_nonempty_after(text, ["# Background", "## Background", "Background:"]) or background or text[:2000]
+        return {"goal": parsed_goal, "background": parsed_background, "body": text, "missing": False}
+    missing = minimal and not (goal or background)
+    if not goal and not background and not minimal:
+        goal = f"Define the research objective for {paths.root.name}."
+        background = "Project background has not been supplied yet; update .vibe/project/brief.md before serious planning."
+    body = f"""# Project Brief
+
+## Goal
+{goal or 'MISSING: provide the project research goal.'}
+
+## Background
+{background or 'MISSING: provide project background, constraints, datasets, and evaluation context.'}
+
+## Status
+{'missing_required_context' if missing else 'ready'}
+"""
+    return {"goal": goal, "background": background, "body": body, "missing": missing}
+
+
+def first_nonempty_after(text: str, markers: list[str]) -> str:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        for marker in markers:
+            if stripped.startswith(marker):
+                inline = stripped.removeprefix(marker).strip(" :")
+                if inline:
+                    return inline
+                for candidate in lines[index + 1 :]:
+                    if candidate.strip() and not candidate.strip().startswith("#"):
+                        return candidate.strip()
+    return ""
+
+
+def write_project_brief(paths: VibePaths, brief: dict[str, Any]) -> None:
+    write_text(paths.project / "brief.md", brief["body"])
+
+
+def collect_initial_ideas(initial_ideas: list[str], idea_file: str | Path | None) -> list[str]:
+    ideas = [idea for idea in initial_ideas if idea.strip()]
+    if idea_file:
+        text = Path(idea_file).expanduser().read_text()
+        for line in text.splitlines():
+            clean = line.strip("-* \t")
+            if clean:
+                ideas.append(clean)
+    return ideas
+
+
+def vendor_runtime(paths: VibePaths) -> Path:
+    paths.require_initialized()
+    runtime = ensure_dir(paths.vibe / "runtime")
+    write_text(
+        runtime / "README.md",
+        """# VibeResearch Runtime
+
+This directory is reserved for repo-local runtime helpers, wrappers, or pinned
+launcher scripts when a project needs to vendor operational glue beside its
+`.vibe/` state.
+
+The Python package remains installable separately; do not store authoritative
+research state outside `.vibe/`.
+""",
+    )
+    write_text(runtime / "env.example", "# Add project-local runtime environment defaults here.\n")
+    return runtime
 
 
 def default_goals(project_name: str) -> dict[str, Any]:
@@ -260,6 +365,9 @@ def add_directive(paths: VibePaths, text: str) -> None:
 def create_cycle(paths: VibePaths, *, mode: str | None = None) -> str:
     paths.require_initialized()
     state = read_json(paths.state / "state.json", default_state())
+    block = cycle_revised_plan_block(paths, state)
+    if block:
+        raise RuntimeError(block)
     existing = list(state.get("cycles", {}).keys())
     cycle_id = next_numeric_id(existing, "c")
     cycle_dir = paths.cycles / cycle_id
@@ -279,6 +387,20 @@ def create_cycle(paths: VibePaths, *, mode: str | None = None) -> str:
     record_event(paths, "cycle_planned", f"Created portfolio plan for {cycle_id}", cycle_id=cycle_id, status="planned")
     sync_dashboard(paths)
     return cycle_id
+
+
+def cycle_revised_plan_block(paths: VibePaths, state: dict[str, Any]) -> str:
+    terminal = {"revised", "merged", "abandoned", "cancelled"}
+    for cycle_id, cycle in state.get("cycles", {}).items():
+        cycle_runs = [run for run in state.get("runs", {}).values() if run.get("cycle_id") == cycle_id]
+        if not cycle_runs:
+            continue
+        all_terminal = all(run.get("status") in terminal for run in cycle_runs)
+        revised_path = paths.cycles / cycle_id / "cycle_revised_plan.md"
+        has_revised = revised_path.exists() and bool(revised_path.read_text().strip())
+        if all_terminal and cycle.get("status") != "revised" and not has_revised:
+            return f"Cycle {cycle_id} requires cycle_revised_plan.md before planning another cycle"
+    return ""
 
 
 def portfolio_plan_template(paths: VibePaths, cycle_id: str, mode: str) -> str:
@@ -316,6 +438,9 @@ At least one trusted baseline/diagnostic result and one actionable next directio
 
 ## Stop or shrink criteria
 Pause a direction after repeated guardrail failures or missing metric provenance.
+
+## Idea pool update
+Selected ideas are considered from `.vibe/ideas/registry.jsonl`; defer, reject, or mark deep research candidates during revised planning.
 """
 
 

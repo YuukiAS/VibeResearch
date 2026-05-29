@@ -10,6 +10,7 @@ from .ideas import sync_plan_idea_updates
 from .io import append_jsonl, ensure_dir, read_json, read_jsonl, utc_now, write_json, write_text
 from .papers import add_paper
 from .paths import VibePaths
+from .scheduler import promote_trusted_candidate
 from .timeline import record_event
 
 
@@ -87,6 +88,7 @@ Stop if repeated runs fail guardrails or provenance.
         write_text(revised_path, text)
     ensure_idea_update_section(revised_path)
     sync_plan_idea_updates(paths, revised_path.read_text())
+    promote_trusted_candidate(paths, run_id)
     run["status"] = "revised"
     state["runs"][run_id] = run
     state["next_action"] = f"vibe reflect-cycle {run.get('cycle_id', '')}"
@@ -248,8 +250,12 @@ def ingest_deep_research(paths: VibePaths, request_id: str, *, kind: str = "scie
     repos_path = paths.research / "raw" / "repos" / f"{request_id}_repos.json"
     datasets_path = paths.research / "wiki" / "entities" / f"{request_id}_datasets.md"
     paper_ids = []
+    linked_idea_ids = []
+    for row in read_jsonl(paths.research / "deep_requests" / "registry.jsonl"):
+        if row.get("request_id") == request_id:
+            linked_idea_ids = row.get("linked_idea_ids", [])
     for url in sorted(set(re.findall(r"https?://(?:arxiv\.org/abs|doi\.org|www\.semanticscholar\.org)[^\s)\]]+", report))):
-        paper_id = add_paper(paths, {"title": url.rsplit("/", 1)[-1], "source_url": url, "status": "from_deep_research", "related_deep_request_ids": [request_id]})
+        paper_id = add_paper(paths, {"title": url.rsplit("/", 1)[-1], "source_url": url, "status": "from_deep_research", "related_deep_request_ids": [request_id], "related_idea_ids": linked_idea_ids})
         paper_ids.append(paper_id)
     repo_urls = sorted(set(re.findall(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", report)))
     dataset_mentions = extract_tagged_lines(report, ["dataset", "benchmark", "cohort", "数据集", "基准"])
@@ -259,6 +265,12 @@ def ingest_deep_research(paths: VibePaths, request_id: str, *, kind: str = "scie
     write_text(gaps, "# Risks and Gaps Extract\n\n" + "\n".join(f"- {line}" for line in risk_mentions[:80]) + "\n")
     write_json(repos_path, {"request_id": request_id, "repo_urls": repo_urls})
     write_text(datasets_path, "# Dataset and Benchmark Mentions\n\n" + "\n".join(f"- {line}" for line in dataset_mentions[:80]) + "\n")
+    concepts_path = paths.research / "wiki" / "concepts" / f"{request_id}_concepts.md"
+    write_text(concepts_path, "# Concept Extract\n\n" + "\n".join(f"- {line}" for line in (method_mentions + dataset_mentions)[:80]) + "\n")
+    for paper_id in paper_ids:
+        write_text(paths.research / "wiki" / "papers" / f"{paper_id}.md", f"# Paper: {paper_id}\n\nLinked deep research request: `{request_id}`\n")
+    append_repo_queue(paths, request_id, repo_urls)
+    update_wiki_index(paths, request_id, [synthesis, comparison, gaps, datasets_path, concepts_path])
     ideas = []
     for line in report.splitlines():
         lowered = line.lower()
@@ -289,13 +301,33 @@ def ingest_deep_research(paths: VibePaths, request_id: str, *, kind: str = "scie
             row["status"] = "ingested"
             row["result_path"] = str(result_path)
             row["ingested_at"] = utc_now()
-            row["wiki_updates"] = [str(synthesis), str(comparison), str(gaps), str(datasets_path)]
+            row["wiki_updates"] = [str(synthesis), str(comparison), str(gaps), str(datasets_path), str(concepts_path)]
             row["decision_impact"] = f"updated_{kind}_wiki_papers_repos_datasets_inbox"
             row["kind"] = kind
         updated.append(row)
     write_text(registry_path, "".join(__import__("json").dumps(row, sort_keys=True) + "\n" for row in updated))
     record_event(paths, "deep_research_ingested", f"Ingested {request_id}", status="ingested", payload={"synthesis": str(synthesis), "papers": paper_ids, "repos": repo_urls, "ideas": ideas})
     sync_dashboard(paths)
+
+
+def append_repo_queue(paths: VibePaths, request_id: str, repo_urls: list[str]) -> None:
+    if not repo_urls:
+        return
+    queue_path = paths.research / "raw" / "repos" / "queue.jsonl"
+    for url in repo_urls:
+        append_jsonl(queue_path, {"created_at": utc_now(), "request_id": request_id, "repo_url": url, "status": "candidate"})
+
+
+def update_wiki_index(paths: VibePaths, request_id: str, updates: list[object]) -> None:
+    index = paths.research / "wiki" / "index.md"
+    current = index.read_text() if index.exists() else "# Research Wiki\n\n"
+    lines = [current.rstrip(), "", f"## Deep Research {request_id}", ""]
+    for path in updates:
+        lines.append(f"- {path}")
+    write_text(index, "\n".join(lines) + "\n")
+    overview = paths.research / "wiki" / "overview.md"
+    prior = overview.read_text() if overview.exists() else "# Research Overview\n\n"
+    write_text(overview, prior.rstrip() + f"\n\n- {utc_now()} updated from `{request_id}`.\n")
 
 
 def extract_deep_report_pdf(paths: VibePaths, request_id: str, pdf_path) -> object:

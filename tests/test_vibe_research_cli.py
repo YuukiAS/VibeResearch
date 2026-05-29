@@ -38,13 +38,46 @@ def test_init_creates_required_surface(tmp_path: Path):
     assert (tmp_path / "RUN.md").read_text().startswith(GENERATED_NOTICE)
 
 
+def test_init_brief_and_initial_ideas(tmp_path: Path):
+    idea_file = tmp_path / "ideas.txt"
+    idea_file.write_text("- idea from file\n")
+    result = invoke(
+        "init",
+        "--target",
+        str(tmp_path / "repo"),
+        "--goal",
+        "Improve validation",
+        "--background",
+        "Medical segmentation benchmark",
+        "--idea",
+        "try calibration",
+        "--idea-file",
+        str(idea_file),
+    )
+    assert result.exit_code == 0
+    repo = tmp_path / "repo"
+    assert "Improve validation" in (repo / ".vibe" / "project" / "brief.md").read_text()
+    ideas = read_jsonl(repo / ".vibe" / "ideas" / "registry.jsonl")
+    assert [row["source"] for row in ideas] == ["init", "init"]
+    assert invoke("vendor-runtime", "--target", str(repo)).exit_code == 0
+    assert (repo / ".vibe" / "runtime" / "README.md").exists()
+
+
+def test_minimal_init_marks_missing_brief(tmp_path: Path):
+    assert invoke("init", "--minimal", "--no-root-portal", "--target", str(tmp_path)).exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert state["project_brief_missing"] is True
+    result = invoke("next", "--target", str(tmp_path))
+    assert "project_brief_missing" in result.output
+
+
 def test_config_commands_and_schema_validation(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
     result = invoke("config", "validate", "--target", str(tmp_path))
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.5.0" in show.output
+    assert "0.6.0" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -229,6 +262,52 @@ def test_pdf_deep_research_ingest_with_mocked_extractor(tmp_path: Path, monkeypa
     assert (tmp_path / ".vibe" / "research" / "raw" / "deep_reports" / f"{request.stem}_result.md").exists()
 
 
+def test_static_dashboard_build_and_serve_smoke(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "dashboard", "--background", "synthetic").exit_code == 0
+    assert invoke("idea", "dashboard idea", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("dashboard", "build", "--target", str(tmp_path)).exit_code == 0
+    index = tmp_path / ".vibe" / "site" / "index.html"
+    assert index.exists()
+    text = index.read_text()
+    assert "Idea Intake" in text
+    assert "Codex quota" in text
+    result = invoke("dashboard", "serve", "--target", str(tmp_path), "--once")
+    assert result.exit_code == 0
+    assert "127.0.0.1:8765" in result.output
+
+
+def test_meeting_export_story_pack_and_finalize_reports(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "meeting", "--background", "synthetic").exit_code == 0
+    assert invoke("idea", "meeting idea", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("export-meeting", "--target", str(tmp_path), "--date", "20260529").exit_code == 0
+    out = tmp_path / ".vibe" / "reports" / "meeting" / "20260529"
+    for name in [
+        "story.md",
+        "timeline.md",
+        "leaderboard.md",
+        "key_runs.md",
+        "idea_pool.md",
+        "deep_research_status.md",
+        "paper_summary.md",
+        "evidence_table.csv",
+        "slides_outline.md",
+    ]:
+        assert (out / name).exists()
+    assert (out / "figures").is_dir()
+    assert invoke("finalize-reports", "--target", str(tmp_path)).exit_code == 0
+    assert (tmp_path / ".vibe" / "reports" / "dev" / "alignment_after_changes.md").exists()
+    assert (tmp_path / ".vibe" / "reports" / "dev" / "test_summary.md").exists()
+    assert (tmp_path / ".vibe" / "portal" / "INSTALL.md").exists()
+    assert (tmp_path / ".vibe" / "portal" / "USAGE.md").exists()
+
+
+def test_dogfood_command_runs_mock_cycle(tmp_path: Path):
+    result = invoke("dogfood", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert (tmp_path / ".vibe" / "site" / "index.html").exists()
+    assert (tmp_path / ".vibe" / "reports" / "dev" / "alignment_after_changes.md").exists()
+
+
 def test_expanded_operator_commands(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
     assert invoke("migrate", "--target", str(tmp_path)).exit_code == 0
@@ -295,7 +374,7 @@ def test_codex_runner_uses_fake_codex_and_writes_artifact(tmp_path: Path, monkey
         "import pathlib, sys\n"
         "args=sys.argv\n"
         "out=pathlib.Path(args[args.index('--output-last-message')+1])\n"
-        "out.write_text('# Portfolio Plan for c001\\n\\n## Stage\\nexploration\\n\\n## Current leaderboard summary\\nnone\\n\\n## User ideas and directives considered\\nnone\\n\\n## Candidate directions\\n- baseline\\n\\n## Selected runs\\n- r001\\n\\n## Dependency graph\\nnone\\n\\n## Resource budget\\ndefault\\n\\n## Portfolio success criteria\\nlearn\\n\\n## Stop or shrink criteria\\nstop failures\\n')\n"
+        "out.write_text('# Portfolio Plan for c001\\n\\n## Stage\\nexploration\\n\\n## Current leaderboard summary\\nnone\\n\\n## User ideas and directives considered\\nnone\\n\\n## Candidate directions\\n- baseline\\n\\n## Selected runs\\n- r001\\n\\n## Dependency graph\\nnone\\n\\n## Resource budget\\ndefault\\n\\n## Portfolio success criteria\\nlearn\\n\\n## Stop or shrink criteria\\nstop failures\\n\\n## Idea pool update\\n- no changes\\n')\n"
     )
     fake_codex.chmod(0o755)
     monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH','')}")
@@ -314,9 +393,11 @@ def test_todo_cli_commands_exist():
         "config",
         "ideas",
         "portal",
+        "dashboard",
         "status",
         "idea",
         "directive",
+        "vendor-runtime",
         "plan-cycle",
         "review-cycle",
         "generate-runs",
@@ -339,6 +420,8 @@ def test_todo_cli_commands_exist():
         "deep-request-from-idea",
         "ingest-deep-research",
         "wiki-ingest",
+        "export-meeting",
+        "dogfood",
         "leaderboard",
         "timeline",
         "merge",

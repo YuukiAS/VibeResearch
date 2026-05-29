@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-05-29
+
+- Add static dashboard build/serve, meeting story-pack export, dogfood report generation, and portal install/usage docs.
+- Add init project brief intake, initial ideas, vendor-runtime scaffold, and TODO alignment checks for the installable framework.
+- Add final dashboard/meeting/dogfood tests covering the 0.6.0 operator workflow.
+
 ## 0.5.0 - 2026-05-29
 
 - Add a maintained `.vibe/ideas/` pool with lifecycle CLI commands, stable `idea_001` IDs, generated Markdown views, and dashboard idea intake.

@@ -103,7 +103,7 @@ def queue_run(paths: VibePaths, run_id: str) -> None:
     run = state.get("runs", {}).get(run_id)
     if not run:
         raise ValueError(f"Unknown run: {run_id}")
-    if run.get("status") not in {"dryrun_passed", "reviewed", "branch_recorded_no_git", "branched"}:
+    if run.get("status") != "dryrun_passed":
         raise RuntimeError(f"Run {run_id} is not ready for queue; status={run.get('status')}")
     queue = read_json(paths.scheduler / "queue.json", {"queued": []})
     if run_id not in [item["run_id"] for item in queue["queued"]]:
@@ -132,6 +132,19 @@ def submit_queue(paths: VibePaths, *, dry: bool = False, backend_name: str | Non
     for item in sorted(queue.get("queued", []), key=lambda row: row.get("priority", 100)):
         run_id = item["run_id"]
         run = state.get("runs", {}).get(run_id, {})
+        cycle = state.get("cycles", {}).get(run.get("cycle_id", ""), {})
+        if cycle.get("status") == "blocked" or cycle.get("review_verdict") in {"BLOCK_PORTFOLIO", "REVISE_PORTFOLIO"}:
+            item["status"] = "portfolio_blocked"
+            item["reason"] = f"cycle {run.get('cycle_id', '')} is blocked"
+            remaining.append(item)
+            continue
+        issues = validate_manifest(paths, run_id)
+        errors = [issue.message for issue in issues if issue.level == "error"]
+        if errors:
+            item["status"] = "manifest_error"
+            item["reason"] = "; ".join(errors[:3])
+            remaining.append(item)
+            continue
         if paused_direction(paths, run.get("direction_id", "")):
             item["status"] = "paused_direction"
             item["reason"] = f"direction {run.get('direction_id', '')} is paused/stopped"
@@ -260,6 +273,7 @@ def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted:
     provenance = build_provenance(paths, run_id)
     if trusted and not provenance_complete(provenance):
         raise RuntimeError("Trusted collection requires complete metric provenance.")
+    trusted_now = bool(trusted and has_revised_plan(paths, run_id))
     metrics = {
         "run_id": run_id,
         "cycle_id": run.get("cycle_id", ""),
@@ -267,14 +281,15 @@ def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted:
         "branch": run.get("branch", ""),
         "primary_metric": value,
         "metrics": external_metrics.get("metrics", external_metrics),
-        "trusted": trusted,
+        "trusted": trusted_now,
+        "trusted_candidate": bool(trusted),
         "status": "collected",
         "provenance": provenance,
     }
     write_json(paths.runs / run_id / "metrics.json", metrics)
     write_text(paths.runs / run_id / "result.md", f"# Result\n\nPrimary metric: {value}\nTrusted: {trusted}\n")
     append_jsonl(paths.leaderboard / "history.jsonl", metrics)
-    if trusted:
+    if trusted_now:
         best = read_json(paths.leaderboard / "best.json", {})
         if is_better(paths, metrics, best):
             write_json(paths.leaderboard / "best.json", metrics)
@@ -379,3 +394,27 @@ def is_better(paths: VibePaths, candidate: dict[str, Any], previous: dict[str, A
     cand = float(candidate.get("primary_metric", 0))
     prev = float(previous.get("primary_metric", 0))
     return cand <= prev if direction == "min" else cand >= prev
+
+
+def has_revised_plan(paths: VibePaths, run_id: str) -> bool:
+    path = paths.runs / run_id / "revised_plan.md"
+    return path.exists() and bool(path.read_text().strip())
+
+
+def promote_trusted_candidate(paths: VibePaths, run_id: str) -> None:
+    metrics_path = paths.runs / run_id / "metrics.json"
+    metrics = read_json(metrics_path, {})
+    if not metrics.get("trusted_candidate") or metrics.get("trusted") or not has_revised_plan(paths, run_id):
+        return
+    metrics["trusted"] = True
+    write_json(metrics_path, metrics)
+    append_jsonl(paths.leaderboard / "history.jsonl", metrics)
+    best = read_json(paths.leaderboard / "best.json", {})
+    if is_better(paths, metrics, best):
+        write_json(paths.leaderboard / "best.json", metrics)
+    best_by_direction = read_json(paths.leaderboard / "best_by_direction.json", {})
+    direction = metrics.get("direction_id", "")
+    previous = best_by_direction.get(direction)
+    if direction and (previous is None or is_better(paths, metrics, previous)):
+        best_by_direction[direction] = metrics
+        write_json(paths.leaderboard / "best_by_direction.json", best_by_direction)
