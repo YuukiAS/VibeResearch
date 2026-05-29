@@ -35,13 +35,14 @@ def test_init_creates_required_surface(tmp_path: Path):
 def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
     assert invoke("idea", "try topology cleanup", "--target", str(tmp_path)).exit_code == 0
-    assert invoke("plan-cycle", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "2").exit_code == 0
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     run_id = sorted(state["runs"])[0]
     assert invoke("review", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("branch", run_id, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("patch", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("dryrun", run_id, "--target", str(tmp_path)).exit_code == 0
     assert invoke("queue", run_id, "--target", str(tmp_path)).exit_code == 0
     assert invoke("submit-queue", "--target", str(tmp_path), "--dry").exit_code == 0
@@ -51,6 +52,7 @@ def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
     assert invoke("revise-plan", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("reflect-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("revise-cycle", "c001", "--offline", "--target", str(tmp_path), "--mode", "balanced").exit_code == 0
+    assert invoke("validate-hard-rules", "--target", str(tmp_path)).exit_code == 0
     assert (tmp_path / ".vibe" / "runs" / run_id / "revised_plan.md").read_text()
     assert "0.7" in (tmp_path / "VIBE_LEADERBOARD.md").read_text()
     assert "cycle_revised_plan_written" in (tmp_path / "VIBE_TIMELINE.md").read_text()
@@ -58,9 +60,10 @@ def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
 
 def test_literature_and_deep_research_interfaces(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
-    assert invoke("plan-cycle", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("lit-refresh-cycle", "c001", "--target", str(tmp_path), "--query", "segmentation topology").exit_code == 0
     assert invoke("deep-request-cycle", "c001", "route selection", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert "Next:" in invoke("next", "--target", str(tmp_path)).output
     request = next((tmp_path / ".vibe" / "research" / "deep_requests").glob("dr*.md"))
     result_path = tmp_path / ".vibe" / "research" / "raw" / "deep_reports" / f"{request.stem}_result.md"
     result_path.write_text("# Report\n\nUse route A.")
@@ -71,7 +74,7 @@ def test_literature_and_deep_research_interfaces(tmp_path: Path):
 def test_expanded_operator_commands(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
     assert invoke("migrate", "--target", str(tmp_path)).exit_code == 0
-    assert invoke("plan-cycle", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     run_id = sorted(state["runs"])[0]
@@ -81,6 +84,7 @@ def test_expanded_operator_commands(tmp_path: Path):
     assert invoke("paper-add", "Example Paper", "--target", str(tmp_path), "--source-url", "https://arxiv.org/abs/0000.0000").exit_code == 0
     assert invoke("paper-list", "--target", str(tmp_path)).exit_code == 0
     assert invoke("wiki-ingest", "p_example-paper", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert (tmp_path / ".vibe" / "research" / "wiki" / "concepts" / "paper-methods.md").exists()
     assert invoke("wiki-lint", "--target", str(tmp_path)).exit_code == 0
     assert invoke("codex-plan", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("daemon", "status", "--target", str(tmp_path)).exit_code == 0
@@ -88,22 +92,43 @@ def test_expanded_operator_commands(tmp_path: Path):
 
 def test_slurm_dry_backend_records_launch(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
-    assert invoke("plan-cycle", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     run_id = sorted(state["runs"])[0]
     assert invoke("review", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("patch", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("dryrun", run_id, "--target", str(tmp_path)).exit_code == 0
     assert invoke("queue", run_id, "--target", str(tmp_path)).exit_code == 0
     assert invoke("submit-queue", "--target", str(tmp_path), "--backend", "slurm", "--dry").exit_code == 0
     launch = read_json(tmp_path / ".vibe" / "runs" / run_id / "launch.json", {})
     assert launch["backend"] == "slurm"
+    assert "partition_reason" in launch
     assert (tmp_path / ".vibe" / "runs" / run_id / "artifacts" / f"{run_id}.sbatch").exists()
+
+
+def test_blocking_deep_research_blocks_next(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("deep-request-cycle", "c001", "route selection", "--blocking", "--offline", "--target", str(tmp_path)).exit_code == 0
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "blocked_waiting_deep_research" in result.output
+
+
+def test_auto_cycle_reaches_first_submission(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    result = invoke("auto-cycle", "--offline", "--dry-submit", "--max-steps", "12", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "planned c001" in result.output
+    assert "reviewed c001" in result.output
+    assert "generated r001_baseline_check" in result.output
+    assert "submitted r001_baseline_check" in result.output
 
 
 def test_codex_runner_uses_fake_codex_and_writes_artifact(tmp_path: Path, monkeypatch):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
-    assert invoke("plan-cycle", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_codex = fake_bin / "codex"

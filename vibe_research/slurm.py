@@ -8,6 +8,7 @@ developer machine. Actual submission is owned by scheduler commands.
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 from typing import Any
 
 
@@ -55,6 +56,10 @@ def render_sbatch(
 
 
 def select_partition(manifest: dict[str, Any], config: dict[str, Any]) -> str:
+    return choose_partition(manifest, config)[0]
+
+
+def choose_partition(manifest: dict[str, Any], config: dict[str, Any]) -> tuple[str, str]:
     resources = manifest.get("resources", {})
     preferred = list(resources.get("preferred_partitions") or [])
     fallback = list(resources.get("fallback_partitions") or [])
@@ -62,11 +67,36 @@ def select_partition(manifest: dict[str, Any], config: dict[str, Any]) -> str:
     if not preferred:
         preferred = [execution_slurm.get("default_partition", "gpu_short")]
     candidates = preferred + [p for p in fallback if p not in preferred]
+    available, reason = probe_available_partitions()
+    if available:
+        for name in candidates:
+            if name in available:
+                return name, "preferred_available" if name in preferred else f"fallback_available: {reason}"
     profiles = {row.get("name"): row for row in execution_slurm.get("partitions", []) if row.get("name")}
     if not profiles:
-        return candidates[0]
+        return candidates[0], reason or "no_partition_profiles"
     ranked = sorted(candidates, key=lambda name: profiles.get(name, {}).get("priority", 0), reverse=True)
-    return ranked[0]
+    selected = ranked[0]
+    if selected not in preferred:
+        return selected, "fallback_by_config_priority"
+    return selected, reason or "selected_by_config_priority"
+
+
+def probe_available_partitions() -> tuple[set[str], str]:
+    try:
+        result = subprocess.run(["sinfo", "-h", "-o", "%P|%a|%t"], text=True, capture_output=True, check=False, timeout=10)
+    except Exception as exc:
+        return set(), f"sinfo_unavailable: {exc}"
+    if result.returncode != 0:
+        return set(), result.stderr.strip() or "sinfo_failed"
+    available: set[str] = set()
+    for line in result.stdout.splitlines():
+        name, _, rest = line.partition("|")
+        active, _, state = rest.partition("|")
+        clean = name.replace("*", "").strip()
+        if clean and active.strip().lower() == "up" and state.strip().lower() not in {"down", "drain", "drained"}:
+            available.add(clean)
+    return available, "sinfo"
 
 
 def classify_failure(text: str) -> str:

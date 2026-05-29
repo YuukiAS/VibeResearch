@@ -15,7 +15,7 @@ from .config import load_config
 from .io import ensure_dir, utc_now, write_text
 from .manifest import load_manifest
 from .paths import VibePaths
-from .slurm import classify_failure, render_sbatch, select_partition
+from .slurm import choose_partition, classify_failure, render_sbatch
 
 
 @dataclass
@@ -131,7 +131,7 @@ class SlurmBackend(ExecutionBackend):
         manifest = load_manifest(self.paths, run_id).model_dump()
         artifacts = self.paths.runs / run_id / "artifacts"
         ensure_dir(artifacts)
-        partition = select_partition(manifest, self.config)
+        partition, partition_reason = choose_partition(manifest, self.config)
         script_path = artifacts / f"{run_id}.sbatch"
         out_path = artifacts / "slurm-%j.out"
         err_path = artifacts / "slurm-%j.err"
@@ -146,6 +146,7 @@ class SlurmBackend(ExecutionBackend):
             "status": "dry_submitted" if dry else "submitted",
             "job_id": f"slurm-dry-{run_id}" if dry else "",
             "partition": partition,
+            "partition_reason": partition_reason,
             "sbatch_path": str(script_path),
             "log_path": str(out_path),
             "error_path": str(err_path),
@@ -212,4 +213,3 @@ def read_optional_text(path: Path) -> str:
         return path.read_text()
     except Exception:
         return ""
-

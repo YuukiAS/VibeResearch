@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .dashboard import sync_dashboard
-from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, slugify, utc_now, write_json, write_text, write_yaml
+from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, slugify, utc_now, write_json, write_text, write_yaml
 from .models import IdeaRecord, ProjectConfig, RunManifest, default_budget, default_state
 from .papers import connect
 from .paths import VibePaths
@@ -236,7 +236,7 @@ def create_cycle(paths: VibePaths, *, mode: str | None = None) -> str:
     selected_mode = mode or state.get("portfolio_mode", "exploration")
     write_text(cycle_dir / "portfolio_plan.md", portfolio_plan_template(paths, cycle_id, selected_mode))
     write_text(cycle_dir / "portfolio_review.md", "# Portfolio Review\n\nVerdict: PENDING\n")
-    write_yaml(cycle_dir / "resource_plan.yaml", {"cycle_id": cycle_id, "mode": selected_mode, "runs": {}, "cancel_rules": []})
+    write_yaml(cycle_dir / "resource_plan.yaml", default_resource_plan(cycle_id, selected_mode))
     write_text(cycle_dir / "runs.txt", "")
     state["current_cycle_id"] = cycle_id
     state["portfolio_mode"] = selected_mode
@@ -288,6 +288,69 @@ Pause a direction after repeated guardrail failures or missing metric provenance
 """
 
 
+def default_resource_plan(cycle_id: str, mode: str) -> dict[str, Any]:
+    return {
+        "cycle_id": cycle_id,
+        "mode": mode,
+        "max_parallel_jobs": 3,
+        "max_gpu_jobs": 2,
+        "runs": {
+            "baseline-check": {
+                "priority": 1,
+                "direction_id": "d001_baseline",
+                "hypothesis": "Verify a trusted local baseline and evaluator provenance.",
+                "cost": "low",
+                "can_parallel": True,
+                "depends_on": [],
+                "cancel_if_failed": [],
+            },
+            "diagnostic-check": {
+                "priority": 1,
+                "direction_id": "d002_diagnostics",
+                "hypothesis": "Run cheap diagnostics for evaluator, data, and logging reliability.",
+                "cost": "low",
+                "can_parallel": True,
+                "depends_on": [],
+                "cancel_if_failed": [],
+            },
+            "first-hypothesis": {
+                "priority": 2,
+                "direction_id": "d003_experiment",
+                "hypothesis": "Test the highest-priority research hypothesis from inbox or project brief.",
+                "cost": "medium",
+                "can_parallel": True,
+                "depends_on": ["baseline-check"],
+                "cancel_if_failed": [],
+            },
+        },
+        "cancel_rules": [
+            {"if": "baseline-check fails", "cancel": ["first-hypothesis"]},
+            {"if": "three runs in same direction fail guardrails", "pause_direction": True},
+        ],
+    }
+
+
+def load_resource_plan(paths: VibePaths, cycle_id: str) -> dict[str, Any]:
+    plan = read_yaml(paths.cycles / cycle_id / "resource_plan.yaml", {})
+    if not isinstance(plan, dict) or not plan.get("runs"):
+        state = read_json(paths.state / "state.json", default_state())
+        plan = default_resource_plan(cycle_id, state.get("portfolio_mode", "exploration"))
+        write_yaml(paths.cycles / cycle_id / "resource_plan.yaml", plan)
+    return plan
+
+
+def sync_resource_plan_from_portfolio(paths: VibePaths, cycle_id: str) -> dict[str, Any]:
+    """Ensure a machine resource plan exists after a human/Codex plan is written."""
+
+    plan = load_resource_plan(paths, cycle_id)
+    plan["cycle_id"] = cycle_id
+    plan.setdefault("mode", read_json(paths.state / "state.json", {}).get("portfolio_mode", "exploration"))
+    plan.setdefault("runs", {})
+    plan.setdefault("cancel_rules", [])
+    write_yaml(paths.cycles / cycle_id / "resource_plan.yaml", plan)
+    return plan
+
+
 def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3) -> list[str]:
     paths.require_initialized()
     state = read_json(paths.state / "state.json", default_state())
@@ -295,19 +358,51 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
     if not cycle:
         cycle = create_cycle(paths)
         state = read_json(paths.state / "state.json", default_state())
+    cycle_state = state.get("cycles", {}).get(cycle, {})
+    if cycle_state.get("review_verdict") in {"BLOCK_PORTFOLIO", "REVISE_PORTFOLIO"} or cycle_state.get("status") == "blocked":
+        raise RuntimeError(f"Cycle {cycle} is blocked by portfolio review: {cycle_state.get('review_verdict', '')}")
     state.setdefault("runs", {})
     existing = list(state["runs"].keys())
-    specs = [
-        ("baseline-check", "d001_baseline", "Verify a trusted local baseline and evaluator provenance.", "low"),
-        ("diagnostic-check", "d002_diagnostics", "Run cheap diagnostics for evaluator, data, and logging reliability.", "low"),
-        ("first-hypothesis", "d003_experiment", "Test the highest-priority research hypothesis from inbox or brief.", "medium"),
-        ("literature-scout", "d004_literature", "Collect targeted evidence for the next portfolio decision.", "low"),
-        ("external-smoke", "d005_external_repo", "Smoke test a relevant external repo or weight source.", "low"),
-        ("seed-repeat", "d006_validation", "Repeat a candidate result for stability.", "medium"),
-    ][:count]
+    resource_plan = load_resource_plan(paths, cycle)
+    plan_runs = resource_plan.get("runs", {})
+    cancel_map: dict[str, list[str]] = {}
+    for rule in resource_plan.get("cancel_rules", []):
+        if isinstance(rule, dict):
+            text = str(rule.get("if", ""))
+            source = text.split()[0] if text else ""
+            if source and isinstance(rule.get("cancel"), list):
+                cancel_map.setdefault(source, []).extend(str(item) for item in rule["cancel"])
+    specs = []
+    if isinstance(plan_runs, dict) and plan_runs:
+        for short, spec in list(plan_runs.items())[:count]:
+            if isinstance(spec, dict):
+                specs.append(
+                    (
+                        slugify(short, 32),
+                        spec.get("direction_id", "d000_unknown"),
+                        spec.get("hypothesis", spec.get("expected_learning", short)),
+                        spec.get("cost", "low"),
+                        int(spec.get("priority", 100)),
+                        list(spec.get("depends_on", [])),
+                        list(spec.get("cancel_if_failed", [])) + cancel_map.get(str(short), []),
+                    )
+                )
+    if not specs:
+        specs = [
+            ("baseline-check", "d001_baseline", "Verify a trusted local baseline and evaluator provenance.", "low", 1, [], []),
+            ("diagnostic-check", "d002_diagnostics", "Run cheap diagnostics for evaluator, data, and logging reliability.", "low", 1, [], []),
+            ("first-hypothesis", "d003_experiment", "Test the highest-priority research hypothesis from inbox or brief.", "medium", 2, [], []),
+            ("literature-scout", "d004_literature", "Collect targeted evidence for the next portfolio decision.", "low", 3, [], []),
+            ("external-smoke", "d005_external_repo", "Smoke test a relevant external repo or weight source.", "low", 3, [], []),
+            ("seed-repeat", "d006_validation", "Repeat a candidate result for stability.", "medium", 4, [], []),
+        ][:count]
     run_ids: list[str] = []
-    for short, direction_id, hypothesis, _cost in specs:
+    name_to_run_id: dict[str, str] = {}
+    for short, direction_id, hypothesis, cost, priority, depends_on, cancel_if_failed in specs:
         run_id = f"{next_numeric_id(existing + run_ids, 'r')}_{short.replace('-', '_')}"
+        name_to_run_id[short] = run_id
+        resolved_deps = [name_to_run_id.get(str(dep), str(dep)) for dep in depends_on]
+        resolved_cancel = [name_to_run_id.get(str(dep), str(dep)) for dep in cancel_if_failed]
         branch = f"vibe/{run_id.replace('_', '-')}"
         manifest = RunManifest(
             run_id=run_id,
@@ -319,6 +414,15 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
             expected_learning=hypothesis,
             dryrun={"command": "python -c 'print(\"vibe dryrun placeholder\")'", "max_minutes": 5},
             entrypoint={"type": "local", "command": "python -c 'print(\"vibe run placeholder\")'"},
+            resources={
+                "gpu": 0 if cost == "low" else 1,
+                "cpus": 1 if cost == "low" else 4,
+                "mem_gb": 4 if cost == "low" else 16,
+                "time": "00:30:00" if cost == "low" else "04:00:00",
+                "preferred_partitions": ["gpu_short"],
+                "fallback_partitions": ["gpu", "a100", "general_gpu"],
+            },
+            dependencies={"run_after": resolved_deps, "cancel_if_failed": resolved_cancel},
         )
         run_dir = paths.runs / run_id
         ensure_dir(run_dir / "artifacts")
@@ -339,9 +443,22 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
         write_yaml(run_dir / "next_manifest.yaml", {})
         state["runs"][run_id] = manifest.model_dump()
         state["runs"][run_id]["status"] = "generated"
+        state["runs"][run_id]["priority"] = priority
+        state["runs"][run_id]["cost"] = cost
         run_ids.append(run_id)
         record_event(paths, "run_generated", hypothesis, cycle_id=cycle, run_id=run_id, direction_id=direction_id, status="generated")
+    for run_id in run_ids:
+        run = state["runs"][run_id]
+        deps = run.get("dependencies", {})
+        deps["run_after"] = [name_to_run_id.get(str(item), str(item)) for item in deps.get("run_after", [])]
+        deps["cancel_if_failed"] = [name_to_run_id.get(str(item), str(item)) for item in deps.get("cancel_if_failed", [])]
+        run["dependencies"] = deps
+        write_yaml(paths.runs / run_id / "manifest.yaml", run)
+        write_json(paths.runs / run_id / "manifest.json", run)
     (paths.cycles / cycle / "runs.txt").write_text("\n".join(run_ids) + "\n")
+    expanded_plan = resource_plan
+    expanded_plan["generated_run_ids"] = run_ids
+    write_yaml(paths.cycles / cycle / "resource_plan.yaml", expanded_plan)
     state["status"] = "runs_generated"
     state["next_action"] = f"vibe review {run_ids[0]}" if run_ids else "vibe next"
     state["updated_at"] = utc_now()

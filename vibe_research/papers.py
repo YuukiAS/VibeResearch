@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sqlite3
+import subprocess
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .io import append_jsonl, ensure_dir, read_jsonl, slugify, utc_now, write_text
+from .io import append_jsonl, ensure_dir, read_jsonl, slugify, utc_now, write_json, write_text
 from .paths import VibePaths
 from .timeline import record_event
 
@@ -56,7 +58,7 @@ def connect(paths: VibePaths) -> sqlite3.Connection:
     return conn
 
 
-def paper_search(paths: VibePaths, query: str, *, source: str = "arxiv", limit: int = 10, offline: bool = False) -> list[dict[str, Any]]:
+def paper_search(paths: VibePaths, query: str, *, source: str = "arxiv", limit: int = 10, offline: bool = False, add_candidates: bool = False) -> list[dict[str, Any]]:
     if offline:
         results: list[dict[str, Any]] = []
     elif source == "arxiv":
@@ -72,6 +74,10 @@ def paper_search(paths: VibePaths, query: str, *, source: str = "arxiv", limit: 
     else:
         results = []
     append_jsonl(paths.research / "sources.jsonl", {"created_at": utc_now(), "source": source, "query": query, "results": results})
+    if add_candidates:
+        for row in results:
+            if not row.get("error") and row.get("title"):
+                add_paper(paths, {**row, "status": "candidate", "notes": f"candidate from {source} query: {query}"})
     record_event(paths, "paper_found", f"{len(results)} papers for {query}", status="searched", payload={"source": source, "query": query})
     return results
 
@@ -222,15 +228,39 @@ def download_paper(paths: VibePaths, paper_id: str, url: str) -> dict[str, Any]:
     return metadata
 
 
+def pdf_to_markdown(paths: VibePaths, paper_id: str) -> Path:
+    pdf = paths.research / "raw" / "papers_pdf" / f"{paper_id}.pdf"
+    md = paths.research / "raw" / "papers_md" / f"{paper_id}.md"
+    ensure_dir(md.parent)
+    text = ""
+    method = "stub"
+    if pdf.exists() and shutil.which("pdftotext"):
+        result = subprocess.run(["pdftotext", str(pdf), "-"], text=True, capture_output=True, check=False, timeout=60)
+        if result.returncode == 0 and result.stdout.strip():
+            text = result.stdout
+            method = "pdftotext"
+    if not text:
+        text = "PDF text extraction unavailable. Use the local PDF path and source metadata for agent ingest."
+    write_text(md, f"# Paper Markdown: {paper_id}\n\nExtraction method: {method}\nSource PDF: {pdf}\n\n{text[:200000]}\n")
+    record_event(paths, "paper_markdown_created", paper_id, status=method, payload={"path": str(md), "method": method})
+    return md
+
+
 def wiki_ingest_paper(paths: VibePaths, paper_id: str, notes: str = "") -> Path:
     conn = connect(paths)
-    row = conn.execute("SELECT title, authors, year, source_url, pdf_url, local_pdf_path, sha256 FROM papers WHERE paper_id=?", (paper_id,)).fetchone()
+    row = conn.execute("SELECT title, authors, year, source_url, pdf_url, local_pdf_path, sha256, status FROM papers WHERE paper_id=?", (paper_id,)).fetchone()
+    conn.execute("UPDATE papers SET ingested_at=?, status=? WHERE paper_id=?", (utc_now(), "ingested", paper_id))
+    conn.commit()
     conn.close()
     if row:
-        title, authors, year, source_url, pdf_url, local_pdf_path, sha = row
+        title, authors, year, source_url, pdf_url, local_pdf_path, sha, _status = row
+        status = "ingested"
     else:
-        title, authors, year, source_url, pdf_url, local_pdf_path, sha = paper_id, "", "", "", "", "", ""
-        add_paper(paths, {"paper_id": paper_id, "title": title, "status": "wiki_stub"})
+        title, authors, year, source_url, pdf_url, local_pdf_path, sha, status = paper_id, "", "", "", "", "", "", "ingested"
+        add_paper(paths, {"paper_id": paper_id, "title": title, "status": "ingested", "ingested_at": utc_now()})
+    md = paths.research / "raw" / "papers_md" / f"{paper_id}.md"
+    if local_pdf_path and not md.exists():
+        pdf_to_markdown(paths, paper_id)
     note = paths.research / "wiki" / "papers" / f"{paper_id}.md"
     write_text(
         note,
@@ -243,6 +273,8 @@ Source: {source_url}
 PDF: {pdf_url}
 Local PDF: {local_pdf_path}
 SHA256: {sha}
+Status: {status}
+Markdown: {md if md.exists() else ''}
 
 ## Summary
 {notes or 'Pending agent ingest.'}
@@ -251,6 +283,9 @@ SHA256: {sha}
 Pending synthesis update.
 """,
     )
+    append_wiki_page(paths.research / "wiki" / "concepts" / "paper-methods.md", paper_id, title)
+    append_wiki_page(paths.research / "wiki" / "gaps" / "questions.md", paper_id, "Questions and gaps pending extraction.")
+    append_wiki_page(paths.research / "wiki" / "synthesis" / "field-map.md", paper_id, title)
     with (paths.research / "wiki" / "index.md").open("a") as handle:
         handle.write(f"- [{paper_id}](papers/{paper_id}.md): {title}\n")
     with (paths.research / "wiki" / "log.md").open("a") as handle:
@@ -270,3 +305,11 @@ def between(text: str, start: str, end: str) -> str:
     if start not in text:
         return ""
     return text.split(start, 1)[1].split(end, 1)[0]
+
+
+def append_wiki_page(path: Path, key: str, text: str) -> None:
+    ensure_dir(path.parent)
+    if not path.exists():
+        write_text(path, f"# {path.stem.replace('-', ' ').title()}\n\n")
+    with path.open("a") as handle:
+        handle.write(f"- `{key}`: {text}\n")

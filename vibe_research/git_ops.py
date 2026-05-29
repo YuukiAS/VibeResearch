@@ -20,6 +20,33 @@ def git_dirty(root: Path) -> bool:
     return bool(result.stdout.strip()) if result.returncode == 0 else False
 
 
+def git_current_branch(root: Path) -> str:
+    result = subprocess.run(["git", "branch", "--show-current"], cwd=root, text=True, capture_output=True, check=False)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def git_diff_text(root: Path) -> str:
+    result = subprocess.run(["git", "diff", "--binary"], cwd=root, text=True, capture_output=True, check=False)
+    return result.stdout if result.returncode == 0 else ""
+
+
+def changed_paths_from_diff(diff_text: str) -> list[str]:
+    paths: list[str] = []
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            parts = line.split()
+            if len(parts) >= 4:
+                path = parts[3][2:] if parts[3].startswith("b/") else parts[3]
+                paths.append(path)
+    return paths
+
+
+def protected_diff_paths(diff_text: str) -> list[str]:
+    protected_prefixes = [".git", ".vibe/state", ".vibe/scheduler", ".vibe/leaderboard/best.json"]
+    changed = changed_paths_from_diff(diff_text)
+    return [path for path in changed if any(path == prefix or path.startswith(prefix + "/") for prefix in protected_prefixes)]
+
+
 def create_branch(paths: VibePaths, run_id: str) -> str:
     paths.require_initialized()
     state = read_json(paths.state / "state.json", {})
@@ -40,7 +67,7 @@ def create_branch(paths: VibePaths, run_id: str) -> str:
         run["status"] = "branched"
         record_event(paths, "branch_created", f"Created branch {branch}", run_id=run_id, status="ok")
     state["runs"][run_id] = run
-    state["next_action"] = f"vibe dryrun {run_id}"
+    state["next_action"] = f"vibe patch {run_id}"
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
     active = read_json(paths.branches / "active.json", {})
@@ -81,6 +108,9 @@ def merge_review(paths: VibePaths, run_id: str) -> str:
         "revised_plan.md",
     ]
     missing = [name for name in required if not (paths.runs / run_id / name).exists()]
+    cycle_id = run.get("cycle_id", "")
+    if cycle_id and not (paths.cycles / cycle_id / "cycle_reflect.md").exists():
+        missing.append(f"cycles/{cycle_id}/cycle_reflect.md")
     metrics = read_json(paths.runs / run_id / "metrics.json", {})
     verdict = "MERGE_OK" if not missing and metrics.get("trusted") and metrics.get("provenance") else "MERGE_BLOCKED"
     text = f"# Merge Review for {run_id}\n\nVerdict: {verdict}\n\nMissing: {', '.join(missing) or 'none'}\nTrusted metrics: {bool(metrics.get('trusted'))}\nProvenance: {bool(metrics.get('provenance'))}\n"

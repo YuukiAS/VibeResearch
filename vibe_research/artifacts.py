@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sqlite3
 
 from .codex_adapter import artifact_path
 from .io import read_json, read_jsonl
@@ -66,6 +67,21 @@ REQUIRED_SECTIONS = {
     ],
 }
 
+PORTFOLIO_VERDICTS = {"APPROVE_PORTFOLIO", "APPROVE_WITH_RESOURCE_GUARDS", "REVISE_PORTFOLIO", "BLOCK_PORTFOLIO"}
+RUN_VERDICTS = {"APPROVE", "APPROVE_WITH_GUARDS", "REVISE_OR_BLOCK"}
+REVISED_DECISIONS = {
+    "continue_same_plan",
+    "modify_experiment",
+    "run_ablation",
+    "repeat_seed",
+    "collect_more_metrics",
+    "literature_refresh_needed",
+    "deep_research_needed",
+    "stop_branch",
+    "merge_candidate",
+    "ask_user",
+}
+
 
 def validate_artifact(paths: VibePaths, role: str, target_id: str) -> list[ArtifactIssue]:
     path = artifact_path(paths, role, target_id)
@@ -78,6 +94,26 @@ def validate_artifact(paths: VibePaths, role: str, target_id: str) -> list[Artif
     for section in REQUIRED_SECTIONS.get(role, []):
         if section not in text:
             issues.append(ArtifactIssue("error", f"missing required section `{section}` in {path.name}"))
+    if role == "portfolio_reviewer":
+        verdict = extract_value(text, "Verdict:")
+        if verdict and verdict not in PORTFOLIO_VERDICTS:
+            issues.append(ArtifactIssue("error", f"invalid portfolio verdict `{verdict}`"))
+    if role == "reviewer":
+        verdict = extract_value(text, "Verdict:")
+        if verdict and verdict not in RUN_VERDICTS:
+            issues.append(ArtifactIssue("error", f"invalid run verdict `{verdict}`"))
+    if role == "revised_plan":
+        decision = extract_section_first_value(text, "## Decision")
+        if decision and decision not in REVISED_DECISIONS:
+            issues.append(ArtifactIssue("error", f"invalid revised-plan decision `{decision}`"))
+        for label in ["## Literature refresh decision", "## Deep research decision"]:
+            value = extract_section_first_value(text, label).lower()
+            if value and not value.startswith(("yes", "no")):
+                issues.append(ArtifactIssue("error", f"{label} must start with yes or no"))
+    if role == "cycle_revised_plan":
+        value = extract_section_first_value(text, "## Literature and deep research decision").lower()
+        if value and "literature" not in value and "deep research" not in value:
+            issues.append(ArtifactIssue("warning", "cycle revised plan should mention literature and deep research decisions"))
     return issues
 
 
@@ -91,6 +127,12 @@ def validate_hard_rules(paths: VibePaths) -> list[ArtifactIssue]:
         for name in ["portfolio_plan.md", "portfolio_review.md", "resource_plan.yaml"]:
             if not (cycle_dir / name).exists():
                 issues.append(ArtifactIssue("error", f"{cycle_id} missing {name}"))
+        review_text = (cycle_dir / "portfolio_review.md").read_text() if (cycle_dir / "portfolio_review.md").exists() else ""
+        verdict = extract_value(review_text, "Verdict:")
+        if verdict in {"BLOCK_PORTFOLIO", "REVISE_PORTFOLIO"}:
+            for run_id, run in state.get("runs", {}).items():
+                if run.get("cycle_id") == cycle_id and run.get("status") not in {"generated", "abandoned"}:
+                    issues.append(ArtifactIssue("error", f"{run_id} advanced after portfolio verdict {verdict}"))
         if state.get("cycles", {}).get(cycle_id, {}).get("status") in {"revised", "completed"}:
             for name in ["cycle_reflect.md", "cycle_revised_plan.md"]:
                 if not has_text(cycle_dir / name):
@@ -106,12 +148,55 @@ def validate_hard_rules(paths: VibePaths) -> list[ArtifactIssue]:
             issues.append(ArtifactIssue("error", f"{run_id} missing reflect.md"))
         if run.get("status") in {"revised", "merged"} and not has_text(run_dir / "revised_plan.md"):
             issues.append(ArtifactIssue("error", f"{run_id} missing revised_plan.md"))
+        if run.get("status") == "merged" and run.get("merge_review") != "MERGE_OK":
+            issues.append(ArtifactIssue("error", f"{run_id} merged without MERGE_OK"))
+        launch = read_json(run_dir / "launch.json", {})
+        if launch and launch.get("backend") == "slurm":
+            for key in ["job_id", "partition", "log_path", "resource_request"]:
+                if not launch.get(key):
+                    issues.append(ArtifactIssue("error", f"{run_id} slurm launch missing {key}"))
     for row in read_jsonl(paths.leaderboard / "history.jsonl"):
         if row.get("trusted") and not row.get("provenance"):
             issues.append(ArtifactIssue("error", f"trusted leaderboard row lacks provenance: {row.get('run_id')}"))
+    for row in read_jsonl(paths.research / "deep_requests" / "registry.jsonl"):
+        if row.get("blocking") and row.get("status") != "ingested":
+            if not row.get("request_path"):
+                issues.append(ArtifactIssue("error", f"blocking deep research lacks request path: {row.get('request_id')}"))
+    paper_db = paths.research / "papers.sqlite"
+    if paper_db.exists():
+        try:
+            conn = sqlite3.connect(paper_db)
+            for paper_id, status, source_url, local_pdf_path, sha256 in conn.execute("SELECT paper_id,status,source_url,local_pdf_path,sha256 FROM papers"):
+                if status in {"downloaded", "ingested", "formal"}:
+                    if not source_url and not local_pdf_path:
+                        issues.append(ArtifactIssue("error", f"{paper_id} formal paper lacks source or local PDF"))
+                    if local_pdf_path and not sha256:
+                        issues.append(ArtifactIssue("error", f"{paper_id} local PDF lacks checksum"))
+            conn.close()
+        except Exception as exc:
+            issues.append(ArtifactIssue("warning", f"paper DB validation skipped: {exc}"))
     return issues
 
 
 def has_text(path: Path) -> bool:
     return path.exists() and bool(path.read_text().strip())
 
+
+def extract_value(text: str, label: str) -> str:
+    for line in text.splitlines():
+        if line.strip().startswith(label):
+            return line.split(label, 1)[1].strip().split()[0] if line.split(label, 1)[1].strip() else ""
+    return ""
+
+
+def extract_section_first_value(text: str, section: str) -> str:
+    if section not in text:
+        return ""
+    body = text.split(section, 1)[1]
+    if "\n## " in body:
+        body = body.split("\n## ", 1)[0]
+    for line in body.splitlines():
+        value = line.strip().strip("-*` ")
+        if value:
+            return value.split()[0]
+    return ""

@@ -197,6 +197,8 @@ Avoid generic surveys, unsourced claims, and suggestions that ignore local const
 Evidence table, method map, repo/weight list, risk assessment, recommended next experiments, citations.
 """
     write_text(request_path, text)
+    linked_cycle_ids = [request_for] if request_for.startswith("c") else []
+    linked_run_ids = [request_for] if request_for.startswith("r") else []
     record = {
         "request_id": request_id,
         "created_at": utc_now(),
@@ -205,7 +207,9 @@ Evidence table, method map, repo/weight list, risk assessment, recommended next 
         "status": "created",
         "request_path": str(request_path),
         "result_path": "",
-        "linked": request_for,
+        "linked_cycle_ids": linked_cycle_ids,
+        "linked_run_ids": linked_run_ids,
+        "linked_revised_plan": "",
         "ingested_at": "",
         "wiki_updates": [],
         "decision_impact": "",
@@ -223,10 +227,22 @@ def ingest_deep_research(paths: VibePaths, request_id: str) -> None:
     report = result_path.read_text()
     synthesis = paths.research / "wiki" / "synthesis" / f"{request_id}.md"
     write_text(synthesis, f"# Deep Research Synthesis: {request_id}\n\n{report[:12000]}\n")
+    comparison = paths.research / "wiki" / "comparisons" / f"{request_id}_methods.md"
+    gaps = paths.research / "wiki" / "gaps" / f"{request_id}_risks.md"
+    repos_path = paths.research / "raw" / "repos" / f"{request_id}_repos.json"
+    datasets_path = paths.research / "wiki" / "entities" / f"{request_id}_datasets.md"
     paper_ids = []
     for url in sorted(set(re.findall(r"https?://(?:arxiv\.org/abs|doi\.org|www\.semanticscholar\.org)[^\s)\]]+", report))):
         paper_id = add_paper(paths, {"title": url.rsplit("/", 1)[-1], "source_url": url, "status": "from_deep_research", "related_deep_request_ids": [request_id]})
         paper_ids.append(paper_id)
+    repo_urls = sorted(set(re.findall(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", report)))
+    dataset_mentions = extract_tagged_lines(report, ["dataset", "benchmark", "cohort", "数据集", "基准"])
+    method_mentions = extract_tagged_lines(report, ["method", "model", "architecture", "approach", "方法", "模型"])
+    risk_mentions = extract_tagged_lines(report, ["risk", "failure", "limitation", "guardrail", "风险", "失败"])
+    write_text(comparison, "# Method Comparison Extract\n\n" + "\n".join(f"- {line}" for line in method_mentions[:80]) + "\n")
+    write_text(gaps, "# Risks and Gaps Extract\n\n" + "\n".join(f"- {line}" for line in risk_mentions[:80]) + "\n")
+    write_json(repos_path, {"request_id": request_id, "repo_urls": repo_urls})
+    write_text(datasets_path, "# Dataset and Benchmark Mentions\n\n" + "\n".join(f"- {line}" for line in dataset_mentions[:80]) + "\n")
     ideas = []
     for line in report.splitlines():
         lowered = line.lower()
@@ -255,9 +271,19 @@ def ingest_deep_research(paths: VibePaths, request_id: str) -> None:
             row["status"] = "ingested"
             row["result_path"] = str(result_path)
             row["ingested_at"] = utc_now()
-            row["wiki_updates"] = [str(synthesis)]
-            row["decision_impact"] = "updated_wiki_and_inbox"
+            row["wiki_updates"] = [str(synthesis), str(comparison), str(gaps), str(datasets_path)]
+            row["decision_impact"] = "updated_wiki_papers_repos_datasets_inbox"
         updated.append(row)
     write_text(registry_path, "".join(__import__("json").dumps(row, sort_keys=True) + "\n" for row in updated))
-    record_event(paths, "deep_research_ingested", f"Ingested {request_id}", status="ingested", payload={"synthesis": str(synthesis), "papers": paper_ids, "ideas": ideas})
+    record_event(paths, "deep_research_ingested", f"Ingested {request_id}", status="ingested", payload={"synthesis": str(synthesis), "papers": paper_ids, "repos": repo_urls, "ideas": ideas})
     sync_dashboard(paths)
+
+
+def extract_tagged_lines(text: str, tags: list[str]) -> list[str]:
+    rows = []
+    for line in text.splitlines():
+        clean = line.strip("-*# \t")
+        lowered = clean.lower()
+        if clean and any(tag in lowered for tag in tags):
+            rows.append(clean[:500])
+    return rows

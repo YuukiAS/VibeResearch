@@ -30,23 +30,23 @@ def render_status(paths: VibePaths) -> str:
     if not runs:
         lines.append("No runs generated yet.")
     else:
-        lines.extend(["| Run | Direction | Status | Branch |", "|---|---|---|---|"])
+        lines.extend(["| Run | Direction | Status | Branch | Cost |", "|---|---|---|---|---|"])
         for run_id, run in sorted(runs.items()):
             lines.append(
-                f"| `{run_id}` | `{run.get('direction_id', '')}` | `{run.get('status', '')}` | `{run.get('branch', '')}` |"
+                f"| `{run_id}` | `{run.get('direction_id', '')}` | `{run.get('status', '')}` | `{run.get('branch', '')}` | `{run.get('cost', '')}` |"
             )
     lines.extend(["", "## Scheduler", ""])
     lines.append(f"Queued: {len(queue.get('queued', []))}")
     lines.append(f"Active: {len(active.get('active', []))}")
     lines.append(f"Completed jobs: {len(completed)}")
     if queue.get("queued"):
-        lines.extend(["", "| Queued Run | Status | Priority |", "|---|---|---:|"])
+        lines.extend(["", "| Queued Run | Status | Priority | Reason |", "|---|---|---:|---|"])
         for item in queue["queued"]:
-            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('status', '')}` | {item.get('priority', '')} |")
+            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('status', '')}` | {item.get('priority', '')} | {item.get('reason', '')} |")
     if active.get("active"):
-        lines.extend(["", "| Active Run | Backend | Job | Status |", "|---|---|---|---|"])
+        lines.extend(["", "| Active Run | Backend | Job | Status | Log |", "|---|---|---|---|---|"])
         for item in active["active"]:
-            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('backend', '')}` | `{item.get('job_id', '')}` | `{item.get('status', '')}` |")
+            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('backend', '')}` | `{item.get('job_id', '')}` | `{item.get('status', '')}` | `{item.get('log_path', '')}` |")
     return "\n".join(lines) + "\n"
 
 
@@ -82,11 +82,12 @@ def render_leaderboard(paths: VibePaths) -> str:
         lines.append(f"Best trusted: `{best.get('run_id', 'none')}` metric={best.get('primary_metric', 'n/a')}")
     else:
         lines.append("No trusted best yet.")
-    lines.extend(["", "| Cycle | Run | Direction | Metric | Trusted | Status |", "|---|---|---|---:|---|---|"])
+    lines.extend(["", "| Cycle | Run | Direction | Branch | Metric | Guardrails | Trusted | Status |", "|---|---|---|---|---:|---|---|---|"])
     for row in history[-100:]:
+        guardrails = row.get("metrics", {}).get("guardrails", "") if isinstance(row.get("metrics"), dict) else ""
         lines.append(
-            f"| `{row.get('cycle_id', '')}` | `{row.get('run_id', '')}` | `{row.get('direction_id', '')}` | "
-            f"{row.get('primary_metric', '')} | {row.get('trusted', False)} | `{row.get('status', '')}` |"
+            f"| `{row.get('cycle_id', '')}` | `{row.get('run_id', '')}` | `{row.get('direction_id', '')}` | `{row.get('branch', '')}` | "
+            f"{row.get('primary_metric', '')} | {guardrails} | {row.get('trusted', False)} | `{row.get('status', '')}` |"
         )
     if best_by_direction:
         lines.extend(["", "## Best By Direction", "", "| Direction | Run | Metric |", "|---|---|---:|"])

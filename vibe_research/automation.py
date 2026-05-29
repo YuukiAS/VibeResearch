@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from .codex_adapter import run_codex
-from .io import read_json
+from .git_ops import create_branch
+from .io import read_json, write_json
 from .next_action import compute_next_action
 from .paths import VibePaths
-from .project import create_cycle, generate_runs
+from .project import create_cycle, generate_runs, sync_resource_plan_from_portfolio
 from .research import reflect, reflect_cycle, revise_cycle, revise_plan
-from .scheduler import collect, queue_run, review_cycle, review_run, run_dryrun, submit_queue
+from .scheduler import collect, monitor, queue_run, review_cycle, review_run, run_dryrun, submit_queue
 
 
 def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = True) -> str:
@@ -25,6 +26,7 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
     if command == "plan-cycle":
         cycle = create_cycle(paths)
         run_codex(paths, "portfolio_planner", cycle, offline=offline)
+        sync_resource_plan_from_portfolio(paths, cycle)
         return f"planned {cycle}"
     if command == "review-cycle":
         run_codex(paths, "portfolio_reviewer", target_id, offline=offline)
@@ -37,6 +39,16 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
         run_codex(paths, "reviewer", target_id, offline=offline)
         review_run(paths, target_id)
         return f"reviewed {target_id}"
+    if command == "branch":
+        create_branch(paths, target_id)
+        return f"branched {target_id}"
+    if command == "patch":
+        run_codex(paths, "codex_patch", target_id, offline=offline)
+        state = read_json(paths.state / "state.json", {})
+        state.setdefault("runs", {}).setdefault(target_id, {})["status"] = "patched"
+        state["next_action"] = f"vibe dryrun {target_id}"
+        write_json(paths.state / "state.json", state)
+        return f"patched {target_id}"
     if command == "dryrun":
         run_dryrun(paths, target_id)
         return f"dryran {target_id}"
@@ -46,6 +58,9 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
     if command == "submit-queue":
         submitted = submit_queue(paths, dry=dry_submit)
         return f"submitted {','.join(submitted)}"
+    if command == "monitor":
+        monitor(paths)
+        return "monitored"
     if command == "collect":
         collect(paths, target_id)
         return f"collected {target_id}"
@@ -87,4 +102,3 @@ def scheduler_explain(paths: VibePaths) -> str:
     for item in active:
         lines.append(f"- active {item.get('run_id')}: backend={item.get('backend')} job={item.get('job_id')}")
     return "\n".join(lines) + "\n"
-

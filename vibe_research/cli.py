@@ -19,13 +19,13 @@ from .config import migrate_project
 from .daemon import daemon_start, daemon_status, daemon_stop
 from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .directions import set_direction_status
-from .git_ops import abandon_run, create_branch, merge_review, merge_run
+from .git_ops import abandon_run, create_branch, git_available, git_current_branch, git_diff_text, merge_review, merge_run, protected_diff_paths
 from .io import read_json
 from .manifest import validate_manifest
 from .next_action import compute_next_action
-from .papers import add_paper, download_paper, list_papers, paper_search, wiki_ingest_paper
+from .papers import add_paper, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
-from .project import add_directive, add_idea, create_cycle, generate_runs, init_project
+from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio
 from .research import deep_request, ingest_deep_research, literature_refresh, reflect, reflect_cycle, revise_cycle, revise_plan
 from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
@@ -127,11 +127,20 @@ def directive(text: str, target: Path = typer.Option(Path("."), "--target", "-t"
 def plan_cycle(
     target: Path = typer.Option(Path("."), "--target", "-t"),
     mode: Optional[str] = typer.Option(None, "--mode", help="exploration, balanced, or exploitation"),
+    offline: bool = typer.Option(False, "--offline", help="Use deterministic fallback instead of Codex."),
 ) -> None:
     """Create a portfolio plan for the next cycle."""
 
-    cycle_id = create_cycle(paths(target), mode=mode)
-    console.print(f"Created cycle {cycle_id}")
+    p = paths(target)
+    cycle_id = create_cycle(p, mode=mode)
+    result = run_codex(p, "portfolio_planner", cycle_id, offline=offline)
+    issues = validate_artifact(p, "portfolio_planner", cycle_id)
+    if issues:
+        for issue in issues:
+            console.print(f"[{issue.level}] {issue.message}")
+        raise typer.Exit(1)
+    sync_resource_plan_from_portfolio(p, cycle_id)
+    console.print(f"Created cycle {cycle_id} via {'offline fallback' if offline else 'Codex'} ({result.call_id})")
 
 
 @app.command("review-cycle")
@@ -193,19 +202,49 @@ def branch(run_id: str, target: Path = typer.Option(Path("."), "--target", "-t")
 
 
 @app.command()
-def patch(run_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
-    """Record current diff placeholder for a run.
-
-    This command is intentionally conservative. Codex should generate patches,
-    while runner records and validates them before execution.
-    """
+def patch(
+    run_id: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    offline: bool = typer.Option(False, "--offline", help="Use deterministic fallback instead of Codex."),
+    record_only: bool = typer.Option(False, "--record-only", help="Record the current diff without invoking Codex."),
+) -> None:
+    """Generate or record the bounded patch artifact for a run."""
 
     p = paths(target)
     p.require_initialized()
-    patch_path = p.runs / run_id / "patch.diff"
-    if not patch_path.exists():
+    state = read_json(p.state / "state.json", {})
+    run = state.get("runs", {}).get(run_id)
+    if not run:
         raise typer.BadParameter(f"Unknown run: {run_id}")
-    console.print(f"Patch artifact: {patch_path}")
+    issues = validate_manifest(p, run_id)
+    if any(issue.level == "error" for issue in issues):
+        for issue in issues:
+            console.print(f"[{issue.level}] {issue.message}")
+        raise typer.Exit(1)
+    if git_available(p.root):
+        branch = git_current_branch(p.root)
+        if branch and branch != run.get("branch"):
+            console.print(f"[error] current branch `{branch}` does not match run branch `{run.get('branch')}`")
+            raise typer.Exit(1)
+    patch_path = p.runs / run_id / "patch.diff"
+    if record_only:
+        patch_path.write_text(git_diff_text(p.root))
+        call_id = "record-only"
+    else:
+        result = run_codex(p, "codex_patch", run_id, offline=offline)
+        call_id = result.call_id
+    diff_text = patch_path.read_text() if patch_path.exists() else ""
+    protected = protected_diff_paths(diff_text)
+    if protected:
+        console.print(f"[error] patch touches protected paths: {', '.join(protected)}")
+        raise typer.Exit(1)
+    state = read_json(p.state / "state.json", {})
+    state.setdefault("runs", {}).setdefault(run_id, {})["status"] = "patched"
+    state["next_action"] = f"vibe dryrun {run_id}"
+    from .io import write_json
+
+    write_json(p.state / "state.json", state)
+    console.print(f"Patch artifact: {patch_path} ({call_id})")
 
 
 @app.command()
@@ -262,11 +301,12 @@ def collect(
     run_id: str,
     target: Path = typer.Option(Path("."), "--target", "-t"),
     metric: Optional[float] = typer.Option(None, "--metric"),
-    trusted: bool = typer.Option(False, "--trusted"),
+    metrics_file: Optional[Path] = typer.Option(None, "--metrics-file"),
+    trusted: bool = typer.Option(False, "--trusted/--candidate"),
 ) -> None:
     """Collect metrics and update leaderboard history."""
 
-    collect_run(paths(target), run_id, metric=metric, trusted=trusted)
+    collect_run(paths(target), run_id, metric=metric, metrics_file=str(metrics_file) if metrics_file else None, trusted=trusted)
     console.print(f"Collected {run_id}")
 
 
@@ -508,7 +548,12 @@ def deep_request_cmd(
     """Generate a standard deep research request."""
 
     p = paths(target)
-    request_id = deep_request(p, request_for=run_id, topic=topic, blocking=blocking)
+    request_for = run_id
+    request_topic = topic
+    if not request_for and topic.startswith("r"):
+        request_for = topic
+        request_topic = "route-level uncertainty"
+    request_id = deep_request(p, request_for=request_for, topic=request_topic, blocking=blocking)
     run_codex(p, "deep_research_request", request_id, offline=offline)
     console.print(f"Created {request_id}")
 
@@ -567,10 +612,11 @@ def paper_search_cmd(
     source: str = typer.Option("arxiv", "--source"),
     limit: int = typer.Option(10, "--limit"),
     offline: bool = typer.Option(False, "--offline"),
+    add_candidates: bool = typer.Option(False, "--add-candidates", help="Add returned records as paper DB candidates."),
 ) -> None:
     """Search papers and record search provenance."""
 
-    results = paper_search(paths(target), query, source=source, limit=limit, offline=offline)
+    results = paper_search(paths(target), query, source=source, limit=limit, offline=offline, add_candidates=add_candidates)
     for row in results:
         console.print(row)
 
@@ -593,6 +639,7 @@ def paper_download_cmd(paper_id: str, url: str, target: Path = typer.Option(Path
     """Download a paper PDF and record checksum provenance."""
 
     metadata = download_paper(paths(target), paper_id, url)
+    pdf_to_markdown(paths(target), paper_id)
     console.print(metadata)
 
 

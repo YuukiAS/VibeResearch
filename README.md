@@ -33,12 +33,14 @@ vibe monitor --loop --auto-next
 vibe daemon start
 ```
 
-Codex CLI can now generate artifacts directly:
+Codex CLI can generate artifacts directly. Normal planning commands also call
+Codex unless `--offline` is supplied:
 
 ```bash
+vibe plan-cycle --offline
 vibe codex-plan c001
 vibe codex-review r001_baseline_check
-vibe codex-patch r001_baseline_check
+vibe patch r001_baseline_check
 vibe codex-reflect r001_baseline_check
 vibe codex-revise r001_baseline_check
 ```
@@ -52,11 +54,20 @@ vibe auto-cycle --offline --dry-submit
 vibe validate-hard-rules
 ```
 
+`vibe validate-hard-rules` is the local TODO.md compliance gate. It checks
+required cycle/run artifacts, merge gates, Slurm provenance, trusted metric
+provenance, and blocking deep-research state.
+
 Paper/wiki and deep-research helpers are local-first:
 
 ```bash
-vibe paper-search "segmentation topology" --offline
+vibe paper-search "segmentation topology" --offline --add-candidates
 vibe paper-add "Example Paper" --source-url https://arxiv.org/abs/0000.0000
+vibe paper-download p_example-paper https://example.org/paper.pdf
 vibe wiki-ingest p_example-paper
 vibe deep-request-cycle c001 "route selection" --blocking
 ```
+
+Paper download records a local PDF checksum and creates a markdown extraction
+stub or `pdftotext` extraction. Wiki ingest updates paper notes plus concept,
+gap, and synthesis entrypoints.

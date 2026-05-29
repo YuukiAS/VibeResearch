@@ -12,11 +12,21 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     queue = read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued", [])
     if active:
         return "vibe monitor", ""
-    if queue:
-        return "vibe submit-queue", ""
     for request in read_jsonl(paths.research / "deep_requests" / "registry.jsonl"):
         if request.get("blocking") and request.get("status") != "ingested":
             return "vibe ingest-deep-research " + request.get("request_id", "<request_id>"), "blocked_waiting_deep_research"
+    if queue:
+        return "vibe submit-queue", ""
+    cycle_id = state.get("current_cycle_id", "")
+    if cycle_id:
+        cycle = state.get("cycles", {}).get(cycle_id, {})
+        if cycle.get("status") == "blocked":
+            return f"revise portfolio {cycle_id}", state.get("blocked_reason", "portfolio_blocked")
+        if cycle.get("status") == "planned":
+            return f"vibe review-cycle {cycle_id}", ""
+        cycle_run_ids = [run_id for run_id, run in state.get("runs", {}).items() if run.get("cycle_id") == cycle_id]
+        if cycle.get("status") == "reviewed" and not cycle_run_ids:
+            return f"vibe generate-runs {cycle_id}", ""
     for run_id, run in sorted(state.get("runs", {}).items()):
         run_dir = paths.runs / run_id
         status = run.get("status", "")
@@ -27,6 +37,8 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
         if status in {"reviewed"}:
             return f"vibe branch {run_id}", ""
         if status in {"branched", "branch_recorded_no_git"}:
+            return f"vibe patch {run_id}", ""
+        if status == "patched":
             return f"vibe dryrun {run_id}", ""
         if status == "dryrun_passed":
             return f"vibe queue {run_id}", ""
@@ -37,16 +49,15 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
         if status == "reflected":
             return f"vibe revise-plan {run_id}", ""
         if status == "revised":
-            cycle_id = run.get("cycle_id", "")
-            cycle_dir = paths.cycles / cycle_id
-            if cycle_id and not has_text(cycle_dir / "cycle_reflect.md"):
-                return f"vibe reflect-cycle {cycle_id}", ""
-    cycle_id = state.get("current_cycle_id", "")
+            continue
     if cycle_id:
         cycle_dir = paths.cycles / cycle_id
-        if not (cycle_dir / "cycle_reflect.md").exists() or not (cycle_dir / "cycle_reflect.md").read_text().strip():
+        cycle_runs = [run for run in state.get("runs", {}).values() if run.get("cycle_id") == cycle_id]
+        terminal = {"revised", "merged", "abandoned", "cancelled"}
+        all_terminal = bool(cycle_runs) and all(run.get("status") in terminal for run in cycle_runs)
+        if all_terminal and not has_text(cycle_dir / "cycle_reflect.md"):
             return f"vibe reflect-cycle {cycle_id}", ""
-        if not (cycle_dir / "cycle_revised_plan.md").exists() or not (cycle_dir / "cycle_revised_plan.md").read_text().strip():
+        if all_terminal and not has_text(cycle_dir / "cycle_revised_plan.md"):
             return f"vibe revise-cycle {cycle_id}", ""
     return state.get("next_action") or "vibe plan-cycle", ""
 

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import hashlib
+import json
+import platform
 from typing import Any
 
 from .backends import get_backend
 from .config import load_config
 from .dashboard import sync_dashboard
-from .io import append_jsonl, read_json, utc_now, write_json, write_text
+from .io import append_jsonl, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text
 from .manifest import validate_manifest
 from .paths import VibePaths
 from .timeline import record_event
@@ -19,13 +22,23 @@ def review_cycle(paths: VibePaths, cycle_id: str) -> None:
     review_path = paths.cycles / cycle_id / "portfolio_review.md"
     if not review_path.exists() or not review_path.read_text().strip() or "PENDING" in review_path.read_text():
         review_path.write_text("# Portfolio Review\n\nVerdict: APPROVE_WITH_RESOURCE_GUARDS\n\nGuards: cheap diagnostics first; respect scheduler budget.\n")
+    verdict = parse_verdict(review_path.read_text())
     state = read_json(paths.state / "state.json", {})
-    state.setdefault("cycles", {}).setdefault(cycle_id, {})["status"] = "reviewed"
-    state["status"] = "portfolio_reviewed"
-    state["next_action"] = f"vibe generate-runs {cycle_id}"
+    cycle = state.setdefault("cycles", {}).setdefault(cycle_id, {})
+    cycle["review_verdict"] = verdict
+    if verdict in {"BLOCK_PORTFOLIO", "REVISE_PORTFOLIO"}:
+        cycle["status"] = "blocked"
+        state["status"] = "portfolio_blocked"
+        state["blocked_reason"] = f"portfolio verdict {verdict}"
+        state["next_action"] = f"revise portfolio {cycle_id}"
+    else:
+        cycle["status"] = "reviewed"
+        state["status"] = "portfolio_reviewed"
+        state["blocked_reason"] = ""
+        state["next_action"] = f"vibe generate-runs {cycle_id}"
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
-    record_event(paths, "portfolio_reviewed", "APPROVE_WITH_RESOURCE_GUARDS", cycle_id=cycle_id, status="approved")
+    record_event(paths, "portfolio_reviewed", verdict or "unknown", cycle_id=cycle_id, status="blocked" if verdict in {"BLOCK_PORTFOLIO", "REVISE_PORTFOLIO"} else "approved")
     sync_dashboard(paths)
 
 
@@ -37,12 +50,20 @@ def review_run(paths: VibePaths, run_id: str) -> None:
     review_path = paths.runs / run_id / "review.md"
     if not review_path.exists() or not review_path.read_text().strip() or "PENDING" in review_path.read_text():
         review_path.write_text("# Run Review\n\nVerdict: APPROVE_WITH_GUARDS\n\nGuards: dry-run must pass and metric provenance must be collected.\n")
-    run["status"] = "reviewed"
+    verdict = parse_verdict(review_path.read_text())
+    run["review_verdict"] = verdict
+    if verdict == "REVISE_OR_BLOCK":
+        run["status"] = "blocked"
+        state["next_action"] = f"revise run {run_id}"
+        state["blocked_reason"] = f"run verdict {verdict}"
+    else:
+        run["status"] = "reviewed"
+        state["next_action"] = f"vibe branch {run_id}"
+        state["blocked_reason"] = ""
     state["runs"][run_id] = run
-    state["next_action"] = f"vibe branch {run_id}"
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
-    record_event(paths, "run_reviewed", "APPROVE_WITH_GUARDS", cycle_id=run.get("cycle_id", ""), run_id=run_id, direction_id=run.get("direction_id", ""), status="approved")
+    record_event(paths, "run_reviewed", verdict or "unknown", cycle_id=run.get("cycle_id", ""), run_id=run_id, direction_id=run.get("direction_id", ""), status="blocked" if verdict == "REVISE_OR_BLOCK" else "approved")
     sync_dashboard(paths)
 
 
@@ -86,7 +107,7 @@ def queue_run(paths: VibePaths, run_id: str) -> None:
         raise RuntimeError(f"Run {run_id} is not ready for queue; status={run.get('status')}")
     queue = read_json(paths.scheduler / "queue.json", {"queued": []})
     if run_id not in [item["run_id"] for item in queue["queued"]]:
-        queue["queued"].append({"run_id": run_id, "priority": 1, "queued_at": utc_now(), "status": "queued"})
+        queue["queued"].append({"run_id": run_id, "priority": int(run.get("priority", 100)), "queued_at": utc_now(), "status": "queued", "reason": ""})
     write_json(paths.scheduler / "queue.json", queue)
     run["status"] = "queued"
     state["runs"][run_id] = run
@@ -102,20 +123,34 @@ def submit_queue(paths: VibePaths, *, dry: bool = False, backend_name: str | Non
     queue = read_json(paths.scheduler / "queue.json", {"queued": []})
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []})
     config = load_config(paths)
-    budget = config.get("scheduler", {})
+    budget = read_yaml(paths.scheduler / "budget.yaml", {}) or config.get("scheduler", {})
     max_parallel = int(budget.get("max_parallel_jobs", 3))
     max_gpu = int(budget.get("max_parallel_gpu_jobs", budget.get("max_gpu_jobs", 2)))
     backend = get_backend(paths, backend_name)
     submitted: list[str] = []
     remaining = []
     for item in sorted(queue.get("queued", []), key=lambda row: row.get("priority", 100)):
-        if len(active["active"]) >= max_parallel or active_gpu_count(active["active"]) >= max_gpu:
-            remaining.append(item)
-            continue
         run_id = item["run_id"]
         run = state.get("runs", {}).get(run_id, {})
+        if paused_direction(paths, run.get("direction_id", "")):
+            item["status"] = "paused_direction"
+            item["reason"] = f"direction {run.get('direction_id', '')} is paused/stopped"
+            remaining.append(item)
+            continue
         if dependencies_blocked(state, run):
             item["status"] = "waiting_on_dependency"
+            item["reason"] = "run_after dependency is not collected/reflected/revised/merged"
+            remaining.append(item)
+            continue
+        candidate_gpu = int((run.get("resources") or {}).get("gpu", 0) or 0)
+        if len(active["active"]) >= max_parallel:
+            item["status"] = "waiting_on_budget"
+            item["reason"] = f"max_parallel_jobs={max_parallel}"
+            remaining.append(item)
+            continue
+        if active_gpu_count(active["active"]) + candidate_gpu > max_gpu:
+            item["status"] = "waiting_on_budget"
+            item["reason"] = f"max_gpu_jobs={max_gpu}"
             remaining.append(item)
             continue
         launch = submit_run(paths, run_id, dry=dry, backend_name=backend.name)
@@ -161,6 +196,8 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
             run["status"] = poll.status
             state["runs"][job["run_id"]] = run
             record_event(paths, "job_finished", f"{job['run_id']} status={poll.status}", cycle_id=job.get("cycle_id", ""), run_id=job["run_id"], status=poll.status, payload=poll.details)
+            if poll.status in {"failed", "timeout", "cancelled"}:
+                apply_failure_rules(paths, state, job["run_id"], run)
         else:
             still_active.append(job)
             append_jsonl(paths.runs / job["run_id"] / "monitor.jsonl", {"checked_at": utc_now(), "status": poll.status, **poll.details})
@@ -213,34 +250,38 @@ def active_gpu_count(active: list[dict[str, Any]]) -> int:
     return total
 
 
-def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted: bool = False) -> None:
+def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted: bool = False, metrics_file: str | None = None) -> None:
     state = read_json(paths.state / "state.json", {})
     run = state.get("runs", {}).get(run_id)
     if not run:
         raise ValueError(f"Unknown run: {run_id}")
-    value = 0.0 if metric is None else metric
+    external_metrics = read_external_metrics(metrics_file) if metrics_file else {}
+    value = external_metrics.get("primary_metric", 0.0 if metric is None else metric)
+    provenance = build_provenance(paths, run_id)
+    if trusted and not provenance_complete(provenance):
+        raise RuntimeError("Trusted collection requires complete metric provenance.")
     metrics = {
         "run_id": run_id,
         "cycle_id": run.get("cycle_id", ""),
         "direction_id": run.get("direction_id", ""),
+        "branch": run.get("branch", ""),
         "primary_metric": value,
+        "metrics": external_metrics.get("metrics", external_metrics),
         "trusted": trusted,
         "status": "collected",
-        "provenance": {
-            "manifest": str(paths.runs / run_id / "manifest.yaml"),
-            "launch": str(paths.runs / run_id / "launch.json"),
-            "collected_at": utc_now(),
-        },
+        "provenance": provenance,
     }
     write_json(paths.runs / run_id / "metrics.json", metrics)
     write_text(paths.runs / run_id / "result.md", f"# Result\n\nPrimary metric: {value}\nTrusted: {trusted}\n")
     append_jsonl(paths.leaderboard / "history.jsonl", metrics)
     if trusted:
-        write_json(paths.leaderboard / "best.json", metrics)
+        best = read_json(paths.leaderboard / "best.json", {})
+        if is_better(paths, metrics, best):
+            write_json(paths.leaderboard / "best.json", metrics)
     best_by_direction = read_json(paths.leaderboard / "best_by_direction.json", {})
     direction = run.get("direction_id", "")
     previous = best_by_direction.get(direction)
-    if direction and (previous is None or float(value) >= float(previous.get("primary_metric", value))):
+    if direction and (previous is None or is_better(paths, metrics, previous)):
         best_by_direction[direction] = metrics
         write_json(paths.leaderboard / "best_by_direction.json", best_by_direction)
     run["status"] = "collected"
@@ -251,3 +292,90 @@ def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted:
     record_event(paths, "metrics_collected", f"Collected primary={value}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status="collected")
     record_event(paths, "leaderboard_updated", f"Updated leaderboard with {run_id}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status="updated")
     sync_dashboard(paths)
+
+
+def parse_verdict(text: str) -> str:
+    for line in text.splitlines():
+        if line.strip().startswith("Verdict:"):
+            return line.split("Verdict:", 1)[1].strip().split()[0]
+    return ""
+
+
+def paused_direction(paths: VibePaths, direction_id: str) -> bool:
+    if not direction_id:
+        return False
+    for row in read_jsonl(paths.directions / "registry.jsonl"):
+        if row.get("direction_id") == direction_id and row.get("status") in {"paused", "stopped"}:
+            return True
+    return False
+
+
+def apply_failure_rules(paths: VibePaths, state: dict[str, Any], failed_run_id: str, run: dict[str, Any]) -> None:
+    queue = read_json(paths.scheduler / "queue.json", {"queued": []})
+    cancelled = set(run.get("dependencies", {}).get("cancel_if_failed", []))
+    for item in queue.get("queued", []):
+        if item.get("run_id") in cancelled:
+            item["status"] = "cancelled_by_rule"
+            item["reason"] = f"cancel_if_failed dependency {failed_run_id}"
+            state.get("runs", {}).get(item["run_id"], {})["status"] = "cancelled"
+            record_event(paths, "blocked", f"Cancelled {item['run_id']} after {failed_run_id} failed", run_id=item["run_id"], status="cancelled_by_rule")
+    queue["queued"] = [item for item in queue.get("queued", []) if item.get("status") != "cancelled_by_rule"]
+    write_json(paths.scheduler / "queue.json", queue)
+    direction = run.get("direction_id", "")
+    max_failed = int(load_config(paths).get("scheduler", {}).get("max_failed_runs_before_pause", 3))
+    failed = [row for row in state.get("runs", {}).values() if row.get("direction_id") == direction and row.get("status") in {"failed", "timeout"}]
+    if direction and len(failed) >= max_failed:
+        append_jsonl(paths.directions / "registry.jsonl", {"direction_id": direction, "status": "paused", "reason": "max failed runs reached", "updated_at": utc_now()})
+        record_event(paths, "direction_paused", direction, direction_id=direction, status="paused")
+
+
+def read_external_metrics(path: str) -> dict[str, Any]:
+    data = json.loads(__import__("pathlib").Path(path).read_text())
+    if "primary_metric" not in data and "metrics" in data and isinstance(data["metrics"], dict):
+        first = next(iter(data["metrics"].values()), 0.0)
+        data["primary_metric"] = first
+    return data
+
+
+def build_provenance(paths: VibePaths, run_id: str) -> dict[str, Any]:
+    run_dir = paths.runs / run_id
+    patch = run_dir / "patch.diff"
+    env = {"python": platform.python_version(), "platform": platform.platform()}
+    try:
+        freeze = subprocess.run(["python", "-m", "pip", "freeze"], text=True, capture_output=True, check=False, timeout=20)
+        env["pip_freeze_sha256"] = hashlib.sha256(freeze.stdout.encode()).hexdigest()
+    except Exception:
+        env["pip_freeze_sha256"] = ""
+    provenance = {
+        "manifest": str(run_dir / "manifest.yaml"),
+        "manifest_exists": (run_dir / "manifest.yaml").exists(),
+        "launch": str(run_dir / "launch.json"),
+        "launch_exists": bool(read_json(run_dir / "launch.json", {})),
+        "git_diff": str(patch),
+        "git_diff_sha256": hashlib.sha256(patch.read_bytes()).hexdigest() if patch.exists() else "",
+        "env_export": env,
+        "metric_schema": str(paths.leaderboard / "metrics_schema.yaml"),
+        "metric_schema_exists": (paths.leaderboard / "metrics_schema.yaml").exists(),
+        "collected_at": utc_now(),
+    }
+    write_json(run_dir / "provenance.json", provenance)
+    return provenance
+
+
+def provenance_complete(provenance: dict[str, Any]) -> bool:
+    return bool(provenance.get("manifest_exists") and provenance.get("launch_exists") and provenance.get("metric_schema_exists") and provenance.get("git_diff_sha256"))
+
+
+def is_better(paths: VibePaths, candidate: dict[str, Any], previous: dict[str, Any]) -> bool:
+    if not previous:
+        return True
+    schema = read_yaml(paths.leaderboard / "goals.yaml", {})
+    direction = "max"
+    try:
+        primary = schema.get("metrics", {}).get("primary", [{}])[0]
+        direction = primary.get("direction", "max")
+    except Exception:
+        pass
+    cand = float(candidate.get("primary_metric", 0))
+    prev = float(previous.get("primary_metric", 0))
+    return cand <= prev if direction == "min" else cand >= prev
