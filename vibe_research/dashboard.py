@@ -6,6 +6,7 @@ from typing import Any
 
 from .io import read_json, read_jsonl, write_json, write_text
 from .paths import VibePaths
+from .portal import build_portal, write_portal_text
 from .timeline import sync_timeline_files
 
 
@@ -114,9 +115,10 @@ def sync_dashboard(paths: VibePaths) -> None:
     todo = render_todo(paths)
     leaderboard = render_leaderboard(paths)
     write_text(paths.dashboard / "status.md", status)
-    write_text(paths.root / "VIBE_STATUS.md", status)
+    write_portal_text(paths, "VIBE_STATUS.md", status)
     write_text(paths.dashboard / "TODO.md", todo)
-    write_text(paths.root / "VIBE_TODO.md", todo)
-    write_text(paths.root / "VIBE_LEADERBOARD.md", leaderboard)
+    write_portal_text(paths, "VIBE_TODO.md", todo)
+    write_portal_text(paths, "VIBE_LEADERBOARD.md", leaderboard)
     write_json(paths.dashboard / "status.json", {"runs": render_run_table(paths)})
     sync_timeline_files(paths)
+    build_portal(paths)

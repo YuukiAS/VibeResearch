@@ -20,10 +20,11 @@ class VibePaths:
         self.executor = self.vibe / "executor"
         self.research = self.vibe / "research"
         self.dashboard = self.vibe / "dashboard"
+        self.portal = self.vibe / "portal"
+        self.reports = self.vibe / "reports"
         self.prompts = self.vibe / "prompts"
         self.templates = self.executor / "templates"
 
     def require_initialized(self) -> None:
         if not self.vibe.exists():
             raise FileNotFoundError(f"{self.root} is not initialized; run `vibe init --target {self.root}`")
-

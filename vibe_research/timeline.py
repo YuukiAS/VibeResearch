@@ -8,6 +8,7 @@ from typing import Any
 from .io import append_jsonl, read_jsonl, utc_now, write_text
 from .models import TimelineEvent
 from .paths import VibePaths
+from .portal import build_portal, write_portal_text
 
 
 def record_event(
@@ -113,9 +114,10 @@ def render_timeline_svg(paths: VibePaths) -> str:
 def sync_timeline_files(paths: VibePaths) -> None:
     markdown = render_timeline_markdown(paths)
     write_text(paths.dashboard / "TIMELINE.md", markdown)
-    write_text(paths.root / "VIBE_TIMELINE.md", markdown)
+    write_portal_text(paths, "VIBE_TIMELINE.md", markdown)
     write_text(paths.dashboard / "timeline.html", render_timeline_html(paths))
     write_text(paths.dashboard / "timeline.svg", render_timeline_svg(paths))
+    build_portal(paths)
 
 
 def escape(text: Any) -> str:
@@ -126,4 +128,3 @@ def escape(text: Any) -> str:
         .replace(">", "&gt;")
         .replace('"', "&quot;")
     )
-

@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from .dashboard import sync_dashboard
+from .config import write_config_schema
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, slugify, utc_now, write_json, write_text, write_yaml
 from .models import IdeaRecord, ProjectConfig, RunManifest, default_budget, default_state
 from .papers import connect
 from .paths import VibePaths
+from .portal import build_portal, install_agents_snippet, write_agents_files, write_portal_text
 from .timeline import record_event
 
 
@@ -38,11 +40,21 @@ DIRS = [
     "research/wiki/gaps",
     "research/wiki/synthesis",
     "dashboard",
+    "portal",
+    "reports/dev",
     "prompts",
 ]
 
 
-def init_project(target: str | Path = ".", *, project_name: str | None = None, force: bool = False) -> VibePaths:
+def init_project(
+    target: str | Path = ".",
+    *,
+    project_name: str | None = None,
+    force: bool = False,
+    minimal: bool = False,
+    root_portal: str = "copy",
+    install_agents: bool = False,
+) -> VibePaths:
     paths = VibePaths(target)
     ensure_dir(paths.root)
     if paths.vibe.exists() and not force:
@@ -51,8 +63,12 @@ def init_project(target: str | Path = ".", *, project_name: str | None = None, f
         ensure_dir(paths.vibe / rel)
 
     config = ProjectConfig(project_name=project_name or paths.root.name)
-    write_yaml(paths.vibe / "config.yaml", config.model_dump())
-    write_json(paths.vibe / "config.json", config.model_dump())
+    config_data = config.model_dump()
+    config_data.setdefault("portal", {})["root_mode"] = root_portal
+    write_yaml(paths.vibe / "config.yaml", config_data)
+    write_json(paths.vibe / "config.json", config_data)
+    write_yaml(paths.vibe / "config.local.yaml", {"local": {"notes": "local-only overrides; not auto-merged into config.yaml"}})
+    write_config_schema(paths)
 
     state = default_state()
     state["updated_at"] = utc_now()
@@ -93,8 +109,13 @@ def init_project(target: str | Path = ".", *, project_name: str | None = None, f
     write_default_templates(paths)
     write_default_prompts(paths)
     write_run_md(paths)
+    write_agents_files(paths, config_data["project_name"])
     record_event(paths, "initialized", "Initialized VibeResearch control layer", status="ok")
     sync_dashboard(paths)
+    if root_portal != "none":
+        build_portal(paths, mode=root_portal, force=force)
+    if install_agents:
+        install_agents_snippet(paths)
     return paths
 
 
@@ -153,7 +174,7 @@ Append new ideas here. The next `vibe plan-cycle` will read and triage them.
 
 - [ ] idea:
 """
-    write_text(paths.root / "RUN.md", text)
+    write_portal_text(paths, "RUN.md", text)
 
 
 def write_default_templates(paths: VibePaths) -> None:

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-05-29
+
+- Add alignment audit, config schema/local/detect/show/validate/edit commands, and detected environment suggestions.
+- Add `.vibe/portal/` as the source for generated root mirrors, with rebuild support and no-root/minimal init options.
+- Generate `.vibe/AGENTS.md` and `.vibe/AGENTS_SNIPPET.md`, with explicit opt-in root `AGENTS.md` installation.
+
 ## 0.3.0 - 2026-05-29
 
 - Tighten TODO.md alignment with Codex-backed `plan-cycle`/`patch`, resource-plan-driven run generation, verdict gates, scheduler dependency and GPU-budget waits, Slurm partition fallback provenance, trusted metric provenance, PDF markdown extraction, richer wiki/deep-research ingest, and a compliance report.

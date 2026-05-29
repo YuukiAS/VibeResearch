@@ -115,7 +115,80 @@ def read_yaml(path: Path, default: Any) -> Any:
         text = path.read_text().strip()
         if text.startswith("{") or text.startswith("["):
             return json.loads(text)
-        return default
+        try:
+            return parse_simple_yaml(text)
+        except Exception:
+            return default
+
+
+def parse_simple_yaml(text: str) -> Any:
+    """Parse the conservative YAML subset emitted by `dump_simple_yaml`."""
+
+    lines = [(len(raw) - len(raw.lstrip(" ")), raw.lstrip(" ")) for raw in text.splitlines() if raw.strip()]
+    if not lines:
+        return None
+
+    def parse_scalar(raw: str) -> Any:
+        value = raw.strip()
+        if value == "null":
+            return None
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        if value == "[]":
+            return []
+        if value.startswith('"') or value.startswith("[") or value.startswith("{"):
+            return json.loads(value)
+        try:
+            return int(value)
+        except ValueError:
+            pass
+        try:
+            return float(value)
+        except ValueError:
+            return value
+
+    def parse_block(index: int, indent: int) -> tuple[Any, int]:
+        if index >= len(lines):
+            return {}, index
+        is_list = lines[index][0] == indent and lines[index][1].startswith("-")
+        if is_list:
+            items = []
+            while index < len(lines):
+                current_indent, content = lines[index]
+                if current_indent < indent:
+                    break
+                if current_indent != indent or not content.startswith("-"):
+                    break
+                rest = content[1:].strip()
+                index += 1
+                if rest:
+                    items.append(parse_scalar(rest))
+                else:
+                    value, index = parse_block(index, indent + 2)
+                    items.append(value)
+            return items, index
+        data: dict[str, Any] = {}
+        while index < len(lines):
+            current_indent, content = lines[index]
+            if current_indent < indent:
+                break
+            if current_indent != indent or content.startswith("-"):
+                break
+            key, sep, rest = content.partition(":")
+            if not sep:
+                return parse_scalar(content), index + 1
+            index += 1
+            if rest.strip():
+                data[key] = parse_scalar(rest.strip())
+            else:
+                value, index = parse_block(index, indent + 2)
+                data[key] = value
+        return data, index
+
+    parsed, _ = parse_block(0, lines[0][0])
+    return parsed
 
 
 def write_text(path: Path, text: str) -> None:
@@ -150,4 +223,3 @@ def slugify(text: str, max_len: int = 36) -> str:
             prev_dash = True
     value = "".join(slug).strip("-")
     return (value or "item")[:max_len].strip("-") or "item"
-

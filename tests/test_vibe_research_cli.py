@@ -8,8 +8,10 @@ from typer.testing import CliRunner
 from vibe_research.artifacts import validate_artifact
 from vibe_research.codex_adapter import run_codex
 from vibe_research.cli import app
-from vibe_research.io import read_json
+from vibe_research.config import detect_config
+from vibe_research.io import read_json, read_yaml
 from vibe_research.paths import VibePaths
+from vibe_research.portal import GENERATED_NOTICE
 
 
 runner = CliRunner()
@@ -23,6 +25,9 @@ def test_init_creates_required_surface(tmp_path: Path):
     result = invoke("init", "--target", str(tmp_path))
     assert result.exit_code == 0
     assert (tmp_path / ".vibe" / "config.yaml").exists()
+    assert (tmp_path / ".vibe" / "config.local.yaml").exists()
+    assert (tmp_path / ".vibe" / "config.schema.json").exists()
+    assert (tmp_path / ".vibe" / "portal").exists()
     assert (tmp_path / ".vibe" / "dashboard" / "timeline.html").exists()
     assert (tmp_path / ".vibe" / "dashboard" / "timeline.svg").exists()
     assert (tmp_path / "RUN.md").exists()
@@ -30,6 +35,80 @@ def test_init_creates_required_surface(tmp_path: Path):
     assert (tmp_path / "VIBE_TODO.md").exists()
     assert (tmp_path / "VIBE_TIMELINE.md").exists()
     assert (tmp_path / "VIBE_LEADERBOARD.md").exists()
+    assert (tmp_path / "RUN.md").read_text().startswith(GENERATED_NOTICE)
+
+
+def test_config_commands_and_schema_validation(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    result = invoke("config", "validate", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    show = invoke("config", "show", "--target", str(tmp_path))
+    assert show.exit_code == 0
+    assert "0.4.0" in show.output
+    schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
+    assert schema["title"] == "ProjectConfig"
+
+
+def test_config_detect_with_fake_slurm_and_gpu_commands(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    scripts = {
+        "sinfo": "print('gpu_short gpu:a100:2')",
+        "squeue": "print('123 gpu_short job user R 00:01 1 node')",
+        "sacct": "print('123|COMPLETED|00:01:00')",
+        "sbatch": "print('slurm 23.11')",
+        "scancel": "print('slurm 23.11')",
+        "nvidia-smi": "print('NVIDIA A100-SXM4-40GB')",
+    }
+    for name, body in scripts.items():
+        path = fake_bin / name
+        path.write_text(f"#!/usr/bin/env python3\n{body}\n")
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH','')}")
+    detected = detect_config(VibePaths(tmp_path), write=True)
+    assert detected["commands"]["sinfo"]["available"]
+    assert detected["gpu"]["count"] == 1
+    assert (tmp_path / ".vibe" / "config.detected.yaml").exists()
+    written = read_yaml(tmp_path / ".vibe" / "config.detected.yaml", {})
+    assert written["suggested_config"]["execution"]["backend"] == "slurm"
+
+
+def test_default_portal_creation_and_rebuild(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    (tmp_path / "VIBE_STATUS.md").unlink()
+    assert invoke("portal", "build", "--target", str(tmp_path)).exit_code == 0
+    assert (tmp_path / "VIBE_STATUS.md").exists()
+    assert (tmp_path / "VIBE_STATUS.md").read_text().startswith(GENERATED_NOTICE)
+
+
+def test_init_minimal_no_root_portal_creates_only_vibe_root(tmp_path: Path):
+    result = invoke("init", "--minimal", "--no-root-portal", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".vibe"]
+    assert (tmp_path / ".vibe" / "portal" / "RUN.md").exists()
+    assert not (tmp_path / "RUN.md").exists()
+
+
+def test_agents_snippet_generation_and_explicit_install(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert (tmp_path / ".vibe" / "AGENTS.md").exists()
+    assert (tmp_path / ".vibe" / "AGENTS_SNIPPET.md").exists()
+    assert not (tmp_path / "AGENTS.md").exists()
+    second = tmp_path / "with_agents"
+    assert invoke("init", "--target", str(second), "--install-agents-snippet").exit_code == 0
+    assert "VIBERESEARCH_AGENTS_SNIPPET_START" in (second / "AGENTS.md").read_text()
+
+
+def test_audit_current_writes_alignment_report(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    result = invoke("audit", "current", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    report = tmp_path / ".vibe" / "reports" / "dev" / "current_alignment_audit.md"
+    assert report.exists()
+    text = report.read_text()
+    assert "root portal" in text
+    assert "AGENTS snippet" in text
 
 
 def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
@@ -152,6 +231,9 @@ def test_todo_cli_commands_exist():
     help_text = result.output
     for command in [
         "init",
+        "audit",
+        "config",
+        "portal",
         "status",
         "idea",
         "directive",

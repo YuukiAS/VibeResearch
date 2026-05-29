@@ -12,7 +12,13 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.1.0"
+    vibe_version: str = "0.4.0"
+    portal: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "root_mode": "copy",
+            "generated_notice": True,
+        }
+    )
     execution: dict[str, Any] = Field(
         default_factory=lambda: {
             "backend": "local",

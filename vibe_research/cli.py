@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
 import time
 from typing import Optional
 
@@ -11,11 +13,12 @@ from rich.console import Console
 from rich.table import Table
 
 from .artifacts import validate_artifact, validate_hard_rules
+from .audit import current_alignment_audit
 from .automation import auto_cycle as run_auto_cycle
 from .automation import auto_next as run_auto_next
 from .automation import scheduler_explain as render_scheduler_explain
 from .codex_adapter import artifact_path, prompt_packet, run_codex
-from .config import migrate_project
+from .config import detect_config, load_config, migrate_project, validate_config
 from .daemon import daemon_start, daemon_status, daemon_stop
 from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .directions import set_direction_status
@@ -25,6 +28,7 @@ from .manifest import validate_manifest
 from .next_action import compute_next_action
 from .papers import add_paper, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
+from .portal import build_portal
 from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio
 from .research import deep_request, ingest_deep_research, literature_refresh, reflect, reflect_cycle, revise_cycle, revise_plan
 from .scheduler import collect as collect_run
@@ -34,7 +38,13 @@ from .timeline import render_timeline_markdown, sync_timeline_files
 
 app = typer.Typer(help="Repo-specific sustained Vibe Research orchestration.")
 daemon_app = typer.Typer(help="Manage tmux-backed VibeResearch daemon.")
+config_app = typer.Typer(help="Inspect, validate, detect, and edit VibeResearch config.")
+portal_app = typer.Typer(help="Build root portal mirrors from .vibe/portal.")
+audit_app = typer.Typer(help="Generate alignment audit reports.")
 app.add_typer(daemon_app, name="daemon")
+app.add_typer(config_app, name="config")
+app.add_typer(portal_app, name="portal")
+app.add_typer(audit_app, name="audit")
 console = Console()
 
 
@@ -47,11 +57,102 @@ def init(
     target: Path = typer.Option(Path("."), "--target", "-t", help="Target repository to initialize."),
     project_name: Optional[str] = typer.Option(None, "--project-name"),
     force: bool = typer.Option(False, "--force", help="Rewrite generated Vibe files."),
+    auto: bool = typer.Option(False, "--auto", help="Use non-interactive defaults."),
+    minimal: bool = typer.Option(False, "--minimal", help="Initialize only the local control layer."),
+    root_portal: str = typer.Option("copy", "--root-portal", help="Root mirror mode: copy, symlink, or none."),
+    no_root_portal: bool = typer.Option(False, "--no-root-portal", help="Do not create root mirror files."),
+    install_agents_snippet: bool = typer.Option(False, "--install-agents-snippet", help="Append the generated snippet to root AGENTS.md."),
 ) -> None:
     """Initialize `.vibe/` and root progress files in a target repo."""
 
-    p = init_project(target, project_name=project_name, force=force)
+    del auto
+    selected_portal = "none" if no_root_portal else root_portal
+    if selected_portal not in {"copy", "symlink", "none"}:
+        raise typer.BadParameter("--root-portal must be copy, symlink, or none")
+    p = init_project(
+        target,
+        project_name=project_name,
+        force=force,
+        minimal=minimal,
+        root_portal=selected_portal,
+        install_agents=install_agents_snippet,
+    )
     console.print(f"Initialized VibeResearch at [bold]{p.root}[/bold]")
+
+
+@config_app.command("show")
+def config_show(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Print the merged generated, JSON mirror, and local config."""
+
+    p = paths(target)
+    p.require_initialized()
+    console.print_json(data=load_config(p))
+
+
+@config_app.command("validate")
+def config_validate(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Validate config files against the current schema."""
+
+    p = paths(target)
+    p.require_initialized()
+    issues = validate_config(p)
+    if issues:
+        for issue in issues:
+            console.print(f"[error] {issue}")
+        raise typer.Exit(1)
+    console.print("Config OK")
+
+
+@config_app.command("detect")
+def config_detect(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Probe local environment and write .vibe/config.detected.yaml."""
+
+    p = paths(target)
+    p.require_initialized()
+    detected = detect_config(p, write=True)
+    console.print(f"Wrote {p.vibe / 'config.detected.yaml'}")
+    console.print_json(data=detected.get("suggested_config", {}))
+
+
+@config_app.command("edit")
+def config_edit(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    local: bool = typer.Option(False, "--local", help="Edit config.local.yaml instead of config.yaml."),
+) -> None:
+    """Open the config file in $EDITOR, or print its path when no editor is set."""
+
+    p = paths(target)
+    p.require_initialized()
+    path = p.vibe / ("config.local.yaml" if local else "config.yaml")
+    if not path.exists():
+        path.write_text("{}\n")
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if not editor:
+        console.print(str(path))
+        return
+    raise typer.Exit(subprocess.call([editor, str(path)]))
+
+
+@portal_app.command("build")
+def portal_build(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    mode: Optional[str] = typer.Option(None, "--mode", help="Override configured mode: copy, symlink, or none."),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing managed mirrors."),
+) -> None:
+    """Rebuild root mirror files from .vibe/portal."""
+
+    p = paths(target)
+    p.require_initialized()
+    written = build_portal(p, mode=mode, force=force)
+    console.print(f"Built {len(written)} root portal mirror(s)")
+
+
+@audit_app.command("current")
+def audit_current(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Write the current alignment audit report."""
+
+    report = current_alignment_audit(paths(target))
+    console.print(f"Wrote {report}")
 
 
 @app.command()
