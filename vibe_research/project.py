@@ -8,6 +8,7 @@ from typing import Any
 from .dashboard import sync_dashboard
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, slugify, utc_now, write_json, write_text, write_yaml
 from .models import IdeaRecord, ProjectConfig, RunManifest, default_budget, default_state
+from .papers import connect
 from .paths import VibePaths
 from .timeline import record_event
 
@@ -84,6 +85,7 @@ def init_project(target: str | Path = ".", *, project_name: str | None = None, f
     touch_jsonl(paths.scheduler / "completed_jobs.jsonl")
 
     write_text(paths.research / "sources.jsonl", "")
+    connect(paths).close()
     write_text(paths.research / "wiki" / "index.md", "# Research Wiki\n\n")
     write_text(paths.research / "wiki" / "log.md", "# Research Wiki Log\n\n")
     write_text(paths.research / "deep_requests" / "registry.jsonl", "")
@@ -363,4 +365,3 @@ def proposal_template(manifest: RunManifest) -> str:
 ## Minimum execution
 Fill the project-specific command in `manifest.yaml`, then run `vibe dryrun {manifest.run_id}`.
 """
-

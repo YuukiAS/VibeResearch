@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from .dashboard import sync_dashboard
+import re
+
 from .io import append_jsonl, read_json, read_jsonl, utc_now, write_json, write_text
+from .papers import add_paper
 from .paths import VibePaths
 from .timeline import record_event
 
 
-def reflect(paths: VibePaths, run_id: str) -> None:
+def reflect(paths: VibePaths, run_id: str, *, keep_existing: bool = False) -> None:
     state = read_json(paths.state / "state.json", {})
     run = state.get("runs", {}).get(run_id)
     if not run:
@@ -25,7 +28,9 @@ Needs reviewer interpretation.
 ## Failure or success analysis
 This scaffold records the result and requires a revised plan before NEXT.
 """
-    write_text(paths.runs / run_id / "reflect.md", text)
+    reflect_path = paths.runs / run_id / "reflect.md"
+    if not keep_existing or not reflect_path.exists() or not reflect_path.read_text().strip():
+        write_text(reflect_path, text)
     run["status"] = "reflected"
     state["runs"][run_id] = run
     state["next_action"] = f"vibe revise-plan {run_id}"
@@ -35,7 +40,7 @@ This scaffold records the result and requires a revised plan before NEXT.
     sync_dashboard(paths)
 
 
-def revise_plan(paths: VibePaths, run_id: str, decision: str = "collect_more_metrics") -> None:
+def revise_plan(paths: VibePaths, run_id: str, decision: str = "collect_more_metrics", *, keep_existing: bool = False) -> None:
     state = read_json(paths.state / "state.json", {})
     run = state.get("runs", {}).get(run_id)
     if not run:
@@ -72,7 +77,9 @@ To be decided by `vibe revise-cycle {run.get('cycle_id', '')}`.
 ## Stop condition
 Stop if repeated runs fail guardrails or provenance.
 """
-    write_text(paths.runs / run_id / "revised_plan.md", text)
+    revised_path = paths.runs / run_id / "revised_plan.md"
+    if not keep_existing or not revised_path.exists() or not revised_path.read_text().strip():
+        write_text(revised_path, text)
     run["status"] = "revised"
     state["runs"][run_id] = run
     state["next_action"] = f"vibe reflect-cycle {run.get('cycle_id', '')}"
@@ -82,11 +89,13 @@ Stop if repeated runs fail guardrails or provenance.
     sync_dashboard(paths)
 
 
-def reflect_cycle(paths: VibePaths, cycle_id: str) -> None:
+def reflect_cycle(paths: VibePaths, cycle_id: str, *, keep_existing: bool = False) -> None:
     state = read_json(paths.state / "state.json", {})
     runs = [run_id for run_id, run in state.get("runs", {}).items() if run.get("cycle_id") == cycle_id]
     body = "\n".join(f"- {run_id}: {state['runs'][run_id].get('status')}" for run_id in runs) or "- none"
-    write_text(paths.cycles / cycle_id / "cycle_reflect.md", f"# Cycle Reflect for {cycle_id}\n\n## Run comparison\n{body}\n")
+    reflect_path = paths.cycles / cycle_id / "cycle_reflect.md"
+    if not keep_existing or not reflect_path.exists() or not reflect_path.read_text().strip():
+        write_text(reflect_path, f"# Cycle Reflect for {cycle_id}\n\n## Run comparison\n{body}\n")
     state.setdefault("cycles", {}).setdefault(cycle_id, {})["status"] = "reflected"
     state["next_action"] = f"vibe revise-cycle {cycle_id}"
     state["updated_at"] = utc_now()
@@ -95,7 +104,7 @@ def reflect_cycle(paths: VibePaths, cycle_id: str) -> None:
     sync_dashboard(paths)
 
 
-def revise_cycle(paths: VibePaths, cycle_id: str, mode: str | None = None) -> None:
+def revise_cycle(paths: VibePaths, cycle_id: str, mode: str | None = None, *, keep_existing: bool = False) -> None:
     state = read_json(paths.state / "state.json", {})
     next_mode = mode or state.get("portfolio_mode", "exploration")
     text = f"""# Cycle Revised Plan for {cycle_id}
@@ -124,7 +133,9 @@ none
 ## Stop condition
 Stop or shrink directions after repeated provenance or guardrail failures.
 """
-    write_text(paths.cycles / cycle_id / "cycle_revised_plan.md", text)
+    revised_path = paths.cycles / cycle_id / "cycle_revised_plan.md"
+    if not keep_existing or not revised_path.exists() or not revised_path.read_text().strip():
+        write_text(revised_path, text)
     state.setdefault("cycles", {}).setdefault(cycle_id, {})["status"] = "revised"
     state["portfolio_mode"] = next_mode
     state["next_action"] = "vibe plan-cycle"
@@ -212,8 +223,41 @@ def ingest_deep_research(paths: VibePaths, request_id: str) -> None:
     report = result_path.read_text()
     synthesis = paths.research / "wiki" / "synthesis" / f"{request_id}.md"
     write_text(synthesis, f"# Deep Research Synthesis: {request_id}\n\n{report[:12000]}\n")
+    paper_ids = []
+    for url in sorted(set(re.findall(r"https?://(?:arxiv\.org/abs|doi\.org|www\.semanticscholar\.org)[^\s)\]]+", report))):
+        paper_id = add_paper(paths, {"title": url.rsplit("/", 1)[-1], "source_url": url, "status": "from_deep_research", "related_deep_request_ids": [request_id]})
+        paper_ids.append(paper_id)
+    ideas = []
+    for line in report.splitlines():
+        lowered = line.lower()
+        if any(token in lowered for token in ["recommend", "next experiment", "try ", "建议", "下一步"]):
+            text = line.strip("-* ")
+            if text:
+                ideas.append(text[:300])
+                append_jsonl(
+                    paths.inbox / "triage.jsonl",
+                    {
+                        "idea_id": f"{request_id}_idea{len(ideas):03d}",
+                        "created_at": utc_now(),
+                        "source": "deep_research",
+                        "raw_text": text[:300],
+                        "status": "new",
+                        "linked_deep_request_id": request_id,
+                        "triage_decision": "experiment_candidate",
+                    },
+                )
     with (paths.research / "wiki" / "log.md").open("a") as handle:
         handle.write(f"- {utc_now()} ingested {request_id} into {synthesis}\n")
-    record_event(paths, "deep_research_ingested", f"Ingested {request_id}", status="ingested", payload={"synthesis": str(synthesis)})
+    registry_path = paths.research / "deep_requests" / "registry.jsonl"
+    updated = []
+    for row in read_jsonl(registry_path):
+        if row.get("request_id") == request_id:
+            row["status"] = "ingested"
+            row["result_path"] = str(result_path)
+            row["ingested_at"] = utc_now()
+            row["wiki_updates"] = [str(synthesis)]
+            row["decision_impact"] = "updated_wiki_and_inbox"
+        updated.append(row)
+    write_text(registry_path, "".join(__import__("json").dumps(row, sort_keys=True) + "\n" for row in updated))
+    record_event(paths, "deep_research_ingested", f"Ingested {request_id}", status="ingested", payload={"synthesis": str(synthesis), "papers": paper_ids, "ideas": ideas})
     sync_dashboard(paths)
-

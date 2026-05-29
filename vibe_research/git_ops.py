@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from .io import append_jsonl, read_json, utc_now, write_json
+from .io import append_jsonl, read_json, utc_now, write_json, write_text
 from .paths import VibePaths
 from .timeline import record_event
 
@@ -64,6 +64,35 @@ def merge_run(paths: VibePaths, run_id: str, *, override: bool = False) -> None:
     record_event(paths, "merged", f"Merged {run_id}", run_id=run_id, status="merged")
 
 
+def merge_review(paths: VibePaths, run_id: str) -> str:
+    state = read_json(paths.state / "state.json", {})
+    run = state.get("runs", {}).get(run_id)
+    if not run:
+        raise ValueError(f"Unknown run: {run_id}")
+    required = [
+        "proposal.md",
+        "review.md",
+        "manifest.json",
+        "patch.diff",
+        "dryrun.json",
+        "launch.json",
+        "metrics.json",
+        "reflect.md",
+        "revised_plan.md",
+    ]
+    missing = [name for name in required if not (paths.runs / run_id / name).exists()]
+    metrics = read_json(paths.runs / run_id / "metrics.json", {})
+    verdict = "MERGE_OK" if not missing and metrics.get("trusted") and metrics.get("provenance") else "MERGE_BLOCKED"
+    text = f"# Merge Review for {run_id}\n\nVerdict: {verdict}\n\nMissing: {', '.join(missing) or 'none'}\nTrusted metrics: {bool(metrics.get('trusted'))}\nProvenance: {bool(metrics.get('provenance'))}\n"
+    write_text(paths.runs / run_id / "merge_review.md", text)
+    run["merge_review"] = verdict
+    state["runs"][run_id] = run
+    state["updated_at"] = utc_now()
+    write_json(paths.state / "state.json", state)
+    record_event(paths, "merge_review_done", verdict, run_id=run_id, status=verdict)
+    return verdict
+
+
 def abandon_run(paths: VibePaths, run_id: str, reason: str = "") -> None:
     state = read_json(paths.state / "state.json", {})
     run = state.get("runs", {}).get(run_id)
@@ -75,4 +104,3 @@ def abandon_run(paths: VibePaths, run_id: str, reason: str = "") -> None:
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
     record_event(paths, "abandoned", reason or f"Abandoned {run_id}", run_id=run_id, status="abandoned")
-

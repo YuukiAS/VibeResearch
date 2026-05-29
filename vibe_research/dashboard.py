@@ -39,6 +39,14 @@ def render_status(paths: VibePaths) -> str:
     lines.append(f"Queued: {len(queue.get('queued', []))}")
     lines.append(f"Active: {len(active.get('active', []))}")
     lines.append(f"Completed jobs: {len(completed)}")
+    if queue.get("queued"):
+        lines.extend(["", "| Queued Run | Status | Priority |", "|---|---|---:|"])
+        for item in queue["queued"]:
+            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('status', '')}` | {item.get('priority', '')} |")
+    if active.get("active"):
+        lines.extend(["", "| Active Run | Backend | Job | Status |", "|---|---|---|---|"])
+        for item in active["active"]:
+            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('backend', '')}` | `{item.get('job_id', '')}` | `{item.get('status', '')}` |")
     return "\n".join(lines) + "\n"
 
 
@@ -68,6 +76,7 @@ def render_todo(paths: VibePaths) -> str:
 def render_leaderboard(paths: VibePaths) -> str:
     history = read_jsonl(paths.leaderboard / "history.jsonl")
     best = read_json(paths.leaderboard / "best.json", {})
+    best_by_direction = read_json(paths.leaderboard / "best_by_direction.json", {})
     lines = ["# Vibe Leaderboard", ""]
     if best:
         lines.append(f"Best trusted: `{best.get('run_id', 'none')}` metric={best.get('primary_metric', 'n/a')}")
@@ -79,6 +88,10 @@ def render_leaderboard(paths: VibePaths) -> str:
             f"| `{row.get('cycle_id', '')}` | `{row.get('run_id', '')}` | `{row.get('direction_id', '')}` | "
             f"{row.get('primary_metric', '')} | {row.get('trusted', False)} | `{row.get('status', '')}` |"
         )
+    if best_by_direction:
+        lines.extend(["", "## Best By Direction", "", "| Direction | Run | Metric |", "|---|---|---:|"])
+        for direction, row in sorted(best_by_direction.items()):
+            lines.append(f"| `{direction}` | `{row.get('run_id', '')}` | {row.get('primary_metric', '')} |")
     return "\n".join(lines) + "\n"
 
 
@@ -106,4 +119,3 @@ def sync_dashboard(paths: VibePaths) -> None:
     write_text(paths.root / "VIBE_LEADERBOARD.md", leaderboard)
     write_json(paths.dashboard / "status.json", {"runs": render_run_table(paths)})
     sync_timeline_files(paths)
-

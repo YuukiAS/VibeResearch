@@ -13,6 +13,28 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
     vibe_version: str = "0.1.0"
+    execution: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "backend": "local",
+            "local": {
+                "launcher": "auto",
+                "tmux_session_prefix": "vibe",
+            },
+            "slurm": {
+                "enabled": True,
+                "default_partition": "gpu_short",
+                "fallback_partitions": ["gpu", "a100", "general_gpu"],
+                "account": "",
+                "qos": "",
+                "partitions": [
+                    {"name": "gpu_short", "priority": 100, "max_time": "08:00:00", "gpu": "generic"},
+                    {"name": "gpu", "priority": 80, "max_time": "24:00:00", "gpu": "generic"},
+                    {"name": "a100", "priority": 70, "max_time": "24:00:00", "gpu": "a100"},
+                    {"name": "general_gpu", "priority": 50, "max_time": "24:00:00", "gpu": "generic"},
+                ],
+            },
+        }
+    )
     portfolio: dict[str, Any] = Field(
         default_factory=lambda: {
             "mode": "exploration",
@@ -49,6 +71,32 @@ class ProjectConfig(BaseModel):
             "primary_direction": "max",
             "require_metric_provenance": True,
             "allow_leaderboard_feedback": False,
+        }
+    )
+    monitor: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "loop_interval_seconds": 300,
+            "auto_next": False,
+            "log_tail_lines": 80,
+        }
+    )
+    research: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "offline": True,
+            "max_search_results": 10,
+            "require_pdf_checksum": True,
+        }
+    )
+    codex: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "provider": "cli",
+            "model": "",
+            "approval_policy": "never",
+            "enable_search_for_literature": True,
+            "sandbox": {
+                "read_roles": "read-only",
+                "patch_role": "workspace-write",
+            },
         }
     )
 
@@ -124,6 +172,7 @@ def default_state() -> dict[str, Any]:
         "updated_at": "",
         "next_action": "plan-cycle",
         "blocked_reason": "",
+        "schema_version": 2,
     }
 
 
@@ -136,4 +185,3 @@ def default_budget() -> dict[str, Any]:
         "max_failed_runs_before_pause": 3,
         "queue_policy": "priority_then_resource_fit",
     }
-

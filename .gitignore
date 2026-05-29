@@ -5,7 +5,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 .venv-vibe/
+env_vibe_research/
 build/
 dist/
 *.egg-info/
-
