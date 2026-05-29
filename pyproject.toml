@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vibe-research"
-version = "0.1.0"
+version = "0.3.0"
 description = "Repo-specific sustained research orchestration framework"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,4 +44,3 @@ vibe = "vibe_research.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["vibe_research*"]
-
