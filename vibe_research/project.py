@@ -18,6 +18,7 @@ from .papers import connect
 from .paths import VibePaths
 from .portal import build_portal, install_agents_snippet, write_agents_files, write_portal_text
 from .promotion import validate_resource_plan
+from .research_manager import research_init
 from .timeline import record_event
 
 
@@ -34,6 +35,8 @@ DIRS = [
     "scheduler",
     "executor/templates",
     "research/deep_requests",
+    "policies",
+    "memos",
     "research/raw/papers_pdf",
     "research/raw/papers_md",
     "research/raw/deep_reports",
@@ -154,6 +157,13 @@ def init_project(
     write_run_md(paths)
     write_agents_files(paths, config_data["project_name"])
     bootstrap_adapter_on_init(paths, minimal=minimal)
+    research_init(
+        paths,
+        goal=project_brief["goal"],
+        background=project_brief["background"],
+        memo_language=config_data.get("research", {}).get("memo_language", "zh-CN"),
+        autonomy_level=config_data.get("research", {}).get("autonomy_level", "analysis_only"),
+    )
     record_event(paths, "initialized", "Initialized VibeResearch control layer", status="ok")
     sync_dashboard(paths)
     if root_portal != "none":
@@ -577,6 +587,7 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
                         "evaluation": spec.get("evaluation", {}),
                         "success_criteria": spec.get("success_criteria", {}),
                         "adapter_metadata": spec.get("adapter_metadata", {}),
+                        "research_metadata": spec.get("research_metadata", resource_plan.get("research_metadata", {})),
                     }
                 )
     if not specs:
@@ -612,6 +623,7 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
             evaluation=spec["evaluation"],
             success_criteria=spec["success_criteria"],
             adapter_metadata=spec["adapter_metadata"],
+            research_metadata=spec["research_metadata"],
         )
         run_dir = paths.runs / run_id
         ensure_dir(run_dir / "artifacts")

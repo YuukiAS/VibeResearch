@@ -62,6 +62,11 @@ class ResearchDecision(BaseModel):
     resource_intent: dict[str, Any] = Field(default_factory=dict)
     metrics_requirements: dict[str, Any] = Field(default_factory=dict)
     baseline_comparison_target: str = ""
+    hypothesis_id: str = ""
+    experiment_id: str = ""
+    policy_eval_id: str = ""
+    budget_reservation_id: str = ""
+    stage: str = ""
     blocking_questions: list[str] = Field(default_factory=list)
     confidence: Confidence = "medium"
     provenance: dict[str, Any] = Field(default_factory=dict)
@@ -111,6 +116,11 @@ def make_decision(
     resource_intent: dict[str, Any] | None = None,
     metrics_requirements: dict[str, Any] | None = None,
     baseline_comparison_target: str = "",
+    hypothesis_id: str = "",
+    experiment_id: str = "",
+    policy_eval_id: str = "",
+    budget_reservation_id: str = "",
+    stage: str = "",
     blocking_questions: list[str] | None = None,
     confidence: Confidence = "medium",
     provenance: dict[str, Any] | None = None,
@@ -127,6 +137,11 @@ def make_decision(
         resource_intent=resource_intent or {},
         metrics_requirements=metrics_requirements or {},
         baseline_comparison_target=baseline_comparison_target,
+        hypothesis_id=hypothesis_id,
+        experiment_id=experiment_id,
+        policy_eval_id=policy_eval_id,
+        budget_reservation_id=budget_reservation_id,
+        stage=stage,
         blocking_questions=blocking_questions or [],
         confidence=confidence,
         provenance=provenance or {},

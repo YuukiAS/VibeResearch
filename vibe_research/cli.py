@@ -40,7 +40,7 @@ from .git_ops import abandon_run, create_branch, git_available, git_current_bran
 from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
-from .io import read_json
+from .io import read_json, read_yaml
 from .manifest import validate_manifest
 from .meeting import export_meeting_report
 from .next_action import compute_next_action
@@ -52,6 +52,27 @@ from .promotion import compile_decision as compile_cycle_decision
 from .promotion import validate_resource_plan
 from .research import deep_request, ingest_deep_research, literature_refresh, reflect, reflect_cycle, revise_cycle, revise_plan
 from .reports import generate_alignment_after_changes, generate_dogfood_reports, write_portal_docs
+from .research_manager import (
+    add_evidence,
+    audit_registry,
+    budget_status as research_budget_status,
+    build_memory_pack,
+    change_hypothesis_status,
+    create_experiment as research_create_experiment,
+    create_hypothesis,
+    export_research_dashboard,
+    link_run_to_experiment,
+    load_experiments,
+    load_hypotheses,
+    policy_lint,
+    portfolio_audit as research_portfolio_audit,
+    portfolio_plan as research_portfolio_plan,
+    portfolio_schedule as research_portfolio_schedule,
+    reconcile_budget,
+    render_daily_memo,
+    reserve_budget,
+    research_init,
+)
 from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
 from .scheduler import queue_run, review_cycle, review_run, run_dryrun, submit_queue
@@ -67,6 +88,14 @@ dashboard_app = typer.Typer(help="Build and serve the read-only static dashboard
 decision_app = typer.Typer(help="Inspect and write structured research decisions.")
 adapter_app = typer.Typer(help="Manage adapter onboarding, readiness, and capability activation.")
 script_app = typer.Typer(help="Bootstrap downstream execution wrapper scripts.")
+research_app = typer.Typer(help="Initialize and audit bounded autonomous research state.")
+hypothesis_app = typer.Typer(help="Manage hypothesis registry records.")
+experiment_app = typer.Typer(help="Manage experiment registry and evidence links.")
+memory_app = typer.Typer(help="Build multi-cycle research memory packs.")
+portfolio_app = typer.Typer(help="Plan, schedule, and audit bounded experiment portfolios.")
+policy_app = typer.Typer(help="Inspect and lint research policies.")
+budget_app = typer.Typer(help="Reserve, reconcile, and inspect research budget.")
+memo_app = typer.Typer(help="Generate daily research memos.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -76,6 +105,14 @@ app.add_typer(dashboard_app, name="dashboard")
 app.add_typer(decision_app, name="decision")
 app.add_typer(adapter_app, name="adapter")
 app.add_typer(script_app, name="script")
+app.add_typer(research_app, name="research")
+app.add_typer(hypothesis_app, name="hypothesis")
+app.add_typer(experiment_app, name="experiment")
+app.add_typer(memory_app, name="memory")
+app.add_typer(portfolio_app, name="portfolio")
+app.add_typer(policy_app, name="policy")
+app.add_typer(budget_app, name="budget")
+app.add_typer(memo_app, name="memo")
 console = Console()
 
 
@@ -244,6 +281,308 @@ def script_bootstrap_cmd(
     console.print(str(path))
 
 
+@research_app.command("init")
+def research_init_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    goal: str = typer.Option("", "--goal"),
+    background: str = typer.Option("", "--background"),
+    memo_language: str = typer.Option("zh-CN", "--memo-language"),
+    timezone: str = typer.Option("local", "--timezone"),
+    autonomy_level: str = typer.Option("analysis_only", "--autonomy-level"),
+    force: bool = typer.Option(False, "--force", help="Rewrite generated policy defaults and record policy history."),
+) -> None:
+    """Initialize research registry, policy files, blocker questions, and memo config."""
+
+    p = paths(target)
+    result = research_init(p, goal=goal, background=background, memo_language=memo_language, timezone=timezone, autonomy_level=autonomy_level, force=force)
+    sync_dashboard(p)
+    console.print_json(data=result)
+
+
+@research_app.command("audit")
+def research_audit_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Audit research registry integrity and duplicate-risk state."""
+
+    result = audit_registry(paths(target))
+    console.print_json(data=result)
+    if not result.get("ok"):
+        raise typer.Exit(1)
+
+
+@hypothesis_app.command("create")
+def hypothesis_create_cmd(
+    title: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    rationale: str = typer.Option("", "--rationale"),
+    stage: str = typer.Option("idea", "--stage"),
+    target_metric: list[str] = typer.Option([], "--target-metric"),
+) -> None:
+    """Create a hypothesis registry record."""
+
+    row = create_hypothesis(paths(target), title, rationale=rationale, stage=stage, target_metrics=target_metric)
+    sync_dashboard(paths(target))
+    console.print_json(data=row)
+
+
+@hypothesis_app.command("list")
+def hypothesis_list_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), status: Optional[str] = typer.Option(None, "--status")) -> None:
+    """List hypothesis registry records."""
+
+    table = Table(title="Hypotheses")
+    for col in ["Hypothesis", "Status", "Stage", "Title", "Next change"]:
+        table.add_column(col)
+    for row in load_hypotheses(paths(target)).values():
+        if status and row.get("status") != status:
+            continue
+        table.add_row(row.get("hypothesis_id", ""), row.get("status", ""), row.get("current_stage", row.get("stage", "")), row.get("title", ""), row.get("next_testable_change", ""))
+    console.print(table)
+
+
+@hypothesis_app.command("show")
+def hypothesis_show_cmd(hypothesis_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Print one hypothesis registry record."""
+
+    row = load_hypotheses(paths(target)).get(hypothesis_id)
+    if not row:
+        raise typer.BadParameter(f"Unknown hypothesis: {hypothesis_id}")
+    console.print_json(data=row)
+
+
+@hypothesis_app.command("update")
+def hypothesis_update_cmd(
+    hypothesis_id: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    status: Optional[str] = typer.Option(None, "--status"),
+    stage: Optional[str] = typer.Option(None, "--stage"),
+    next_testable_change: Optional[str] = typer.Option(None, "--next-testable-change"),
+    failure_analysis: Optional[str] = typer.Option(None, "--failure-analysis"),
+) -> None:
+    """Update mutable hypothesis fields."""
+
+    from .research_manager import update_hypothesis
+
+    updates = {
+        "status": status,
+        "stage": stage,
+        "current_stage": stage,
+        "next_testable_change": next_testable_change,
+        "failure_analysis": {"summary": failure_analysis} if failure_analysis else None,
+    }
+    row = update_hypothesis(paths(target), hypothesis_id, updates)
+    sync_dashboard(paths(target))
+    console.print_json(data=row)
+
+
+@hypothesis_app.command("stop")
+def hypothesis_stop_cmd(
+    hypothesis_id: str,
+    reason: str = typer.Option(..., "--reason"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    user_decision: bool = typer.Option(False, "--user-decision"),
+) -> None:
+    """Stop a hypothesis when trusted negative evidence or user decision exists."""
+
+    try:
+        row = change_hypothesis_status(paths(target), hypothesis_id, "stop", reason=reason, user_decision=user_decision)
+    except RuntimeError as exc:
+        console.print(f"[error] {exc}")
+        raise typer.Exit(1) from exc
+    sync_dashboard(paths(target))
+    console.print_json(data=row)
+
+
+@hypothesis_app.command("promote")
+def hypothesis_promote_cmd(hypothesis_id: str, reason: str = typer.Option(..., "--reason"), target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Promote a hypothesis only with trusted schema-valid evidence and no protected regression."""
+
+    try:
+        row = change_hypothesis_status(paths(target), hypothesis_id, "promote", reason=reason)
+    except RuntimeError as exc:
+        console.print(f"[error] {exc}")
+        raise typer.Exit(1) from exc
+    sync_dashboard(paths(target))
+    console.print_json(data=row)
+
+
+@hypothesis_app.command("downscope")
+def hypothesis_downscope_cmd(
+    hypothesis_id: str,
+    reason: str = typer.Option(..., "--reason"),
+    next_testable_change: str = typer.Option("", "--next-testable-change"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Downscope a hypothesis while preserving its evidence history."""
+
+    row = change_hypothesis_status(paths(target), hypothesis_id, "downscope", reason=reason, remaining_upside={"next_testable_change": next_testable_change})
+    sync_dashboard(paths(target))
+    console.print_json(data=row)
+
+
+@experiment_app.command("create")
+def experiment_create_cmd(
+    hypothesis_id: str,
+    design_summary: str = typer.Option(..., "--design"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    stage: str = typer.Option("smoke", "--stage"),
+    capability_id: str = typer.Option("", "--capability"),
+    baseline_target: str = typer.Option("", "--baseline"),
+) -> None:
+    """Create an experiment linked to a hypothesis."""
+
+    row = research_create_experiment(paths(target), hypothesis_id, design_summary, stage=stage, capability_id=capability_id, baseline_target=baseline_target)
+    sync_dashboard(paths(target))
+    console.print_json(data=row)
+
+
+@experiment_app.command("link-run")
+def experiment_link_run_cmd(experiment_id: str, run_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Link an engineering run to a research experiment."""
+
+    row = link_run_to_experiment(paths(target), experiment_id, run_id)
+    sync_dashboard(paths(target))
+    console.print_json(data=row)
+
+
+@experiment_app.command("analyze")
+def experiment_analyze_cmd(
+    experiment_id: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    run_id: str = typer.Option("", "--run-id"),
+    trusted: bool = typer.Option(False, "--trusted"),
+    schema_valid: bool = typer.Option(False, "--schema-valid"),
+    summary: str = typer.Option("", "--summary"),
+    metrics_file: str = typer.Option("", "--metrics-file"),
+    primary_delta: float = typer.Option(0.0, "--primary-delta"),
+    failure_kind: str = typer.Option("none", "--failure-kind"),
+    protected_regression: bool = typer.Option(False, "--protected-regression"),
+) -> None:
+    """Record trusted or untrusted evidence and structured failure analysis."""
+
+    regressions = [{"metric": "protected", "delta": "regressed"}] if protected_regression else []
+    row = add_evidence(paths(target), experiment_id, run_id=run_id, trusted=trusted, schema_valid=schema_valid, summary=summary, metrics_file=metrics_file, metric_deltas={"primary": primary_delta}, protected_metric_regressions=regressions, failure_kind=failure_kind)
+    sync_dashboard(paths(target))
+    console.print_json(data=row)
+
+
+@experiment_app.command("show")
+def experiment_show_cmd(experiment_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Print one experiment record."""
+
+    row = load_experiments(paths(target)).get(experiment_id)
+    if not row:
+        raise typer.BadParameter(f"Unknown experiment: {experiment_id}")
+    console.print_json(data=row)
+
+
+@memory_app.command("build")
+def memory_build_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Build a multi-cycle memory pack from registry and policy state."""
+
+    pack = build_memory_pack(paths(target))
+    console.print_json(data={"path": str(paths(target).research / "memory_pack.json"), "active_hypotheses": len(pack["active_hypotheses"]), "duplicate_risk_warnings": len(pack["duplicate_risk_warnings"])})
+
+
+@portfolio_app.command("plan")
+def portfolio_plan_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), candidate_file: Optional[Path] = typer.Option(None, "--candidate-file")) -> None:
+    """Evaluate agent-proposed candidate experiments under capability, policy, and budget constraints."""
+
+    candidates = read_json(candidate_file, []) if candidate_file else None
+    result = research_portfolio_plan(paths(target), candidates=candidates)
+    console.print_json(data=result)
+
+
+@portfolio_app.command("schedule")
+def portfolio_schedule_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Reserve budget and create experiment records for selected portfolio candidates."""
+
+    result = research_portfolio_schedule(paths(target))
+    sync_dashboard(paths(target))
+    console.print_json(data=result)
+
+
+@portfolio_app.command("audit")
+def portfolio_audit_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Audit portfolio selections against current capabilities and duplicate risks."""
+
+    result = research_portfolio_audit(paths(target))
+    console.print_json(data=result)
+    if not result.get("ok"):
+        raise typer.Exit(1)
+
+
+@policy_app.command("lint")
+def policy_lint_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Lint budget, stage-gate, and autonomy policies."""
+
+    result = policy_lint(paths(target))
+    console.print_json(data=result)
+    if not result.get("ok"):
+        raise typer.Exit(1)
+
+
+@policy_app.command("show")
+def policy_show_cmd(policy: str = typer.Argument("all"), target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Print one policy or all research policies."""
+
+    p = paths(target)
+    data = {
+        "budget": read_yaml(p.vibe / "policies" / "budget.yaml", {}),
+        "stage_gates": read_yaml(p.vibe / "policies" / "stage_gates.yaml", {}),
+        "autonomy": read_yaml(p.vibe / "policies" / "autonomy.yaml", {}),
+        "memo": read_yaml(p.research / "memo_config.yaml", {}),
+    }
+    console.print_json(data=data if policy == "all" else data.get(policy, {}))
+
+
+@budget_app.command("status")
+def budget_status_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Show budget reservations, spend, and remaining caps."""
+
+    console.print_json(data=research_budget_status(paths(target)))
+
+
+@budget_app.command("reserve")
+def budget_reserve_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    hypothesis_id: str = typer.Option("", "--hypothesis-id"),
+    experiment_id: str = typer.Option("", "--experiment-id"),
+    decision_id: str = typer.Option("", "--decision-id"),
+    gpu_hours: Optional[float] = typer.Option(None, "--gpu-hours"),
+    confirmed: bool = typer.Option(False, "--confirmed"),
+) -> None:
+    """Reserve budget before queueing or scheduling a research action."""
+
+    units = {"gpu_hours": gpu_hours} if gpu_hours is not None else {}
+    row = reserve_budget(paths(target), decision_id=decision_id, experiment_id=experiment_id, hypothesis_id=hypothesis_id, resource_units=units, confirmed=confirmed)
+    console.print_json(data=row)
+    if row.get("status") == "blocked":
+        raise typer.Exit(1)
+
+
+@budget_app.command("reconcile")
+def budget_reconcile_cmd(budget_event_id: str, target: Path = typer.Option(Path("."), "--target", "-t"), gpu_hours: float = typer.Option(0.0, "--gpu-hours")) -> None:
+    """Reconcile actual resource usage after completion."""
+
+    console.print_json(data=reconcile_budget(paths(target), budget_event_id, {"gpu_hours": gpu_hours}))
+
+
+@memo_app.command("daily")
+def memo_daily_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), date: Optional[str] = typer.Option(None, "--date"), language: Optional[str] = typer.Option(None, "--language")) -> None:
+    """Generate a daily research memo in zh-CN or English."""
+
+    result = render_daily_memo(paths(target), date=date, language=language)
+    sync_dashboard(paths(target))
+    console.print_json(data={"path": result["path"], "json_path": result["json_path"]})
+
+
+@dashboard_app.command("export-research")
+def dashboard_export_research_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Export research registry, graph, portfolio, and budget JSON for future visualization."""
+
+    result = export_research_dashboard(paths(target))
+    console.print_json(data=result)
+
+
 @app.command("validate-decision")
 def validate_decision_cmd(target_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
     """Validate a structured run or cycle decision JSON file."""
@@ -284,6 +623,11 @@ def decision_write(
     rationale: str = typer.Option("", "--rationale"),
     direction: str = typer.Option("", "--direction"),
     baseline: str = typer.Option("", "--baseline"),
+    hypothesis_id: str = typer.Option("", "--hypothesis-id"),
+    experiment_id: str = typer.Option("", "--experiment-id"),
+    policy_eval_id: str = typer.Option("", "--policy-eval-id"),
+    budget_reservation_id: str = typer.Option("", "--budget-reservation-id"),
+    stage: str = typer.Option("", "--stage"),
     target: Path = typer.Option(Path("."), "--target", "-t"),
 ) -> None:
     """Write a structured non-block decision for adapter compilation."""
@@ -296,6 +640,11 @@ def decision_write(
         selected_direction=direction,
         required_action=action,
         baseline_comparison_target=baseline or ("trusted_baseline" if decision_type == "promote_to_baseline_compare" else ""),
+        hypothesis_id=hypothesis_id,
+        experiment_id=experiment_id,
+        policy_eval_id=policy_eval_id,
+        budget_reservation_id=budget_reservation_id,
+        stage=stage,
         provenance={"source": "operator_cli"},
     )
     write_decision(paths(target), decision)

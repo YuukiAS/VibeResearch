@@ -152,7 +152,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.7.1" in show.output
+    assert "0.8.0" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -217,6 +217,89 @@ def test_audit_current_writes_alignment_report(tmp_path: Path):
     text = report.read_text()
     assert "root portal" in text
     assert "AGENTS snippet" in text
+
+
+def test_v080_research_init_registry_policy_memory_memo_and_exports(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve robust validation", "--background", "Synthetic benchmark").exit_code == 0
+    assert (tmp_path / ".vibe" / "research" / "events.jsonl").exists()
+    assert (tmp_path / ".vibe" / "policies" / "budget.yaml").exists()
+    assert invoke("policy", "lint", "--target", str(tmp_path)).exit_code == 0
+    created = invoke("hypothesis", "create", "try calibrated evaluator", "--stage", "analysis", "--target", str(tmp_path))
+    assert created.exit_code == 0
+    hypotheses = read_json(tmp_path / ".vibe" / "research" / "hypotheses.json", {})
+    hyp_id = next(iter(hypotheses))
+    assert invoke("experiment", "create", hyp_id, "--design", "calibration smoke", "--stage", "analysis", "--target", str(tmp_path)).exit_code == 0
+    experiments = read_json(tmp_path / ".vibe" / "research" / "experiments.json", {})
+    exp_id = next(iter(experiments))
+    assert invoke("experiment", "analyze", exp_id, "--trusted", "--schema-valid", "--summary", "trusted positive evidence", "--primary-delta", "0.2", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("hypothesis", "promote", hyp_id, "--reason", "trusted improvement", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("memory", "build", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("memo", "daily", "--target", str(tmp_path), "--language", "zh-CN").exit_code == 0
+    memo_text = next((tmp_path / ".vibe" / "memos").glob("*.md")).read_text()
+    assert "每日研究日志" in memo_text
+    assert invoke("dashboard", "export-research", "--target", str(tmp_path)).exit_code == 0
+    graph = read_json(tmp_path / ".vibe" / "dashboard" / "hypothesis_graph.json", {})
+    assert any(edge["type"] == "hypothesis_to_experiment" for edge in graph["edges"])
+
+
+def test_v080_portfolio_blocks_budget_and_duplicate_but_allows_changed_repeat(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    assert invoke("research", "init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy", "--autonomy-level", "bounded_continuous", "--force").exit_code == 0
+    assert invoke("hypothesis", "create", "test repeated design", "--stage", "smoke", "--target", str(tmp_path)).exit_code == 0
+    hyp_id = next(iter(read_json(tmp_path / ".vibe" / "research" / "hypotheses.json", {})))
+    assert invoke("experiment", "create", hyp_id, "--design", "same gate", "--stage", "smoke", "--capability", "toy-metrics-export", "--target", str(tmp_path)).exit_code == 0
+    candidates = [
+        {
+            "hypothesis_id": hyp_id,
+            "design_summary": "same gate",
+            "stage": "smoke",
+            "capability_id": "toy-metrics-export",
+            "decision_type": "collect_more_metrics",
+            "resource_units": {"gpu_hours": 0.0},
+        },
+        {
+            "hypothesis_id": hyp_id,
+            "design_summary": "same gate",
+            "stage": "smoke",
+            "capability_id": "toy-metrics-export",
+            "decision_type": "collect_more_metrics",
+            "changed_variable": "threshold",
+            "failure_analysis": {"what_failed": "calibration"},
+            "resource_units": {"gpu_hours": 0.0},
+        },
+        {
+            "hypothesis_id": hyp_id,
+            "design_summary": "expensive gate",
+            "stage": "smoke",
+            "capability_id": "toy-metrics-export",
+            "decision_type": "collect_more_metrics",
+            "resource_units": {"gpu_hours": 99.0},
+            "confirmed": True,
+        },
+    ]
+    candidate_file = tmp_path / "candidates.json"
+    write_json(candidate_file, candidates)
+    assert invoke("portfolio", "plan", "--candidate-file", str(candidate_file), "--target", str(tmp_path)).exit_code == 0
+    plan = read_json(tmp_path / ".vibe" / "research" / "portfolio_plan.json", {})
+    blocked = [reason for row in plan["blocked"] for reason in row["blocked_reasons"]]
+    assert "blocked_repeating_experiment" in blocked
+    assert "blocked_daily_gpu_hour_cap" in blocked
+    assert len(plan["selected"]) == 1
+    assert invoke("portfolio", "schedule", "--target", str(tmp_path)).exit_code == 0
+    assert read_jsonl(tmp_path / ".vibe" / "research" / "budget_ledger.jsonl")
+
+
+def test_v080_promotion_stop_require_trusted_evidence(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy").exit_code == 0
+    assert invoke("hypothesis", "create", "untrusted idea", "--target", str(tmp_path)).exit_code == 0
+    hyp_id = next(iter(read_json(tmp_path / ".vibe" / "research" / "hypotheses.json", {})))
+    assert invoke("experiment", "create", hyp_id, "--design", "schema failure", "--target", str(tmp_path)).exit_code == 0
+    exp_id = next(iter(read_json(tmp_path / ".vibe" / "research" / "experiments.json", {})))
+    assert invoke("experiment", "analyze", exp_id, "--summary", "schema invalid", "--failure-kind", "schema", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("hypothesis", "promote", hyp_id, "--reason", "not enough", "--target", str(tmp_path)).exit_code == 1
+    assert invoke("hypothesis", "stop", hyp_id, "--reason", "untrusted only", "--target", str(tmp_path)).exit_code == 1
+    assert invoke("hypothesis", "stop", hyp_id, "--reason", "operator stop", "--user-decision", "--target", str(tmp_path)).exit_code == 0
 
 
 def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):

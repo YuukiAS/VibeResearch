@@ -128,12 +128,20 @@ vibe revise-cycle c001 --offline
   contract_tests/
   run_contracts/
   adapter_history.jsonl
+  policies/
   state/
   cycles/
   runs/
   scheduler/
   ideas/
   research/
+    events.jsonl
+    hypotheses.json
+    experiments.json
+    evidence.json
+    decisions.jsonl
+    budget_ledger.jsonl
+  memos/
   dashboard/
   site/
   reports/
@@ -224,6 +232,62 @@ Move any real `.vibe/adapter.yaml` `task:` command into a capability with
 `dryrun`, `entrypoint`, `metrics_schema`, `artifact_rules`, `resources`,
 `trust_checks`, and `contract_tests`. Placeholder commands remain blocked and
 old trusted/untrusted leaderboard provenance is preserved.
+
+## Bounded Autonomous Research Manager
+
+v0.8.0 adds the long-running research layer above the v0.7.1 adapter gate. The
+agent can propose hypotheses, experiment designs, analysis decisions, and
+stopping or promotion judgments, but the framework owns memory, policy,
+evidence validity, budget reservation, traceability, and blocking unsafe
+automation.
+
+```mermaid
+flowchart TD
+  A[README / AGENTS / research brief] --> B[research init]
+  B --> C[policy files]
+  B --> D[hypothesis registry]
+  E[active adapter capabilities] --> F[portfolio plan]
+  C --> F
+  D --> F
+  F --> G[budget reservation]
+  G --> H[experiment registry]
+  H --> I[compiled resource plan / backend run]
+  I --> J[trusted or untrusted evidence]
+  J --> K[research decision]
+  K --> L[memory pack]
+  L --> F
+  K --> M[daily memo]
+  H --> N[dashboard research exports]
+```
+
+Important commands:
+
+```bash
+vibe research init --goal "..." --background "..." --memo-language zh-CN
+vibe hypothesis create "try a calibrated evaluator" --stage analysis
+vibe experiment create hyp_001 --design "calibration smoke" --stage analysis --capability metrics_export
+vibe experiment analyze exp_001 --trusted --schema-valid --summary "primary improved without guardrail regression"
+vibe memory build
+vibe portfolio plan
+vibe portfolio schedule
+vibe budget status
+vibe memo daily --language zh-CN
+vibe dashboard export-research
+```
+
+Project-specific code still belongs to the downstream repo: adapter
+capabilities and execution scripts live in `.vibe/adapter.yaml` and
+`.vibe/scripts/`. Generic research policy lives in `.vibe/policies/`, registry
+state in `.vibe/research/`, daily memos in `.vibe/memos/`, and future
+visualization data in `.vibe/dashboard/`.
+
+Promotion requires trusted, schema-valid evidence and no protected metric
+regression unless policy allows an explicit override. Stopping requires trusted
+negative evidence or an explicit user decision. The portfolio scheduler blocks
+missing capabilities, missing scripts, missing metrics schemas, unknown cost
+when policy says to block, over-budget work, autonomy-level violations, and
+same-hypothesis same-stage duplicate experiments without a new variable or
+failure analysis.
 
 ## Decision-To-Execution Safety
 

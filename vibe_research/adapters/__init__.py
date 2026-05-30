@@ -113,10 +113,19 @@ def get_adapter(paths: VibePaths) -> BaseAdapter:
 
 def resource_plan_from_task(cycle_id: str, decision: Any, task: dict[str, Any]) -> dict[str, Any]:
     key = str(task.get("key") or "compiled-task")
+    research_metadata = {
+        "hypothesis_id": getattr(decision, "hypothesis_id", ""),
+        "experiment_id": getattr(decision, "experiment_id", ""),
+        "decision_id": getattr(decision, "decision_id", ""),
+        "policy_eval_id": getattr(decision, "policy_eval_id", ""),
+        "budget_reservation_id": getattr(decision, "budget_reservation_id", ""),
+        "stage": getattr(decision, "stage", ""),
+    }
     return {
         "cycle_id": cycle_id,
         "mode": "compiled",
         "decision_id": getattr(decision, "decision_id", ""),
+        "research_metadata": research_metadata,
         "runs": {
             key: {
                 "priority": int(task.get("priority", 1)),
@@ -135,6 +144,7 @@ def resource_plan_from_task(cycle_id: str, decision: Any, task: dict[str, Any]) 
                     "baseline_comparison_target": getattr(decision, "baseline_comparison_target", "") or task.get("baseline_comparison_target", ""),
                 },
                 "adapter_metadata": task.get("adapter_metadata", {}),
+                "research_metadata": research_metadata,
                 "depends_on": list(task.get("depends_on", [])),
                 "cancel_if_failed": list(task.get("cancel_if_failed", [])),
             }

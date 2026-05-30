@@ -121,12 +121,20 @@ vibe revise-cycle c001 --offline
   contract_tests/
   run_contracts/
   adapter_history.jsonl
+  policies/
   state/
   cycles/
   runs/
   scheduler/
   ideas/
   research/
+    events.jsonl
+    hypotheses.json
+    experiments.json
+    evidence.json
+    decisions.jsonl
+    budget_ledger.jsonl
+  memos/
   dashboard/
   site/
   reports/
@@ -210,6 +218,57 @@ vibe adapter doctor
 把已有真实 `task:` 命令迁移为包含 `dryrun`、`entrypoint`、`metrics_schema`、
 `artifact_rules`、`resources`、`trust_checks` 和 `contract_tests` 的 capability。
 placeholder command 会继续被阻塞，旧 leaderboard 的 trusted/untrusted provenance 不会被静默覆盖。
+
+## Bounded Autonomous Research Manager / 有边界自治科研管理
+
+v0.8.0 在 v0.7.1 adapter gate 之上增加长期科研管理层。agent 可以提出
+hypothesis、experiment design、analysis decision，以及 promote/stop/downscope
+等科研判断；框架负责记忆、policy、预算预约、可信 evidence 验收、可追溯 metadata，
+以及在缺 capability、缺预算、缺可信 evidence 或超出 autonomy level 时阻塞自动执行。
+
+```mermaid
+flowchart TD
+  A[README / AGENTS / research brief] --> B[research init]
+  B --> C[policy files]
+  B --> D[hypothesis registry]
+  E[active adapter capabilities] --> F[portfolio plan]
+  C --> F
+  D --> F
+  F --> G[budget reservation]
+  G --> H[experiment registry]
+  H --> I[compiled resource plan / backend run]
+  I --> J[trusted or untrusted evidence]
+  J --> K[research decision]
+  K --> L[memory pack]
+  L --> F
+  K --> M[daily memo]
+  H --> N[dashboard research exports]
+```
+
+常用命令：
+
+```bash
+vibe research init --goal "..." --background "..." --memo-language zh-CN
+vibe hypothesis create "try a calibrated evaluator" --stage analysis
+vibe experiment create hyp_001 --design "calibration smoke" --stage analysis --capability metrics_export
+vibe experiment analyze exp_001 --trusted --schema-valid --summary "primary improved without guardrail regression"
+vibe memory build
+vibe portfolio plan
+vibe portfolio schedule
+vibe budget status
+vibe memo daily --language zh-CN
+vibe dashboard export-research
+```
+
+项目特定内容仍然属于下游 repo：adapter capability 和 execution script 在
+`.vibe/adapter.yaml` 与 `.vibe/scripts/`；通用预算、stage gate、autonomy policy
+在 `.vibe/policies/`；研究 registry 在 `.vibe/research/`；每日日志在
+`.vibe/memos/`；后续可视化数据导出到 `.vibe/dashboard/`。
+
+promotion 必须有 trusted 且 schema-valid 的 evidence，并且 protected metric 不能
+不可接受地回退，除非 policy 允许显式 override。stop 需要 trusted negative evidence
+或明确的用户决定。portfolio scheduler 会阻塞缺 active capability、缺脚本、缺 metrics
+schema、unknown cost、超预算、超自治等级，以及没有新变量或 failure analysis 的同构重复实验。
 
 ## Decision-To-Execution Safety
 

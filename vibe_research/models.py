@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.7.1"
+    vibe_version: str = "0.8.0"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -140,6 +140,9 @@ class ProjectConfig(BaseModel):
             "offline": True,
             "max_search_results": 10,
             "require_pdf_checksum": True,
+            "manager_enabled": True,
+            "memo_language": "zh-CN",
+            "autonomy_level": "analysis_only",
         }
     )
     codex: dict[str, Any] = Field(
@@ -208,6 +211,7 @@ class RunManifest(BaseModel):
     evaluation: dict[str, Any] = Field(default_factory=dict)
     success_criteria: dict[str, Any] = Field(default_factory=dict)
     adapter_metadata: dict[str, Any] = Field(default_factory=dict)
+    research_metadata: dict[str, Any] = Field(default_factory=dict)
     provenance_required: dict[str, bool] = Field(
         default_factory=lambda: {
             "git_diff": True,

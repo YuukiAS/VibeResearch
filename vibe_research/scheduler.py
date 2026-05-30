@@ -17,6 +17,7 @@ from .dashboard import sync_dashboard
 from .io import append_jsonl, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text
 from .manifest import validate_manifest
 from .paths import VibePaths
+from .research_manager import collect_run_evidence_if_research_linked, reserve_budget
 from .timeline import record_event
 
 
@@ -107,6 +108,23 @@ def queue_run(paths: VibePaths, run_id: str) -> None:
         raise ValueError(f"Unknown run: {run_id}")
     if run.get("status") != "dryrun_passed":
         raise RuntimeError(f"Run {run_id} is not ready for queue; status={run.get('status')}")
+    metadata = run.get("research_metadata", {}) if isinstance(run.get("research_metadata"), dict) else {}
+    if metadata.get("hypothesis_id") or metadata.get("experiment_id"):
+        if not metadata.get("budget_reservation_id"):
+            reservation = reserve_budget(
+                paths,
+                decision_id=metadata.get("decision_id", ""),
+                experiment_id=metadata.get("experiment_id", ""),
+                hypothesis_id=metadata.get("hypothesis_id", ""),
+                resource_units=resource_units_from_run(run),
+                estimated_cost={},
+                requires_long_run=False,
+                confirmed=False,
+            )
+            if reservation.get("status") == "blocked":
+                raise RuntimeError("Budget reservation blocked: " + ", ".join(reservation.get("blocked_reasons", [])))
+            metadata["budget_reservation_id"] = reservation["budget_event_id"]
+            run["research_metadata"] = metadata
     queue = read_json(paths.scheduler / "queue.json", {"queued": []})
     if run_id not in [item["run_id"] for item in queue["queued"]]:
         queue["queued"].append({"run_id": run_id, "priority": int(run.get("priority", 100)), "queued_at": utc_now(), "status": "queued", "reason": ""})
@@ -118,6 +136,31 @@ def queue_run(paths: VibePaths, run_id: str) -> None:
     write_json(paths.state / "state.json", state)
     record_event(paths, "run_queued", f"Queued {run_id}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status="queued")
     sync_dashboard(paths)
+
+
+def resource_units_from_run(run: dict[str, Any]) -> dict[str, Any]:
+    resources = run.get("resources", {}) if isinstance(run.get("resources"), dict) else {}
+    gpu = float(resources.get("gpu", 0) or 0)
+    hours = walltime_hours(str(resources.get("time", "00:00:00")))
+    return {
+        "gpu": gpu,
+        "walltime_hours": hours,
+        "gpu_hours": gpu * hours,
+        "cpu_hours": float(resources.get("cpus", 1) or 1) * hours,
+        "memory_gb_hours": float(resources.get("mem_gb", 0) or 0) * hours,
+    }
+
+
+def walltime_hours(value: str) -> float:
+    parts = value.split(":")
+    try:
+        if len(parts) == 3:
+            return int(parts[0]) + int(parts[1]) / 60.0 + int(parts[2]) / 3600.0
+        if len(parts) == 2:
+            return int(parts[0]) / 60.0 + int(parts[1]) / 3600.0
+        return float(value)
+    except ValueError:
+        return 0.0
 
 
 def submit_queue(paths: VibePaths, *, dry: bool = False, backend_name: str | None = None) -> list[str]:
@@ -332,6 +375,7 @@ def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted:
         "provenance": provenance,
     }
     write_json(paths.runs / run_id / "metrics.json", metrics)
+    collect_run_evidence_if_research_linked(paths, run_id, metrics)
     write_text(paths.runs / run_id / "result.md", f"# Result\n\nPrimary metric: {value}\nTrust status: {trust_status}\nSchema status: {schema_status}\n")
     append_jsonl(paths.leaderboard / "history.jsonl", metrics)
     if trusted_now:

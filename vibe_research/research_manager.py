@@ -1,0 +1,1182 @@
+"""Bounded autonomous research manager state, policies, and exports."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field, model_validator
+
+from .adapter_onboarding import adapter_readiness
+from .adapter_schema import load_adapter_manifest
+from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text, write_yaml
+from .paths import VibePaths
+from .timeline import record_event
+
+
+HYPOTHESIS_STATUSES = {"proposed", "active", "needs_analysis", "downscoped", "promoted", "stopped", "archived", "blocked"}
+DECISION_OUTCOMES = {"continue", "promote", "revise", "downscope", "stop", "ask_user", "request_deep_research", "blocked"}
+FAILURE_KINDS = {"scientific", "engineering", "schema", "resource", "policy", "insufficient_evidence", "none"}
+AUTONOMY_LEVELS = {"diagnosis_only", "analysis_only", "smoke_only", "gated_experiments", "bounded_continuous", "manual_approval_required"}
+
+
+class HypothesisRecord(BaseModel):
+    hypothesis_id: str
+    title: str
+    short_name: str = ""
+    status: str = "active"
+    origin: str = "operator"
+    rationale: str = ""
+    expected_mechanism: str = ""
+    target_metrics: list[str] = Field(default_factory=list)
+    protected_metrics: dict[str, Any] = Field(default_factory=dict)
+    known_risks: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    stage: str = "idea"
+    current_stage: str = "idea"
+    best_evidence: list[str] = Field(default_factory=list)
+    negative_evidence: list[str] = Field(default_factory=list)
+    remaining_upside: dict[str, Any] = Field(default_factory=dict)
+    failure_analysis: dict[str, Any] = Field(default_factory=dict)
+    next_testable_change: str = ""
+    linked_experiments: list[str] = Field(default_factory=list)
+    decision_history: list[str] = Field(default_factory=list)
+    stop_reason: str = ""
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+    @model_validator(mode="after")
+    def validate_status(self) -> "HypothesisRecord":
+        if self.status not in HYPOTHESIS_STATUSES:
+            raise ValueError(f"unsupported hypothesis status: {self.status}")
+        return self
+
+
+class ExperimentRecord(BaseModel):
+    experiment_id: str
+    hypothesis_id: str
+    design_summary: str
+    stage: str = "smoke"
+    decision_id: str = ""
+    capability_id: str = ""
+    adapter_revision: str = ""
+    execution_script: str = ""
+    script_revision: str = ""
+    resource_plan_id: str = ""
+    resource_plan: dict[str, Any] = Field(default_factory=dict)
+    expected_evidence: dict[str, Any] = Field(default_factory=dict)
+    success_criteria: dict[str, Any] = Field(default_factory=dict)
+    failure_criteria: dict[str, Any] = Field(default_factory=dict)
+    baseline_target: str = ""
+    protected_metric_constraints: dict[str, Any] = Field(default_factory=dict)
+    linked_run_ids: list[str] = Field(default_factory=list)
+    run_ids: list[str] = Field(default_factory=list)
+    trusted_evidence_ids: list[str] = Field(default_factory=list)
+    untrusted_evidence_ids: list[str] = Field(default_factory=list)
+    status: str = "planned"
+    analysis_summary: str = ""
+    failure_analysis: dict[str, Any] = Field(default_factory=dict)
+    cost_actual: dict[str, Any] = Field(default_factory=dict)
+    cost_estimated: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class EvidenceRecord(BaseModel):
+    evidence_id: str
+    experiment_id: str
+    run_id: str = ""
+    kind: str = "metrics"
+    trusted: bool = False
+    schema_valid: bool = False
+    metrics_schema_version: str = ""
+    metrics_file: str = ""
+    artifact_refs: list[str] = Field(default_factory=list)
+    summary: str = ""
+    baseline_comparison: dict[str, Any] = Field(default_factory=dict)
+    metric_deltas: dict[str, Any] = Field(default_factory=dict)
+    protected_metric_regressions: list[dict[str, Any]] = Field(default_factory=list)
+    uncertainty_notes: str = ""
+    analysis_notes: str = ""
+    failure_kind: str = "none"
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+    @model_validator(mode="after")
+    def validate_failure_kind(self) -> "EvidenceRecord":
+        if self.failure_kind not in FAILURE_KINDS:
+            raise ValueError(f"unsupported failure kind: {self.failure_kind}")
+        return self
+
+
+class ResearchDecisionRecord(BaseModel):
+    decision_id: str
+    hypothesis_id: str = ""
+    experiment_id: str = ""
+    decision_type: str
+    agent_judgment: dict[str, Any] = Field(default_factory=dict)
+    policy_eval_id: str = ""
+    budget_reservation_id: str = ""
+    promotion_or_stop_reason: str = ""
+    final_outcome: str = "continue"
+    rationale: str = ""
+    alternatives_considered: list[str] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    budget_impact: dict[str, Any] = Field(default_factory=dict)
+    expected_next_step: str = ""
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> "ResearchDecisionRecord":
+        if self.final_outcome not in DECISION_OUTCOMES:
+            raise ValueError(f"unsupported final outcome: {self.final_outcome}")
+        return self
+
+
+def research_paths(paths: VibePaths) -> dict[str, Path]:
+    return {
+        "events": paths.research / "events.jsonl",
+        "hypotheses": paths.research / "hypotheses.json",
+        "experiments": paths.research / "experiments.json",
+        "evidence": paths.research / "evidence.json",
+        "decisions": paths.research / "decisions.jsonl",
+        "budget": paths.research / "budget_ledger.jsonl",
+        "questions": paths.research / "questions.jsonl",
+        "portfolio": paths.research / "portfolio_plan.json",
+        "memory_json": paths.research / "memory_pack.json",
+        "memory_md": paths.research / "memory_pack.md",
+    }
+
+
+def ensure_research_dirs(paths: VibePaths) -> None:
+    for rel in ["research", "policies", "memos", "dashboard"]:
+        ensure_dir(paths.vibe / rel)
+
+
+def research_init(
+    paths: VibePaths,
+    *,
+    goal: str = "",
+    background: str = "",
+    memo_language: str = "zh-CN",
+    timezone: str = "local",
+    autonomy_level: str = "analysis_only",
+    force: bool = False,
+) -> dict[str, Any]:
+    paths.require_initialized()
+    ensure_research_dirs(paths)
+    now = utc_now()
+    files = research_paths(paths)
+    for key in ["events", "decisions", "budget", "questions"]:
+        if force or not files[key].exists():
+            write_text(files[key], "")
+    for key in ["hypotheses", "experiments", "evidence"]:
+        if force or not files[key].exists():
+            write_json(files[key], {})
+    project_brief = read_project_brief(paths)
+    goal = goal or project_brief.get("goal", "")
+    background = background or project_brief.get("background", "")
+    constraints = scan_repo_constraints(paths)
+    write_text(
+        paths.research / "research_brief.md",
+        f"# Research Brief\n\n## Goal\n{goal or 'MISSING'}\n\n## Background\n{background or 'MISSING'}\n\n## Repository Constraints\n{render_constraints(constraints)}\n",
+    )
+    policies = write_default_policies(paths, memo_language=memo_language, timezone=timezone, autonomy_level=autonomy_level, force=force)
+    blockers = []
+    if not goal or "Define the research objective" in goal or goal.startswith("MISSING"):
+        blockers.append("missing_project_goal")
+    if not background or "not been supplied" in background or background.startswith("MISSING"):
+        blockers.append("missing_project_background")
+    existing_questions = read_jsonl(files["questions"])
+    if existing_questions:
+        write_text(files["questions"], "")
+        for row in existing_questions:
+            if row.get("question_id") in {"missing_project_goal", "missing_project_background"} and row.get("question_id") not in blockers:
+                row["status"] = "resolved"
+                row["resolved_at"] = now
+            append_jsonl(files["questions"], row)
+    for blocker in blockers:
+        if not any(row.get("question_id") == blocker and row.get("status", "open") == "open" for row in read_jsonl(files["questions"])):
+            append_jsonl(files["questions"], {"question_id": blocker, "status": "open", "question": blocker.replace("_", " "), "created_at": now})
+    append_research_event(paths, "research_initialized", {"goal": goal, "background_present": bool(background), "blockers": blockers, "constraints": constraints})
+    status = research_readiness(paths)
+    status["policies"] = policies
+    return status
+
+
+def read_project_brief(paths: VibePaths) -> dict[str, str]:
+    text = (paths.project / "brief.md").read_text() if (paths.project / "brief.md").exists() else ""
+    return {"goal": first_section(text, "Goal"), "background": first_section(text, "Background")}
+
+
+def first_section(text: str, name: str) -> str:
+    lines = text.splitlines()
+    capture = False
+    out: list[str] = []
+    for line in lines:
+        if line.strip().lower() in {f"## {name}".lower(), f"# {name}".lower()}:
+            capture = True
+            continue
+        if capture and line.startswith("#"):
+            break
+        if capture:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def scan_repo_constraints(paths: VibePaths) -> dict[str, Any]:
+    keywords = ["budget", "gpu", "slurm", "resource", "forbid", "forbidden", "do not", "language", "memo", "禁止", "预算", "资源", "中文", "不要"]
+    result: dict[str, Any] = {"sources": []}
+    for rel in ["README.md", "AGENTS.md"]:
+        path = paths.root / rel
+        if not path.exists() or not path.is_file():
+            continue
+        matches = []
+        for line in path.read_text(errors="ignore").splitlines():
+            text = line.strip()
+            if text and any(keyword.lower() in text.lower() for keyword in keywords):
+                matches.append(text[:240])
+            if len(matches) >= 20:
+                break
+        result["sources"].append({"path": rel, "constraint_lines": matches})
+    return result
+
+
+def render_constraints(constraints: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for source in constraints.get("sources", []):
+        lines.append(f"### {source.get('path', '')}")
+        values = source.get("constraint_lines", [])
+        lines.extend(f"- {value}" for value in values)
+        if not values:
+            lines.append("- no budget, autonomy, language, or resource constraints detected")
+        lines.append("")
+    return "\n".join(lines).strip() or "- no README/AGENTS constraints detected"
+
+
+def write_default_policies(
+    paths: VibePaths,
+    *,
+    memo_language: str = "zh-CN",
+    timezone: str = "local",
+    autonomy_level: str = "analysis_only",
+    force: bool = False,
+) -> dict[str, Any]:
+    autonomy_level = autonomy_level if autonomy_level in AUTONOMY_LEVELS else "analysis_only"
+    budget = {
+        "version": 1,
+        "daily_job_cap": 4,
+        "daily_gpu_hour_cap": 8.0,
+        "per_hypothesis_gpu_hour_cap": 12.0,
+        "per_experiment_gpu_hour_cap": 4.0,
+        "total_gpu_hour_cap": 40.0,
+        "resource_units": ["gpu_hours", "cpu_hours", "memory_gb_hours", "walltime_hours", "storage_gb"],
+        "unknown_cost_behavior": "block",
+        "long_run_confirmation_gpu_hours": 2.0,
+        "cooldown_after_failed_runs": 1,
+        "max_consecutive_untrusted_runs": 2,
+        "max_same_hypothesis_gate_runs": 2,
+        "allow_night_submissions": False,
+    }
+    stage_gates = {
+        "version": 1,
+        "stages": ["idea", "analysis", "smoke", "single_unit_gate", "replicated_gate", "full_eval", "submission_ready"],
+        "default_stage": "smoke",
+        "require_trusted_evidence_for_promotion": True,
+        "require_valid_metrics_schema": True,
+        "target_metric_improvement": {"metric": "primary", "direction": "max", "min_delta": 0.0},
+        "protected_metrics": {},
+        "minimum_replication": 1,
+        "max_failed_gates_before_reassessment": 2,
+        "allow_protected_metric_override": False,
+    }
+    autonomy = {
+        "version": 1,
+        "level": autonomy_level,
+        "allowed_automatic_actions": ["analyze", "memo", "memory_build"] if autonomy_level in {"diagnosis_only", "analysis_only"} else ["analyze", "memo", "memory_build", "smoke"],
+        "requires_user_approval": ["long_run", "protected_metric_override", "unknown_cost", "full_eval", "submission_ready"],
+        "max_concurrent_jobs": 1,
+        "max_automatic_queue_depth": 1,
+        "allowed_backends": ["local"],
+        "allowed_adapter_capabilities": [],
+    }
+    memo = {"version": 1, "language": memo_language, "timezone": timezone, "daily_memo_time": "18:00"}
+    policies = {"budget": budget, "stage_gates": stage_gates, "autonomy": autonomy, "memo": memo}
+    targets = {
+        "budget": paths.vibe / "policies" / "budget.yaml",
+        "stage_gates": paths.vibe / "policies" / "stage_gates.yaml",
+        "autonomy": paths.vibe / "policies" / "autonomy.yaml",
+        "memo": paths.research / "memo_config.yaml",
+    }
+    for key, data in policies.items():
+        if force or not targets[key].exists():
+            write_yaml(targets[key], data)
+            append_jsonl(paths.vibe / "policies" / "policy_history.jsonl", {"event": "policy_written", "policy": key, "version": data["version"], "created_at": utc_now(), "data": data})
+    return policies
+
+
+def research_readiness(paths: VibePaths) -> dict[str, Any]:
+    ensure_research_dirs(paths)
+    missing = []
+    for path in [paths.vibe / "policies" / "budget.yaml", paths.vibe / "policies" / "stage_gates.yaml", paths.vibe / "policies" / "autonomy.yaml", paths.research / "research_brief.md"]:
+        if not path.exists():
+            missing.append(str(path.relative_to(paths.vibe)))
+    open_questions = [row for row in read_jsonl(research_paths(paths)["questions"]) if row.get("status", "open") == "open"]
+    adapter = adapter_readiness(paths)
+    ready = not missing and not open_questions and adapter.get("ready_for_experiments", False)
+    return {
+        "ready_for_bounded_autonomy": ready,
+        "missing_files": missing,
+        "open_questions": open_questions,
+        "adapter_ready": adapter.get("ready_for_experiments", False),
+        "adapter_maturity": adapter.get("maturity_level", "missing"),
+    }
+
+
+def append_research_event(paths: VibePaths, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    files = research_paths(paths)
+    existing = [row.get("event_id", "") for row in read_jsonl(files["events"])]
+    row = {"event_id": next_numeric_id(existing, "event_"), "event_type": event_type, "created_at": utc_now(), "payload": payload}
+    append_jsonl(files["events"], row)
+    return row
+
+
+def load_hypotheses(paths: VibePaths) -> dict[str, Any]:
+    data = read_json(research_paths(paths)["hypotheses"], {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_hypotheses(paths: VibePaths, data: dict[str, Any]) -> None:
+    write_json(research_paths(paths)["hypotheses"], data)
+
+
+def load_experiments(paths: VibePaths) -> dict[str, Any]:
+    data = read_json(research_paths(paths)["experiments"], {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_experiments(paths: VibePaths, data: dict[str, Any]) -> None:
+    write_json(research_paths(paths)["experiments"], data)
+
+
+def load_evidence(paths: VibePaths) -> dict[str, Any]:
+    data = read_json(research_paths(paths)["evidence"], {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_evidence(paths: VibePaths, data: dict[str, Any]) -> None:
+    write_json(research_paths(paths)["evidence"], data)
+
+
+def create_hypothesis(paths: VibePaths, title: str, *, rationale: str = "", stage: str = "idea", target_metrics: list[str] | None = None, protected_metrics: dict[str, Any] | None = None, origin: str = "operator") -> dict[str, Any]:
+    ensure_research_dirs(paths)
+    hypotheses = load_hypotheses(paths)
+    hyp_id = next_numeric_id(hypotheses.keys(), "hyp_")
+    now = utc_now()
+    record = HypothesisRecord(
+        hypothesis_id=hyp_id,
+        title=title,
+        short_name=title[:48],
+        status="active",
+        origin=origin,
+        rationale=rationale,
+        target_metrics=target_metrics or [],
+        protected_metrics=protected_metrics or {},
+        stage=stage,
+        current_stage=stage,
+        provenance={"source": "vibe hypothesis create"},
+        created_at=now,
+        updated_at=now,
+    ).model_dump()
+    hypotheses[hyp_id] = record
+    save_hypotheses(paths, hypotheses)
+    append_research_event(paths, "hypothesis_created", record)
+    record_event(paths, "hypothesis_created", title, status="active", payload={"hypothesis_id": hyp_id})
+    return record
+
+
+def update_hypothesis(paths: VibePaths, hypothesis_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    hypotheses = load_hypotheses(paths)
+    if hypothesis_id not in hypotheses:
+        raise ValueError(f"Unknown hypothesis: {hypothesis_id}")
+    current = dict(hypotheses[hypothesis_id])
+    current.update({key: value for key, value in updates.items() if value is not None})
+    current["updated_at"] = utc_now()
+    record = HypothesisRecord.model_validate(current).model_dump()
+    hypotheses[hypothesis_id] = record
+    save_hypotheses(paths, hypotheses)
+    append_research_event(paths, "hypothesis_updated", {"hypothesis_id": hypothesis_id, "updates": updates})
+    return record
+
+
+def write_research_decision(paths: VibePaths, data: dict[str, Any]) -> dict[str, Any]:
+    files = research_paths(paths)
+    existing = [row.get("decision_id", "") for row in read_jsonl(files["decisions"])]
+    payload = {"decision_id": data.get("decision_id") or next_numeric_id(existing, "research_decision_"), "created_at": utc_now(), **data}
+    record = ResearchDecisionRecord.model_validate(payload).model_dump()
+    append_jsonl(files["decisions"], record)
+    append_research_event(paths, "research_decision_recorded", record)
+    return record
+
+
+def trusted_evidence_for_hypothesis(paths: VibePaths, hypothesis_id: str, *, negative: bool | None = None) -> list[dict[str, Any]]:
+    experiments = load_experiments(paths)
+    evidence = load_evidence(paths)
+    exp_ids = {exp_id for exp_id, exp in experiments.items() if exp.get("hypothesis_id") == hypothesis_id}
+    rows = [row for row in evidence.values() if row.get("experiment_id") in exp_ids and row.get("trusted") and row.get("schema_valid")]
+    if negative is True:
+        rows = [row for row in rows if row.get("failure_kind") == "scientific" or row.get("metric_deltas", {}).get("primary", 0) < 0]
+    if negative is False:
+        rows = [row for row in rows if row.get("failure_kind") in {"none", ""} and not row.get("protected_metric_regressions")]
+    return rows
+
+
+def change_hypothesis_status(paths: VibePaths, hypothesis_id: str, outcome: str, *, reason: str, user_decision: bool = False, remaining_upside: dict[str, Any] | None = None, failure_analysis: dict[str, Any] | None = None) -> dict[str, Any]:
+    if outcome == "promote":
+        trusted = trusted_evidence_for_hypothesis(paths, hypothesis_id, negative=False)
+        regressions = [ev for ev in trusted if ev.get("protected_metric_regressions")]
+        if not trusted or regressions:
+            decision = write_research_decision(paths, {"hypothesis_id": hypothesis_id, "decision_type": "promote", "final_outcome": "blocked", "rationale": reason, "blocked_reasons": ["promotion_requires_trusted_schema_valid_evidence_without_protected_regression"]})
+            raise RuntimeError(f"promotion blocked: {decision['blocked_reasons'][0]}")
+        status = "promoted"
+    elif outcome == "stop":
+        if not user_decision and not trusted_evidence_for_hypothesis(paths, hypothesis_id, negative=True):
+            decision = write_research_decision(paths, {"hypothesis_id": hypothesis_id, "decision_type": "stop", "final_outcome": "blocked", "rationale": reason, "blocked_reasons": ["stopping_requires_trusted_negative_evidence_or_user_decision"]})
+            raise RuntimeError(f"stop blocked: {decision['blocked_reasons'][0]}")
+        status = "stopped"
+    elif outcome == "downscope":
+        status = "downscoped"
+    else:
+        status = "needs_analysis"
+    decision = write_research_decision(
+        paths,
+        {
+            "hypothesis_id": hypothesis_id,
+            "decision_type": outcome,
+            "final_outcome": outcome,
+            "rationale": reason,
+            "promotion_or_stop_reason": reason,
+            "agent_judgment": {"remaining_upside": remaining_upside or {}, "failure_analysis": failure_analysis or {}},
+        },
+    )
+    updates: dict[str, Any] = {"status": status, "decision_history": list(load_hypotheses(paths).get(hypothesis_id, {}).get("decision_history", [])) + [decision["decision_id"]]}
+    if outcome == "stop":
+        updates["stop_reason"] = reason
+    if remaining_upside is not None:
+        updates["remaining_upside"] = remaining_upside
+    if failure_analysis is not None:
+        updates["failure_analysis"] = failure_analysis
+    record = update_hypothesis(paths, hypothesis_id, updates)
+    append_research_event(paths, f"hypothesis_{status}", {"hypothesis_id": hypothesis_id, "decision_id": decision["decision_id"], "reason": reason})
+    return record
+
+
+def create_experiment(
+    paths: VibePaths,
+    hypothesis_id: str,
+    design_summary: str,
+    *,
+    stage: str = "smoke",
+    capability_id: str = "",
+    decision_id: str = "",
+    resource_plan: dict[str, Any] | None = None,
+    expected_evidence: dict[str, Any] | None = None,
+    success_criteria: dict[str, Any] | None = None,
+    failure_criteria: dict[str, Any] | None = None,
+    baseline_target: str = "",
+    protected_metric_constraints: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    hypotheses = load_hypotheses(paths)
+    if hypothesis_id not in hypotheses:
+        raise ValueError(f"Unknown hypothesis: {hypothesis_id}")
+    experiments = load_experiments(paths)
+    exp_id = next_numeric_id(experiments.keys(), "exp_")
+    manifest = load_adapter_manifest(paths)
+    cap = next((cap for cap in manifest.capabilities if cap.id == capability_id), None)
+    now = utc_now()
+    record = ExperimentRecord(
+        experiment_id=exp_id,
+        hypothesis_id=hypothesis_id,
+        design_summary=design_summary,
+        stage=stage,
+        decision_id=decision_id,
+        capability_id=capability_id,
+        adapter_revision=manifest.adapter_revision,
+        execution_script=(cap.entrypoint.get("command", "") if cap else ""),
+        resource_plan=resource_plan or {},
+        expected_evidence=expected_evidence or {},
+        success_criteria=success_criteria or {},
+        failure_criteria=failure_criteria or {},
+        baseline_target=baseline_target,
+        protected_metric_constraints=protected_metric_constraints or {},
+        cost_estimated=(resource_plan or {}).get("resource_units", {}) if isinstance(resource_plan, dict) else {},
+        provenance={"source": "vibe experiment create"},
+        created_at=now,
+        updated_at=now,
+    ).model_dump()
+    experiments[exp_id] = record
+    save_experiments(paths, experiments)
+    hyp = hypotheses[hypothesis_id]
+    hyp.setdefault("linked_experiments", []).append(exp_id)
+    hyp["updated_at"] = now
+    save_hypotheses(paths, hypotheses)
+    append_research_event(paths, "experiment_created", record)
+    return record
+
+
+def link_run_to_experiment(paths: VibePaths, experiment_id: str, run_id: str) -> dict[str, Any]:
+    experiments = load_experiments(paths)
+    if experiment_id not in experiments:
+        raise ValueError(f"Unknown experiment: {experiment_id}")
+    exp = experiments[experiment_id]
+    for key in ["linked_run_ids", "run_ids"]:
+        exp.setdefault(key, [])
+        if run_id not in exp[key]:
+            exp[key].append(run_id)
+    exp["updated_at"] = utc_now()
+    experiments[experiment_id] = exp
+    save_experiments(paths, experiments)
+    append_research_event(paths, "experiment_run_linked", {"experiment_id": experiment_id, "run_id": run_id})
+    return exp
+
+
+def add_evidence(
+    paths: VibePaths,
+    experiment_id: str,
+    *,
+    run_id: str = "",
+    kind: str = "metrics",
+    trusted: bool = False,
+    schema_valid: bool = False,
+    metrics_schema_version: str = "",
+    metrics_file: str = "",
+    summary: str = "",
+    metric_deltas: dict[str, Any] | None = None,
+    protected_metric_regressions: list[dict[str, Any]] | None = None,
+    failure_kind: str = "none",
+    analysis_notes: str = "",
+) -> dict[str, Any]:
+    experiments = load_experiments(paths)
+    if experiment_id not in experiments:
+        raise ValueError(f"Unknown experiment: {experiment_id}")
+    evidence = load_evidence(paths)
+    evidence_id = next_numeric_id(evidence.keys(), "ev_")
+    record = EvidenceRecord(
+        evidence_id=evidence_id,
+        experiment_id=experiment_id,
+        run_id=run_id,
+        kind=kind,
+        trusted=trusted,
+        schema_valid=schema_valid,
+        metrics_schema_version=metrics_schema_version,
+        metrics_file=metrics_file,
+        summary=summary,
+        metric_deltas=metric_deltas or {},
+        protected_metric_regressions=protected_metric_regressions or [],
+        failure_kind=failure_kind,
+        analysis_notes=analysis_notes,
+        provenance={"source": "vibe experiment analyze"},
+        created_at=utc_now(),
+    ).model_dump()
+    evidence[evidence_id] = record
+    save_evidence(paths, evidence)
+    exp = experiments[experiment_id]
+    if run_id:
+        for key in ["linked_run_ids", "run_ids"]:
+            exp.setdefault(key, [])
+            if run_id not in exp[key]:
+                exp[key].append(run_id)
+    key = "trusted_evidence_ids" if trusted and schema_valid else "untrusted_evidence_ids"
+    exp.setdefault(key, []).append(evidence_id)
+    exp["status"] = "evidence_recorded"
+    exp["analysis_summary"] = summary or analysis_notes
+    exp["updated_at"] = utc_now()
+    experiments[experiment_id] = exp
+    save_experiments(paths, experiments)
+    update_hypothesis_evidence_index(paths, exp["hypothesis_id"])
+    append_research_event(paths, "evidence_recorded", record)
+    return record
+
+
+def update_hypothesis_evidence_index(paths: VibePaths, hypothesis_id: str) -> None:
+    hypotheses = load_hypotheses(paths)
+    if hypothesis_id not in hypotheses:
+        return
+    trusted_positive = trusted_evidence_for_hypothesis(paths, hypothesis_id, negative=False)
+    trusted_negative = trusted_evidence_for_hypothesis(paths, hypothesis_id, negative=True)
+    hyp = hypotheses[hypothesis_id]
+    hyp["best_evidence"] = [row["evidence_id"] for row in trusted_positive]
+    hyp["negative_evidence"] = [row["evidence_id"] for row in trusted_negative]
+    if trusted_negative:
+        hyp["status"] = "needs_analysis" if hyp.get("status") == "active" else hyp.get("status", "needs_analysis")
+    hyp["updated_at"] = utc_now()
+    save_hypotheses(paths, hypotheses)
+
+
+def audit_registry(paths: VibePaths) -> dict[str, Any]:
+    hypotheses = load_hypotheses(paths)
+    experiments = load_experiments(paths)
+    evidence = load_evidence(paths)
+    decisions = read_jsonl(research_paths(paths)["decisions"])
+    issues: list[str] = []
+    for exp_id, exp in experiments.items():
+        if exp.get("hypothesis_id") not in hypotheses:
+            issues.append(f"{exp_id}: orphan experiment without hypothesis")
+        if exp.get("status") in {"evidence_recorded", "completed"} and not (exp.get("trusted_evidence_ids") or exp.get("untrusted_evidence_ids")):
+            issues.append(f"{exp_id}: experiment status implies evidence but no evidence ids are linked")
+    for ev_id, ev in evidence.items():
+        if ev.get("experiment_id") not in experiments:
+            issues.append(f"{ev_id}: orphan evidence without experiment")
+    for row in decisions:
+        if row.get("experiment_id") and row["experiment_id"] not in experiments:
+            issues.append(f"{row.get('decision_id')}: decision references missing experiment")
+        if row.get("hypothesis_id") and row["hypothesis_id"] not in hypotheses:
+            issues.append(f"{row.get('decision_id')}: decision references missing hypothesis")
+        if row.get("final_outcome") in {"promote", "stop"} and not (row.get("experiment_id") or trusted_evidence_for_hypothesis(paths, row.get("hypothesis_id", ""))):
+            issues.append(f"{row.get('decision_id')}: terminal decision has no trusted evidence link")
+    duplicate_warnings = duplicate_risk_warnings(paths)
+    result = {"ok": not issues, "issues": issues, "duplicate_risk_warnings": duplicate_warnings, "counts": {"hypotheses": len(hypotheses), "experiments": len(experiments), "evidence": len(evidence), "decisions": len(decisions)}}
+    write_json(paths.research / "audit.json", result)
+    return result
+
+
+def load_budget_policy(paths: VibePaths) -> dict[str, Any]:
+    return read_yaml(paths.vibe / "policies" / "budget.yaml", {}) or {}
+
+
+def resource_gpu_hours(resource_units: dict[str, Any]) -> float | None:
+    if not resource_units:
+        return None
+    if "gpu_hours" in resource_units:
+        return float(resource_units.get("gpu_hours") or 0.0)
+    gpu = resource_units.get("gpu", resource_units.get("gpus", 0))
+    wall = resource_units.get("walltime_hours", resource_units.get("hours", 0))
+    if gpu is None or wall is None:
+        return None
+    try:
+        return float(gpu or 0) * float(wall or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def budget_status(paths: VibePaths) -> dict[str, Any]:
+    policy = load_budget_policy(paths)
+    ledger = read_jsonl(research_paths(paths)["budget"])
+    today = datetime.now().date().isoformat()
+    reserved_gpu = 0.0
+    actual_gpu = 0.0
+    reservations = 0
+    per_hyp: dict[str, float] = defaultdict(float)
+    for row in ledger:
+        status = row.get("status")
+        created = str(row.get("reservation_time", row.get("created_at", "")))[:10]
+        units = row.get("resource_units", {}) if isinstance(row.get("resource_units"), dict) else {}
+        gpu_hours = resource_gpu_hours(units) or 0.0
+        if status == "reserved":
+            if created == today:
+                reservations += 1
+                reserved_gpu += gpu_hours
+        if status == "reconciled":
+            actual = row.get("actual_cost", {}) if isinstance(row.get("actual_cost"), dict) else {}
+            actual_gpu += float(actual.get("gpu_hours", gpu_hours) or 0.0)
+        hyp = row.get("hypothesis_id", "")
+        if hyp:
+            per_hyp[hyp] += gpu_hours
+    return {
+        "policy": policy,
+        "reserved_today_gpu_hours": reserved_gpu,
+        "actual_gpu_hours": actual_gpu,
+        "reservations_today": reservations,
+        "remaining_daily_gpu_hours": float(policy.get("daily_gpu_hour_cap", 0.0) or 0.0) - reserved_gpu,
+        "remaining_daily_jobs": int(policy.get("daily_job_cap", 0) or 0) - reservations,
+        "per_hypothesis_gpu_hours": dict(per_hyp),
+        "ledger_count": len(ledger),
+    }
+
+
+def reserve_budget(paths: VibePaths, *, decision_id: str = "", experiment_id: str = "", hypothesis_id: str = "", resource_units: dict[str, Any] | None = None, estimated_cost: dict[str, Any] | None = None, requires_long_run: bool = False, confirmed: bool = False) -> dict[str, Any]:
+    policy = load_budget_policy(paths)
+    units = resource_units or {}
+    gpu_hours = resource_gpu_hours(units)
+    blocked: list[str] = []
+    status = budget_status(paths)
+    if gpu_hours is None and policy.get("unknown_cost_behavior", "block") == "block":
+        blocked.append("unknown_cost")
+    gpu_hours = gpu_hours or 0.0
+    if status["remaining_daily_jobs"] <= 0:
+        blocked.append("daily_job_cap")
+    if gpu_hours > status["remaining_daily_gpu_hours"]:
+        blocked.append("daily_gpu_hour_cap")
+    if hypothesis_id and status["per_hypothesis_gpu_hours"].get(hypothesis_id, 0.0) + gpu_hours > float(policy.get("per_hypothesis_gpu_hour_cap", 0.0) or 0.0):
+        blocked.append("per_hypothesis_gpu_hour_cap")
+    if gpu_hours > float(policy.get("per_experiment_gpu_hour_cap", 0.0) or 0.0):
+        blocked.append("per_experiment_gpu_hour_cap")
+    if requires_long_run or gpu_hours >= float(policy.get("long_run_confirmation_gpu_hours", 999999.0) or 999999.0):
+        if not confirmed:
+            blocked.append("long_run_confirmation_required")
+    existing = [row.get("budget_event_id", "") for row in read_jsonl(research_paths(paths)["budget"])]
+    row = {
+        "budget_event_id": next_numeric_id(existing, "budget_"),
+        "decision_id": decision_id,
+        "experiment_id": experiment_id,
+        "hypothesis_id": hypothesis_id,
+        "resource_units": units,
+        "estimated_cost": estimated_cost or {"gpu_hours": gpu_hours},
+        "actual_cost": {},
+        "status": "blocked" if blocked else "reserved",
+        "blocked_reasons": blocked,
+        "reservation_time": utc_now(),
+        "reconciliation_time": "",
+    }
+    append_jsonl(research_paths(paths)["budget"], row)
+    append_research_event(paths, "budget_reserved" if not blocked else "budget_blocked", row)
+    return row
+
+
+def reconcile_budget(paths: VibePaths, budget_event_id: str, actual_cost: dict[str, Any]) -> dict[str, Any]:
+    ledger_path = research_paths(paths)["budget"]
+    rows = read_jsonl(ledger_path)
+    found = None
+    for row in rows:
+        if row.get("budget_event_id") == budget_event_id:
+            row["actual_cost"] = actual_cost
+            row["status"] = "reconciled"
+            row["reconciliation_time"] = utc_now()
+            found = row
+    if not found:
+        raise ValueError(f"Unknown budget event: {budget_event_id}")
+    write_text(ledger_path, "")
+    for row in rows:
+        append_jsonl(ledger_path, row)
+    append_research_event(paths, "budget_reconciled", found)
+    return found
+
+
+def duplicate_risk_warnings(paths: VibePaths) -> list[dict[str, Any]]:
+    experiments = load_experiments(paths)
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for exp in experiments.values():
+        key = (exp.get("hypothesis_id", ""), exp.get("stage", ""), exp.get("design_summary", ""), exp.get("capability_id", ""))
+        grouped[key].append(exp)
+    warnings = []
+    for (hyp, stage, design, cap), rows in grouped.items():
+        failed = [row for row in rows if row.get("status") in {"failed", "blocked", "needs_analysis", "evidence_recorded"} and not row.get("failure_analysis", {}).get("changed_variable")]
+        if len(failed) >= 2:
+            warnings.append({"hypothesis_id": hyp, "stage": stage, "design_summary": design, "capability_id": cap, "count": len(failed), "reason": "same hypothesis, stage, design, and capability repeated without changed variable"})
+    return warnings
+
+
+def build_memory_pack(paths: VibePaths) -> dict[str, Any]:
+    hypotheses = load_hypotheses(paths)
+    experiments = load_experiments(paths)
+    evidence = load_evidence(paths)
+    active_h = [row for row in hypotheses.values() if row.get("status") in {"active", "needs_analysis", "blocked"}]
+    stopped_h = [row for row in hypotheses.values() if row.get("status") in {"stopped", "archived"}]
+    downscoped_h = [row for row in hypotheses.values() if row.get("status") == "downscoped"]
+    trusted_positive = [row for row in evidence.values() if row.get("trusted") and row.get("schema_valid") and row.get("failure_kind") in {"none", ""}]
+    trusted_negative = [row for row in evidence.values() if row.get("trusted") and row.get("schema_valid") and row.get("failure_kind") == "scientific"]
+    untrusted = [row for row in evidence.values() if not row.get("trusted") or not row.get("schema_valid")]
+    readiness = adapter_readiness(paths)
+    pack = {
+        "created_at": utc_now(),
+        "active_hypotheses": active_h,
+        "stopped_hypotheses": stopped_h,
+        "downscoped_hypotheses": downscoped_h,
+        "current_stage_by_hypothesis": {hid: row.get("current_stage", row.get("stage", "")) for hid, row in hypotheses.items()},
+        "trusted_positive_evidence": trusted_positive,
+        "trusted_negative_evidence": trusted_negative,
+        "untrusted_or_schema_invalid_evidence": untrusted,
+        "unresolved_blockers": [row for row in read_jsonl(research_paths(paths)["questions"]) if row.get("status", "open") == "open"],
+        "active_adapter_capabilities": readiness.get("active_capabilities", []),
+        "adapter_maturity": readiness.get("maturity_level", "missing"),
+        "protected_metrics": read_yaml(paths.vibe / "policies" / "stage_gates.yaml", {}).get("protected_metrics", {}),
+        "budget_status": budget_status(paths),
+        "duplicate_risk_warnings": duplicate_risk_warnings(paths),
+        "open_questions_for_user": [row.get("question", "") for row in read_jsonl(research_paths(paths)["questions"]) if row.get("status", "open") == "open"],
+        "recently_rejected_ideas": [row for row in read_jsonl(paths.ideas / "registry.jsonl") if row.get("status") in {"rejected", "archived"}][-10:],
+        "failure_taxonomy": sorted(FAILURE_KINDS),
+        "experiment_index": experiments,
+    }
+    write_json(research_paths(paths)["memory_json"], pack)
+    write_text(research_paths(paths)["memory_md"], render_memory_markdown(pack))
+    append_research_event(paths, "memory_pack_built", {"active_hypotheses": len(active_h), "duplicate_warnings": len(pack["duplicate_risk_warnings"])})
+    return pack
+
+
+def render_memory_markdown(pack: dict[str, Any]) -> str:
+    lines = ["# Research Memory Pack", "", f"Created: `{pack['created_at']}`", ""]
+    for title, key in [
+        ("Active Hypotheses", "active_hypotheses"),
+        ("Stopped Hypotheses", "stopped_hypotheses"),
+        ("Trusted Positive Evidence", "trusted_positive_evidence"),
+        ("Trusted Negative Evidence", "trusted_negative_evidence"),
+        ("Untrusted Or Schema-Invalid Evidence", "untrusted_or_schema_invalid_evidence"),
+        ("Duplicate-Risk Warnings", "duplicate_risk_warnings"),
+        ("Open Questions", "open_questions_for_user"),
+    ]:
+        lines.extend([f"## {title}", ""])
+        values = pack.get(key, [])
+        if not values:
+            lines.append("- none")
+        else:
+            for row in values:
+                if isinstance(row, dict):
+                    ident = row.get("hypothesis_id") or row.get("evidence_id") or row.get("reason") or row.get("question") or "item"
+                    desc = row.get("title") or row.get("summary") or row.get("design_summary") or row.get("reason") or ""
+                    lines.append(f"- `{ident}` {desc}")
+                else:
+                    lines.append(f"- {row}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def active_capability_ids(paths: VibePaths) -> set[str]:
+    manifest = load_adapter_manifest(paths)
+    return {cap.id for cap in manifest.capabilities if cap.status == "active"}
+
+
+def evaluate_candidate(paths: VibePaths, candidate: dict[str, Any]) -> dict[str, Any]:
+    reasons: list[str] = []
+    hypothesis_id = candidate.get("hypothesis_id", "")
+    capability_id = candidate.get("capability_id", "")
+    decision_type = candidate.get("decision_type", "launch_gpu_gate")
+    stage = candidate.get("stage", "smoke")
+    manifest = load_adapter_manifest(paths)
+    caps = {cap.id: cap for cap in manifest.capabilities if cap.status == "active"}
+    cap = caps.get(capability_id)
+    if not cap:
+        reasons.append("blocked_missing_capability")
+    elif decision_type not in cap.supported_decisions:
+        reasons.append("blocked_missing_capability")
+    elif not cap.entrypoint.get("command") or not cap.dryrun.get("command"):
+        reasons.append("blocked_missing_script")
+    elif not (cap.metrics_schema.required or cap.metrics_schema.types):
+        reasons.append("blocked_missing_metrics_schema")
+    autonomy = read_yaml(paths.vibe / "policies" / "autonomy.yaml", {}) or {}
+    level = autonomy.get("level", "analysis_only")
+    if level in {"diagnosis_only", "analysis_only"} and stage not in {"idea", "analysis"}:
+        reasons.append("blocked_autonomy_level")
+    if candidate.get("promotion"):
+        if not trusted_evidence_for_hypothesis(paths, hypothesis_id, negative=False):
+            reasons.append("blocked_no_trusted_evidence")
+    resources = candidate.get("resource_units", {})
+    budget_reasons = budget_block_reasons(paths, hypothesis_id, resources, bool(candidate.get("requires_long_run")), bool(candidate.get("confirmed")))
+    reasons.extend(budget_reasons)
+    if duplicate_candidate(paths, candidate):
+        reasons.append("blocked_repeating_experiment")
+    selected = not reasons
+    return {"candidate": candidate, "status": "selected" if selected else "blocked", "blocked_reasons": reasons, "selection_reason": candidate.get("rationale", "") or "fits active capability, budget, stage, and autonomy policies"}
+
+
+def budget_block_reasons(paths: VibePaths, hypothesis_id: str, resource_units: dict[str, Any], requires_long_run: bool, confirmed: bool) -> list[str]:
+    policy = load_budget_policy(paths)
+    status = budget_status(paths)
+    reasons: list[str] = []
+    gpu_hours = resource_gpu_hours(resource_units)
+    if gpu_hours is None and policy.get("unknown_cost_behavior", "block") == "block":
+        return ["blocked_unknown_cost"]
+    gpu_hours = gpu_hours or 0.0
+    if status["remaining_daily_jobs"] <= 0:
+        reasons.append("blocked_daily_job_cap")
+    if gpu_hours > status["remaining_daily_gpu_hours"]:
+        reasons.append("blocked_daily_gpu_hour_cap")
+    if hypothesis_id and status["per_hypothesis_gpu_hours"].get(hypothesis_id, 0.0) + gpu_hours > float(policy.get("per_hypothesis_gpu_hour_cap", 0.0) or 0.0):
+        reasons.append("blocked_per_hypothesis_budget")
+    if gpu_hours > float(policy.get("per_experiment_gpu_hour_cap", 0.0) or 0.0):
+        reasons.append("blocked_per_experiment_budget")
+    if (requires_long_run or gpu_hours >= float(policy.get("long_run_confirmation_gpu_hours", 999999.0) or 999999.0)) and not confirmed:
+        reasons.append("blocked_long_run_confirmation")
+    return reasons
+
+
+def duplicate_candidate(paths: VibePaths, candidate: dict[str, Any]) -> bool:
+    for exp in load_experiments(paths).values():
+        if exp.get("hypothesis_id") != candidate.get("hypothesis_id"):
+            continue
+        if exp.get("stage") != candidate.get("stage"):
+            continue
+        if exp.get("design_summary") != candidate.get("design_summary"):
+            continue
+        if exp.get("capability_id") != candidate.get("capability_id"):
+            continue
+        if candidate.get("changed_variable") or candidate.get("failure_analysis"):
+            return False
+        return True
+    return False
+
+
+def portfolio_plan(paths: VibePaths, candidates: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    if candidates is None:
+        candidates = default_candidates(paths)
+    evaluations = [evaluate_candidate(paths, row) for row in candidates]
+    plan = {
+        "created_at": utc_now(),
+        "selected": [row for row in evaluations if row["status"] == "selected"],
+        "blocked": [row for row in evaluations if row["status"] == "blocked"],
+        "running": [],
+        "completed": [],
+        "budget_status": budget_status(paths),
+        "adapter_capabilities": sorted(active_capability_ids(paths)),
+    }
+    write_json(research_paths(paths)["portfolio"], plan)
+    write_json(paths.dashboard / "portfolio_state.json", plan)
+    append_research_event(paths, "portfolio_planned", {"selected": len(plan["selected"]), "blocked": len(plan["blocked"])})
+    return plan
+
+
+def default_candidates(paths: VibePaths) -> list[dict[str, Any]]:
+    hypotheses = [row for row in load_hypotheses(paths).values() if row.get("status") in {"active", "needs_analysis"}]
+    caps = sorted(active_capability_ids(paths))
+    if not hypotheses or not caps:
+        return []
+    return [
+        {
+            "hypothesis_id": hypotheses[0]["hypothesis_id"],
+            "design_summary": hypotheses[0].get("next_testable_change") or hypotheses[0].get("title", "next bounded experiment"),
+            "stage": hypotheses[0].get("current_stage", "smoke"),
+            "capability_id": caps[0],
+            "decision_type": "collect_more_metrics",
+            "expected_evidence": {"kind": "schema_valid_metrics"},
+            "resource_units": {"gpu_hours": 0.0, "cpu_hours": 0.1},
+            "rationale": "default bounded diagnostic candidate",
+        }
+    ]
+
+
+def portfolio_schedule(paths: VibePaths) -> dict[str, Any]:
+    plan = read_json(research_paths(paths)["portfolio"], {}) or portfolio_plan(paths)
+    scheduled = []
+    blocked = list(plan.get("blocked", []))
+    for row in plan.get("selected", []):
+        candidate = row["candidate"]
+        experiment = create_experiment(
+            paths,
+            candidate["hypothesis_id"],
+            candidate["design_summary"],
+            stage=candidate.get("stage", "smoke"),
+            capability_id=candidate.get("capability_id", ""),
+            decision_id=candidate.get("decision_id", ""),
+            resource_plan={"resource_units": candidate.get("resource_units", {})},
+            expected_evidence=candidate.get("expected_evidence", {}),
+            success_criteria=candidate.get("success_criteria", {}),
+            failure_criteria=candidate.get("failure_criteria", {}),
+            baseline_target=candidate.get("baseline_target", ""),
+            protected_metric_constraints=candidate.get("protected_metric_constraints", {}),
+        )
+        reservation = reserve_budget(
+            paths,
+            decision_id=candidate.get("decision_id", ""),
+            experiment_id=experiment["experiment_id"],
+            hypothesis_id=candidate.get("hypothesis_id", ""),
+            resource_units=candidate.get("resource_units", {}),
+            estimated_cost=candidate.get("estimated_cost", {}),
+            requires_long_run=bool(candidate.get("requires_long_run")),
+            confirmed=bool(candidate.get("confirmed")),
+        )
+        if reservation.get("status") == "blocked":
+            experiments = load_experiments(paths)
+            experiments[experiment["experiment_id"]]["status"] = "blocked"
+            experiments[experiment["experiment_id"]]["updated_at"] = utc_now()
+            save_experiments(paths, experiments)
+            blocked.append({"candidate": candidate, "status": "blocked", "blocked_reasons": reservation.get("blocked_reasons", [])})
+            continue
+        experiments = load_experiments(paths)
+        experiments[experiment["experiment_id"]]["resource_plan"]["budget_reservation_id"] = reservation["budget_event_id"]
+        experiments[experiment["experiment_id"]]["resource_plan_id"] = reservation["budget_event_id"]
+        experiments[experiment["experiment_id"]]["updated_at"] = utc_now()
+        save_experiments(paths, experiments)
+        scheduled.append({"experiment_id": experiment["experiment_id"], "budget_reservation_id": reservation["budget_event_id"], "candidate": candidate, "reason_for_scheduling": row.get("selection_reason", "")})
+    state = {"created_at": utc_now(), "scheduled": scheduled, "blocked": blocked, "running": [], "completed": []}
+    write_json(paths.dashboard / "portfolio_state.json", state)
+    append_research_event(paths, "portfolio_scheduled", {"scheduled": len(scheduled), "blocked": len(blocked)})
+    return state
+
+
+def portfolio_audit(paths: VibePaths) -> dict[str, Any]:
+    plan = read_json(research_paths(paths)["portfolio"], {})
+    issues = []
+    for row in plan.get("selected", []):
+        candidate = row.get("candidate", {})
+        if candidate.get("capability_id") not in active_capability_ids(paths):
+            issues.append(f"{candidate.get('design_summary', '')}: selected candidate no longer has active capability")
+    result = {"ok": not issues, "issues": issues, "duplicate_risk_warnings": duplicate_risk_warnings(paths)}
+    write_json(paths.research / "portfolio_audit.json", result)
+    return result
+
+
+def policy_lint(paths: VibePaths) -> dict[str, Any]:
+    issues = []
+    for name in ["budget", "stage_gates", "autonomy"]:
+        path = paths.vibe / "policies" / f"{name}.yaml"
+        data = read_yaml(path, {})
+        if not data:
+            issues.append(f"missing or empty {path.relative_to(paths.vibe)}")
+        if data and not data.get("version"):
+            issues.append(f"{name}: missing version")
+    autonomy = read_yaml(paths.vibe / "policies" / "autonomy.yaml", {}) or {}
+    if autonomy.get("level") not in AUTONOMY_LEVELS:
+        issues.append("autonomy.level is unsupported")
+    result = {"ok": not issues, "issues": issues}
+    write_json(paths.vibe / "policies" / "lint.json", result)
+    return result
+
+
+def render_daily_memo(paths: VibePaths, *, date: str | None = None, language: str | None = None) -> dict[str, Any]:
+    ensure_dir(paths.vibe / "memos")
+    date = date or datetime.now().date().isoformat()
+    config = read_yaml(paths.research / "memo_config.yaml", {}) or {}
+    language = language or config.get("language", "zh-CN")
+    hypotheses = load_hypotheses(paths)
+    experiments = load_experiments(paths)
+    evidence = load_evidence(paths)
+    ledger = read_jsonl(research_paths(paths)["budget"])
+    decisions = read_jsonl(research_paths(paths)["decisions"])
+    today_evidence = [row for row in evidence.values() if str(row.get("created_at", "")).startswith(date)]
+    trusted = [row for row in today_evidence if row.get("trusted") and row.get("schema_valid")]
+    untrusted = [row for row in today_evidence if row not in trusted]
+    today_budget = [row for row in ledger if str(row.get("reservation_time", "")).startswith(date) or str(row.get("reconciliation_time", "")).startswith(date)]
+    data = {
+        "date": date,
+        "language": language,
+        "hypothesis_changes": [row for row in read_jsonl(research_paths(paths)["events"]) if str(row.get("created_at", "")).startswith(date) and "hypothesis" in row.get("event_type", "")],
+        "experiments": [row for row in experiments.values() if str(row.get("created_at", "")).startswith(date) or str(row.get("updated_at", "")).startswith(date)],
+        "trusted_evidence": trusted,
+        "untrusted_evidence": untrusted,
+        "budget_events": today_budget,
+        "decisions": [row for row in decisions if str(row.get("created_at", "")).startswith(date)],
+        "blockers": research_readiness(paths).get("open_questions", []) + audit_registry(paths).get("duplicate_risk_warnings", []),
+        "next_actions": suggested_next_actions(paths),
+        "active_hypothesis_count": len([row for row in hypotheses.values() if row.get("status") in {"active", "needs_analysis"}]),
+    }
+    text = render_memo_markdown(data, zh=language.startswith("zh"))
+    write_json(paths.vibe / "memos" / f"{date}.json", data)
+    write_text(paths.vibe / "memos" / f"{date}.md", text)
+    append_research_event(paths, "daily_memo_written", {"date": date, "language": language, "trusted_evidence": len(trusted)})
+    return {"path": str(paths.vibe / "memos" / f"{date}.md"), "json_path": str(paths.vibe / "memos" / f"{date}.json"), "data": data}
+
+
+def render_memo_markdown(data: dict[str, Any], *, zh: bool) -> str:
+    if zh:
+        no_progress = "今天没有可信科学进展；完成的工程动作不能等同于假设被支持。" if not data["trusted_evidence"] else ""
+        lines = [f"# 每日研究日志 {data['date']}", "", no_progress, "", "## 今天做了什么"]
+        lines.append(f"- 活跃 hypothesis 数量：{data['active_hypothesis_count']}")
+        lines.append(f"- 今日相关实验：{len(data['experiments'])}")
+        lines.extend(["", "## 可信 evidence"])
+        lines.extend([f"- `{row['evidence_id']}` {row.get('summary', '')}" for row in data["trusted_evidence"]] or ["- 无可信 evidence"])
+        lines.extend(["", "## 不可信或 schema-invalid evidence"])
+        lines.extend([f"- `{row['evidence_id']}` {row.get('failure_kind', '')}: {row.get('summary', '')}" for row in data["untrusted_evidence"]] or ["- 无"])
+        lines.extend(["", "## 预算"])
+        lines.append(f"- 今日预算事件：{len(data['budget_events'])}")
+        lines.extend(["", "## 决策、阻塞与下一步"])
+        lines.append(f"- 今日决策：{len(data['decisions'])}")
+        lines.extend([f"- blocker: {row}" for row in data["blockers"]] or ["- blocker: 无"])
+        lines.extend([f"- 下一步：{item}" for item in data["next_actions"]] or ["- 下一步：构建 memory pack 或创建 hypothesis"])
+        return "\n".join(line for line in lines if line is not None) + "\n"
+    no_progress = "No trusted scientific progress was recorded today; completed jobs are not counted as hypothesis support." if not data["trusted_evidence"] else ""
+    lines = [f"# Daily Research Memo {data['date']}", "", no_progress, "", "## Work Summary"]
+    lines.append(f"- Active hypotheses: {data['active_hypothesis_count']}")
+    lines.append(f"- Experiments touched today: {len(data['experiments'])}")
+    lines.extend(["", "## Trusted Evidence"])
+    lines.extend([f"- `{row['evidence_id']}` {row.get('summary', '')}" for row in data["trusted_evidence"]] or ["- No trusted evidence"])
+    lines.extend(["", "## Untrusted Or Schema-Invalid Evidence"])
+    lines.extend([f"- `{row['evidence_id']}` {row.get('failure_kind', '')}: {row.get('summary', '')}" for row in data["untrusted_evidence"]] or ["- None"])
+    lines.extend(["", "## Budget"])
+    lines.append(f"- Budget events today: {len(data['budget_events'])}")
+    lines.extend(["", "## Decisions, Blockers, Next Actions"])
+    lines.append(f"- Decisions today: {len(data['decisions'])}")
+    lines.extend([f"- blocker: {row}" for row in data["blockers"]] or ["- blocker: none"])
+    lines.extend([f"- next: {item}" for item in data["next_actions"]] or ["- next: build memory pack or create a hypothesis"])
+    return "\n".join(line for line in lines if line is not None) + "\n"
+
+
+def suggested_next_actions(paths: VibePaths) -> list[str]:
+    if not load_hypotheses(paths):
+        return ["vibe hypothesis create"]
+    if not (paths.research / "memory_pack.json").exists():
+        return ["vibe memory build"]
+    audit = audit_registry(paths)
+    if audit.get("duplicate_risk_warnings"):
+        return ["write failure analysis before repeating blocked designs"]
+    return ["vibe portfolio plan"]
+
+
+def export_research_dashboard(paths: VibePaths) -> dict[str, Any]:
+    registry = {
+        "hypotheses": load_hypotheses(paths),
+        "experiments": load_experiments(paths),
+        "evidence": load_evidence(paths),
+        "decisions": read_jsonl(research_paths(paths)["decisions"]),
+        "budget_ledger": read_jsonl(research_paths(paths)["budget"]),
+        "policies": {
+            "budget": read_yaml(paths.vibe / "policies" / "budget.yaml", {}),
+            "stage_gates": read_yaml(paths.vibe / "policies" / "stage_gates.yaml", {}),
+            "autonomy": read_yaml(paths.vibe / "policies" / "autonomy.yaml", {}),
+        },
+    }
+    graph = research_graph(registry)
+    portfolio = read_json(paths.dashboard / "portfolio_state.json", {}) or read_json(research_paths(paths)["portfolio"], {})
+    write_json(paths.dashboard / "research_registry.json", registry)
+    write_json(paths.dashboard / "hypothesis_graph.json", graph)
+    write_json(paths.dashboard / "portfolio_state.json", portfolio)
+    write_json(paths.dashboard / "budget_ledger.json", registry["budget_ledger"])
+    return {"registry": str(paths.dashboard / "research_registry.json"), "graph": str(paths.dashboard / "hypothesis_graph.json"), "portfolio": str(paths.dashboard / "portfolio_state.json"), "budget": str(paths.dashboard / "budget_ledger.json"), "graph_counts": {"nodes": len(graph["nodes"]), "edges": len(graph["edges"])}}
+
+
+def research_graph(registry: dict[str, Any]) -> dict[str, Any]:
+    nodes = []
+    edges = []
+    for hid, hyp in registry["hypotheses"].items():
+        nodes.append({"id": hid, "type": "hypothesis", "status": hyp.get("status"), "title": hyp.get("title", "")})
+    for exp_id, exp in registry["experiments"].items():
+        nodes.append({"id": exp_id, "type": "experiment", "status": exp.get("status"), "title": exp.get("design_summary", "")})
+        edges.append({"source": exp.get("hypothesis_id", ""), "target": exp_id, "type": "hypothesis_to_experiment"})
+        for run_id in exp.get("run_ids", []) or exp.get("linked_run_ids", []):
+            nodes.append({"id": run_id, "type": "run", "status": ""})
+            edges.append({"source": exp_id, "target": run_id, "type": "experiment_to_run"})
+    for ev_id, ev in registry["evidence"].items():
+        nodes.append({"id": ev_id, "type": "evidence", "trusted": ev.get("trusted"), "schema_valid": ev.get("schema_valid")})
+        if ev.get("run_id"):
+            edges.append({"source": ev.get("run_id"), "target": ev_id, "type": "run_to_evidence"})
+        else:
+            edges.append({"source": ev.get("experiment_id"), "target": ev_id, "type": "experiment_to_evidence"})
+    for decision in registry["decisions"]:
+        did = decision.get("decision_id", "")
+        nodes.append({"id": did, "type": "decision", "outcome": decision.get("final_outcome")})
+        if decision.get("experiment_id"):
+            edges.append({"source": decision["experiment_id"], "target": did, "type": "experiment_to_decision"})
+        elif decision.get("hypothesis_id"):
+            edges.append({"source": decision["hypothesis_id"], "target": did, "type": "hypothesis_to_decision"})
+    return {"nodes": dedupe_nodes(nodes), "edges": [edge for edge in edges if edge.get("source") and edge.get("target")]}
+
+
+def dedupe_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen = {}
+    for node in nodes:
+        seen.setdefault(node["id"], node)
+    return list(seen.values())
+
+
+def collect_run_evidence_if_research_linked(paths: VibePaths, run_id: str, metrics: dict[str, Any]) -> None:
+    state = read_json(paths.state / "state.json", {})
+    run = state.get("runs", {}).get(run_id, {})
+    metadata = run.get("research_metadata", {}) if isinstance(run.get("research_metadata"), dict) else {}
+    experiment_id = metadata.get("experiment_id", "")
+    if not experiment_id:
+        return
+    add_evidence(
+        paths,
+        experiment_id,
+        run_id=run_id,
+        trusted=bool(metrics.get("trusted")),
+        schema_valid=metrics.get("schema_status") == "valid",
+        metrics_schema_version=run.get("adapter_metadata", {}).get("metrics_schema_version", ""),
+        metrics_file=metrics.get("metrics_file_path", ""),
+        summary=f"Collected run {run_id}: trust={metrics.get('trust_status')}, schema={metrics.get('schema_status')}",
+        metric_deltas={"primary": metrics.get("primary_metric", 0)},
+        failure_kind="none" if metrics.get("trusted") and metrics.get("schema_status") == "valid" else ("schema" if metrics.get("schema_status") != "valid" else "engineering"),
+    )

@@ -13,6 +13,7 @@ from .ideas import read_ideas
 from .io import ensure_dir, read_json, read_jsonl, write_text
 from .papers import list_papers
 from .paths import VibePaths
+from .research_manager import budget_status, load_evidence, load_experiments, load_hypotheses, research_readiness
 from .timeline import render_timeline_markdown
 
 
@@ -31,6 +32,13 @@ def dashboard_data(paths: VibePaths) -> dict[str, Any]:
         "project": load_config(paths).get("project", {}),
         "status": read_json(paths.dashboard / "status.json", {}),
         "adapter_readiness": adapter_readiness(paths),
+        "research_readiness": research_readiness(paths),
+        "research_registry": {
+            "hypotheses": load_hypotheses(paths),
+            "experiments": load_experiments(paths),
+            "evidence": load_evidence(paths),
+            "budget": budget_status(paths),
+        },
         "state": state,
         "timeline": read_jsonl(paths.dashboard / "timeline.jsonl"),
         "timeline_markdown": render_timeline_markdown(paths),
@@ -120,6 +128,20 @@ def render_dashboard_html(data: dict[str, Any]) -> str:
         ]
     )
     blocker_rows = "".join(f"<li>{esc(item)}</li>" for item in readiness.get("next_blockers", [])[:12]) or "<li>none</li>"
+    research = data.get("research_readiness", {})
+    registry = data.get("research_registry", {})
+    research_rows = "".join(
+        f"<tr><td>{esc(key)}</td><td>{esc(value)}</td></tr>"
+        for key, value in [
+            ("ready", research.get("ready_for_bounded_autonomy", False)),
+            ("adapter ready", research.get("adapter_ready", False)),
+            ("open questions", len(research.get("open_questions", []))),
+            ("hypotheses", len(registry.get("hypotheses", {}))),
+            ("experiments", len(registry.get("experiments", {}))),
+            ("evidence", len(registry.get("evidence", {}))),
+            ("remaining gpu-hours", registry.get("budget", {}).get("remaining_daily_gpu_hours", "")),
+        ]
+    )
     artifacts = "".join(f"<li><code>{esc(path)}</code></li>" for path in data["artifacts"][:80])
     meetings = "".join(f"<li><code>{esc(path)}</code></li>" for path in data["meeting_reports"]) or "<li>No meeting reports yet.</li>"
     papers = "".join(f"<li><code>{esc(row.get('paper_id',''))}</code> {esc(row.get('title',''))}</li>" for row in data["papers"][:30]) or "<li>No papers yet.</li>"
@@ -149,6 +171,7 @@ ul {{ margin: 0; padding-left: 20px; }}
 <main>
 <section><h2>Idea Intake</h2><p>Submit a prompt with <code>vibe idea "..."</code>. Dashboard actions are read-only by default.</p></section>
 <section><h2>Adapter Readiness</h2><table><tr><th>Field</th><th>Value</th></tr>{readiness_rows}</table><h3>Next Blockers</h3><ul>{blocker_rows}</ul></section>
+<section><h2>Research Manager</h2><table><tr><th>Field</th><th>Value</th></tr>{research_rows}</table></section>
 <section><h2>Cycle Cards</h2><div class="grid">{cycle_cards}</div></section>
 <section><h2>Run Cards</h2><div class="grid">{run_cards}</div></section>
 <section><h2>Run Evidence And Adapter Metadata</h2><table><tr><th>Run</th><th>Status</th><th>Trust</th><th>Schema</th><th>Capability</th><th>Adapter Revision</th></tr>{run_meta_rows}</table></section>

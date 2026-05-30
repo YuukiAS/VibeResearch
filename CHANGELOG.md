@@ -8,6 +8,16 @@
 - Ignore root-level `TODO-v*.md` source requirement drafts to prevent future
   planning notes from being accidentally committed.
 
+## 0.8.0 - 2026-05-30
+
+- Add the bounded autonomous research manager with append-only research events, hypothesis/experiment/evidence snapshots, research decisions, and a budget ledger.
+- Add budget, stage-gate, autonomy, memo-language, policy-history, memory-pack, portfolio scheduler, and daily memo workflows.
+- Add CLI surfaces for `research`, `hypothesis`, `experiment`, `memory`, `portfolio`, `policy`, `budget`, `memo`, and `dashboard export-research`.
+- Gate portfolio scheduling on active adapter capabilities, script/schema readiness, budget caps, autonomy level, trusted evidence, protected metric checks, and duplicate-repeat detection.
+- Propagate hypothesis, experiment, policy evaluation, budget reservation, capability, adapter revision, metrics schema, and stage metadata through decisions, compiled resource plans, and generated runs.
+- Export dashboard-ready research registry, hypothesis graph, portfolio state, and budget ledger JSON without adding a web UI dependency.
+- Update README/Chinese README and focused tests for registry, scheduler, budget, promotion/stop gates, memos, and exports.
+
 ## 0.7.1 - 2026-05-30
 
 - Add adapter manifest schema, lifecycle CLI, adapter questions, lint/doctor reports, contract tests, activation provenance, and maturity/readiness gating.

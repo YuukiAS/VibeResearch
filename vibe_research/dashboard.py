@@ -9,6 +9,7 @@ from .ideas import ensure_idea_pool, read_ideas, render_idea_views
 from .io import read_json, read_jsonl, write_json, write_text
 from .paths import VibePaths
 from .portal import build_portal, write_portal_text
+from .research_manager import budget_status, load_hypotheses, research_readiness
 from .timeline import sync_timeline_files
 
 
@@ -44,6 +45,19 @@ def render_status(paths: VibePaths) -> str:
             f"{', '.join(readiness.get('draft_capabilities', [])) or 'none'} | "
             f"{', '.join(readiness.get('blocked_capabilities', [])) or 'none'} | "
             f"{len(readiness.get('missing_user_answers', []))} |",
+        ]
+    )
+    research = research_readiness(paths)
+    budget = budget_status(paths)
+    hypotheses = load_hypotheses(paths)
+    lines.extend(
+        [
+            "",
+            "## Research Manager",
+            "",
+            f"Ready for bounded autonomy: `{research.get('ready_for_bounded_autonomy', False)}`",
+            f"Active hypotheses: `{len([row for row in hypotheses.values() if row.get('status') in {'active', 'needs_analysis'}])}`",
+            f"Budget remaining today: `{budget.get('remaining_daily_gpu_hours', 0)}` GPU-hours, `{budget.get('remaining_daily_jobs', 0)}` jobs",
         ]
     )
     lines.extend(["", "## Runs", ""])
@@ -98,6 +112,12 @@ def render_todo(paths: VibePaths) -> str:
     if not readiness.get("ready_for_experiments"):
         for blocker in readiness.get("next_blockers", [])[:8]:
             lines.append(f"- [ ] adapter: {blocker}")
+    research = research_readiness(paths)
+    if not research.get("ready_for_bounded_autonomy"):
+        for question in research.get("open_questions", [])[:8]:
+            lines.append(f"- [ ] research: {question.get('question', question.get('question_id', 'open question'))}")
+        for missing in research.get("missing_files", [])[:8]:
+            lines.append(f"- [ ] research policy missing: {missing}")
     else:
         if not state.get("blocked_reason"):
             lines.append("None.")
@@ -182,6 +202,14 @@ def sync_dashboard(paths: VibePaths) -> None:
     write_text(paths.dashboard / "TODO.md", todo)
     write_portal_text(paths, "VIBE_TODO.md", todo)
     write_portal_text(paths, "VIBE_LEADERBOARD.md", leaderboard)
-    write_json(paths.dashboard / "status.json", {"runs": render_run_table(paths), "adapter_readiness": adapter_readiness(paths)})
+    write_json(
+        paths.dashboard / "status.json",
+        {
+            "runs": render_run_table(paths),
+            "adapter_readiness": adapter_readiness(paths),
+            "research_readiness": research_readiness(paths),
+            "research_budget": budget_status(paths),
+        },
+    )
     sync_timeline_files(paths)
     build_portal(paths)
