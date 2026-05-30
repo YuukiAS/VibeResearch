@@ -93,9 +93,11 @@ def render_status(paths: VibePaths) -> str:
         for item in queue["queued"]:
             lines.append(f"| `{item.get('run_id', '')}` | `{item.get('status', '')}` | {item.get('priority', '')} | {item.get('reason', '')} |")
     if active.get("active"):
-        lines.extend(["", "| Active Run | Backend | Job | Status | Log |", "|---|---|---|---|---|"])
+        lines.extend(["", "| Active Run | Backend | Job | Status | Wait Verdict | Log |", "|---|---|---|---|---|---|"])
         for item in active["active"]:
-            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('backend', '')}` | `{item.get('job_id', '')}` | `{item.get('status', '')}` | `{item.get('log_path', '')}` |")
+            details = item.get("poll_details", {}) if isinstance(item.get("poll_details"), dict) else {}
+            wait = details.get("wait_verdict", {}) if isinstance(details.get("wait_verdict"), dict) else {}
+            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('backend', '')}` | `{item.get('job_id', '')}` | `{item.get('status', '')}` | `{wait.get('verdict', '')}` | `{item.get('log_path', '')}` |")
     return "\n".join(lines) + "\n"
 
 

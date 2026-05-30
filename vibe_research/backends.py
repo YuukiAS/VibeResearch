@@ -212,10 +212,14 @@ def parse_sbatch_job_id(stdout: str) -> str:
 
 
 def slurm_wait_evidence(job_id: str, launch: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    resource = launch.get("resource_request") or {}
+    fallback_partitions = list(resource.get("fallback_partitions") or config.get("execution", {}).get("slurm", {}).get("fallback_partitions", []))
     evidence: dict[str, Any] = {
         "squeue_start_stdout": "",
         "squeue_start_stderr": "",
-        "requested_walltime": str((launch.get("resource_request") or {}).get("time", "")),
+        "requested_walltime": str(resource.get("time", "")),
+        "preferred_partition": launch.get("partition", ""),
+        "fallback_partitions": fallback_partitions,
     }
     start = subprocess.run(["squeue", "--start", "-j", job_id, "-h", "-o", "%S"], text=True, capture_output=True, check=False)
     evidence["squeue_start_stdout"] = start.stdout.strip()
@@ -228,7 +232,84 @@ def slurm_wait_evidence(job_id: str, launch: dict[str, Any], config: dict[str, A
             "estimated_start_plus_run_hours": total_hours,
             "verdict": "unknown" if total_hours is None else "within_policy" if total_hours <= max_hours else "exceeds_policy",
         }
+        evidence["wait_verdict"] = evaluate_wait_policy(launch, config, evidence["wait_policy"], fallback_partitions)
     return evidence
+
+
+def evaluate_wait_policy(launch: dict[str, Any], config: dict[str, Any], wait_policy: dict[str, Any], fallback_partitions: list[str]) -> dict[str, Any]:
+    """Return a conservative monitor-time verdict for a pending Slurm job."""
+
+    max_hours = float(wait_policy.get("max_start_plus_run_hours") or 0)
+    current_hours = wait_policy.get("estimated_start_plus_run_hours")
+    preferred = str(launch.get("partition") or "")
+    if current_hours is None:
+        return {
+            "verdict": "fallback_check_required",
+            "reason": "missing_preferred_start_estimate",
+            "preferred_partition": preferred,
+            "fallback_checked": fallback_partitions,
+        }
+    if max_hours and float(current_hours) <= max_hours:
+        return {
+            "verdict": "keep_preferred_within_window",
+            "preferred_partition": preferred,
+            "estimated_start_plus_run_hours": current_hours,
+            "max_start_plus_run_hours": max_hours,
+        }
+    fallback_evidence = fallback_completion_estimates(launch, config, fallback_partitions)
+    better = [
+        row
+        for row in fallback_evidence
+        if row.get("estimated_start_plus_run_hours") is not None
+        and float(row["estimated_start_plus_run_hours"]) < float(current_hours)
+        and (not max_hours or float(row["estimated_start_plus_run_hours"]) <= max_hours)
+    ]
+    if better:
+        best = sorted(better, key=lambda row: float(row["estimated_start_plus_run_hours"]))[0]
+        return {
+            "verdict": "fallback_better_available",
+            "preferred_partition": preferred,
+            "preferred_estimated_start_plus_run_hours": current_hours,
+            "recommended_partition": best.get("partition", ""),
+            "recommended_estimated_start_plus_run_hours": best.get("estimated_start_plus_run_hours"),
+            "fallback_checked": fallback_evidence,
+        }
+    return {
+        "verdict": "fallback_not_better_keep_preferred",
+        "preferred_partition": preferred,
+        "preferred_estimated_start_plus_run_hours": current_hours,
+        "max_start_plus_run_hours": max_hours,
+        "fallback_checked": fallback_evidence,
+        "reason": "no_fallback_with_proven_better_completion_window",
+    }
+
+
+def fallback_completion_estimates(launch: dict[str, Any], config: dict[str, Any], fallback_partitions: list[str]) -> list[dict[str, Any]]:
+    configured = config.get("execution", {}).get("slurm", {})
+    raw_estimates = {}
+    for source in [
+        configured.get("fallback_partition_estimates", {}),
+        (launch.get("resource_request") or {}).get("fallback_partition_estimates", {}),
+        launch.get("fallback_partition_estimates", {}),
+    ]:
+        if isinstance(source, dict):
+            raw_estimates.update(source)
+    profiles = {row.get("name"): row for row in configured.get("partitions", []) if isinstance(row, dict) and row.get("name")}
+    rows: list[dict[str, Any]] = []
+    for partition in fallback_partitions:
+        estimate = raw_estimates.get(partition)
+        source = "configured_estimate" if estimate is not None else ""
+        profile = profiles.get(partition, {})
+        if estimate is None:
+            estimate = profile.get("estimated_start_plus_run_hours", profile.get("expected_start_plus_run_hours"))
+            source = "partition_profile" if estimate is not None else "missing"
+        try:
+            hours = float(estimate) if estimate is not None else None
+        except (TypeError, ValueError):
+            hours = None
+            source = "invalid_estimate"
+        rows.append({"partition": partition, "estimated_start_plus_run_hours": hours, "source": source})
+    return rows
 
 
 def wait_policy_hours(launch: dict[str, Any], config: dict[str, Any]) -> float:

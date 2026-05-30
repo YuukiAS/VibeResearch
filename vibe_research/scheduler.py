@@ -265,8 +265,15 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
                     record_repair_issue(paths, job["run_id"], run, f"non_counting_execution_failure:{poll.status}", poll.details)
                 apply_failure_rules(paths, state, job["run_id"], run)
         else:
+            job["status"] = poll.status
+            job["poll_details"] = poll.details
             still_active.append(job)
             append_jsonl(paths.runs / job["run_id"] / "monitor.jsonl", {"checked_at": utc_now(), "status": poll.status, **poll.details})
+            launch_path = paths.runs / job["run_id"] / "launch.json"
+            launch = read_json(launch_path, job)
+            launch["last_poll_status"] = poll.status
+            launch["last_poll_details"] = poll.details
+            write_json(launch_path, launch)
     write_json(paths.scheduler / "active_jobs.json", {"active": still_active})
     if auto_next and not still_active and read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued"):
         submit_queue(paths, dry=False, backend_name=backend_name)

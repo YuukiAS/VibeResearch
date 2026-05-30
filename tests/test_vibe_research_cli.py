@@ -156,7 +156,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.8" in show.output
+    assert "0.8.9" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1043,6 +1043,31 @@ def test_v087_slurm_poll_records_wait_evidence(tmp_path: Path, monkeypatch):
     assert poll.details["squeue_start_stdout"] == "2099-01-01T00:00:00"
     assert poll.details["requested_walltime"] == "04:00:00"
     assert poll.details["wait_policy"]["verdict"] == "exceeds_policy"
+
+
+def test_v089_slurm_poll_records_fallback_wait_verdict(tmp_path: Path, monkeypatch):
+    def fake_run(args, **kwargs):
+        if args[:2] == ["squeue", "-j"]:
+            return subprocess.CompletedProcess(args, 0, stdout="PENDING|Priority\n", stderr="")
+        if args[:2] == ["squeue", "--start"]:
+            return subprocess.CompletedProcess(args, 0, stdout="2099-01-01T00:00:00\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    backend = SlurmBackend(
+        VibePaths(tmp_path),
+        {
+            "execution": {
+                "slurm": {
+                    "max_pending_start_plus_run_hours": 24,
+                    "fallback_partition_estimates": {"fallback": 12},
+                }
+            }
+        },
+    )
+    poll = backend.poll({"job_id": "123", "partition": "preferred", "resource_request": {"time": "04:00:00", "fallback_partitions": ["fallback"]}})
+    assert poll.details["wait_verdict"]["verdict"] == "fallback_better_available"
+    assert poll.details["wait_verdict"]["recommended_partition"] == "fallback"
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

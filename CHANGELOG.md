@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.9 - 2026-05-30
+
+- Add conservative Slurm wait-policy verdicts during monitor polling, including
+  explicit keep-preferred, fallback-check, fallback-better, and
+  fallback-not-better outcomes.
+- Persist the latest active-job poll details back into active scheduler state
+  and each run's `launch.json` so status and dashboard output can explain why a
+  pending job is still waiting.
+
 ## 0.8.8 - 2026-05-30
 
 - Compile one run per matching active adapter capability when multiple
