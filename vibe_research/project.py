@@ -421,6 +421,7 @@ def create_cycle(paths: VibePaths, *, mode: str | None = None) -> str:
     state["current_cycle_id"] = cycle_id
     state["portfolio_mode"] = selected_mode
     state["status"] = "cycle_planned"
+    state["blocked_reason"] = ""
     state["next_action"] = f"vibe review-cycle {cycle_id}"
     state["cycles"][cycle_id] = {"status": "planned", "mode": selected_mode, "created_at": utc_now()}
     state["updated_at"] = utc_now()

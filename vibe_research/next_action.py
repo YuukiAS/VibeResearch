@@ -33,8 +33,11 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
         state = read_json(paths.state / "state.json", {})
     if state.get("project_brief_missing"):
         return "add project goal/background with vibe init --goal ... --background ...", "project_brief_missing"
-    if state.get("blocked_reason") or str(state.get("status", "")).startswith("blocked_"):
-        if state.get("status") in RECOVERABLE_RESOURCE_BLOCKS and state.get("current_cycle_id"):
+    state_status = str(state.get("status", ""))
+    next_action = str(state.get("next_action", ""))
+    active_block = state_status.startswith("blocked_") or (bool(state.get("blocked_reason")) and next_action.startswith("vibe decision show"))
+    if active_block:
+        if state_status in RECOVERABLE_RESOURCE_BLOCKS and state.get("current_cycle_id"):
             return f"vibe generate-runs {state['current_cycle_id']}", ""
         return state.get("next_action") or "vibe decision show <target_id>", state.get("blocked_reason") or state.get("status", "blocked")
     if any(row.get("status") == "new" for row in read_jsonl(paths.ideas / "registry.jsonl")):

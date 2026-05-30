@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.17 - 2026-05-30
+
+- Clear stale top-level block reasons when creating a new current cycle so a
+  resolved or abandoned run-level block cannot prevent the new cycle from
+  review/generation.
+- Make `compute_next_action()` treat top-level `blocked_reason` as active only
+  when the state is blocked or the next action is an explicit decision-show
+  block.
+
 ## 0.8.16 - 2026-05-30
 
 - Preserve adapter capability `entrypoint.type` when compiling resource plans

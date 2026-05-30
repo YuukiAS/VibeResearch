@@ -89,7 +89,7 @@ def enable_train_smoke_adapter(root: Path) -> None:
                     automatic_submission_allowed=True,
                     user_confirmation_required=False,
                     allowed_backends=["slurm"],
-                    default={"gpu": 1, "cpus": 1, "mem_gb": 1, "time": "00:10:00"},
+                    default={"gpu": 1, "cpus": 1, "mem_gb": 1, "time": "00:10:00", "qos": "gpu_access"},
                 ),
                 trust_checks=["schema_valid_metrics", "expected_output_exists"],
                 contract_tests=["train-smoke"],
@@ -196,7 +196,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.16" in show.output
+    assert "0.8.17" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1079,8 +1079,29 @@ def test_synthesized_cycle_decision_uses_supported_train_decision(tmp_path: Path
     assert invoke("submit-queue", "--target", str(tmp_path), "--dry").exit_code == 0
     launch = read_json(tmp_path / ".vibe" / "runs" / run_id / "launch.json", {})
     assert launch["backend"] == "slurm"
+    sbatch = (tmp_path / ".vibe" / "runs" / run_id / "artifacts" / f"{run_id}.sbatch").read_text()
+    assert "#SBATCH --qos=gpu_access" in sbatch
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     assert state["runs"][run_id]["backend"] == "slurm"
+
+
+def test_new_cycle_clears_stale_run_block_for_next_action(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["status"] = "blocked_missing_decision"
+    state["blocked_reason"] = "old run block"
+    state["next_action"] = "vibe decision show r001_old"
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert state["blocked_reason"] == ""
+    assert state["next_action"] == "vibe review-cycle c001"
+    next_result = invoke("next", "--target", str(tmp_path))
+    assert next_result.exit_code == 0
+    assert "Blocked:" not in next_result.output
+    assert "vibe review-cycle c001" in next_result.output
 
 
 def test_v086_strict_preferred_partition_overrides_sinfo_fallback(monkeypatch):
@@ -1392,6 +1413,27 @@ def test_v0815_default_candidates_use_capability_supported_decision(tmp_path: Pa
     assert candidates
     assert candidates[0]["capability_id"] == "train_smoke_cap"
     assert candidates[0]["decision_type"] == "launch_gpu_gate"
+
+
+def test_v0817_new_cycle_clears_stale_top_level_block(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    state_path = tmp_path / ".vibe" / "state" / "state.json"
+    state = read_json(state_path, {})
+    state["status"] = "blocked_missing_decision"
+    state["blocked_reason"] = "offline fallback cannot make a structured research decision"
+    state["next_action"] = "vibe decision show r001_stale"
+    write_json(state_path, state)
+
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    state = read_json(state_path, {})
+    cycle_id = state["current_cycle_id"]
+    assert state["blocked_reason"] == ""
+    assert state["status"] == "cycle_planned"
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert f"vibe review-cycle {cycle_id}" in result.output
+    assert "offline fallback cannot make a structured research decision" not in result.output
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

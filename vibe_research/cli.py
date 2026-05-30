@@ -1004,10 +1004,8 @@ def next(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
     p = paths(target)
     p.require_initialized()
     action, computed_block = compute_next_action(p)
-    state = read_json(p.state / "state.json", {})
-    blocked = computed_block or state.get("blocked_reason", "")
-    if blocked:
-        console.print(f"[red]Blocked:[/red] {blocked}")
+    if computed_block:
+        console.print(f"[red]Blocked:[/red] {computed_block}")
     console.print(f"Next: [bold]{action}[/bold]")
 
 
