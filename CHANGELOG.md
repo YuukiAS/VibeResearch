@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.8.29 - 2026-05-30
+
+- Repair existing zero-byte cycle portfolio plans during monitor steps by
+  regenerating the deterministic plan template with current idea-pool context.
+
 ## 0.8.28 - 2026-05-30
 
 - Preserve existing deterministic artifacts when an online Codex call returns

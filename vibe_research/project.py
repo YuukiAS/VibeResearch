@@ -431,6 +431,32 @@ def create_cycle(paths: VibePaths, *, mode: str | None = None) -> str:
     return cycle_id
 
 
+def repair_empty_cycle_artifacts(paths: VibePaths) -> list[str]:
+    """Repair deterministic cycle artifacts that were left empty by a runner."""
+
+    state = read_json(paths.state / "state.json", default_state())
+    repaired: list[str] = []
+    for cycle_id, cycle in sorted(state.get("cycles", {}).items()):
+        cycle_dir = paths.cycles / cycle_id
+        plan_path = cycle_dir / "portfolio_plan.md"
+        if plan_path.exists() and plan_path.read_text().strip():
+            continue
+        ensure_dir(cycle_dir)
+        mode = cycle.get("mode") or state.get("portfolio_mode") or "exploration"
+        write_text(plan_path, portfolio_plan_template(paths, cycle_id, mode))
+        repaired.append(cycle_id)
+    if repaired:
+        record_event(
+            paths,
+            "cycle_artifact_repaired",
+            f"Repaired empty portfolio plans: {', '.join(repaired)}",
+            status="repaired",
+            payload={"cycle_ids": repaired},
+        )
+        sync_dashboard(paths)
+    return repaired
+
+
 def cycle_revised_plan_block(paths: VibePaths, state: dict[str, Any]) -> str:
     terminal = {"revised", "merged", "abandoned", "cancelled"}
     for cycle_id, cycle in state.get("cycles", {}).items():

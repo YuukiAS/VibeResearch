@@ -8,7 +8,7 @@ from .io import read_json, write_json
 from .next_action import compute_next_action
 from .papers import auto_method_search
 from .paths import VibePaths
-from .project import create_cycle, generate_runs, sync_resource_plan_from_portfolio
+from .project import create_cycle, generate_runs, repair_empty_cycle_artifacts, sync_resource_plan_from_portfolio
 from .research import literature_refresh_idea, reflect, reflect_cycle, revise_cycle, revise_plan
 from .scheduler import collect, monitor, queue_run, review_cycle, review_run, run_dryrun, submit_queue
 
@@ -63,10 +63,11 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
         submitted = submit_queue(paths, dry=dry_submit)
         return f"submitted {','.join(submitted)}"
     if command == "monitor":
+        repaired = repair_empty_cycle_artifacts(paths)
         monitor(paths)
         if not offline:
             auto_method_search(paths, offline=offline)
-        return "monitored"
+        return "monitored" + (f" repaired={','.join(repaired)}" if repaired else "")
     if command == "lit-refresh-idea":
         literature_refresh_idea(paths, target_id, offline=offline)
         return f"literature-refreshed {target_id}"

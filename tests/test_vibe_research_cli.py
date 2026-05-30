@@ -201,7 +201,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.28" in show.output
+    assert "0.8.29" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1891,6 +1891,26 @@ def test_auto_cycle_stops_after_monitor_step(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(automation, "auto_next", fake_auto_next)
     assert automation.auto_cycle(VibePaths(tmp_path), max_steps=30) == ["monitored"]
     assert calls["count"] == 1
+
+
+def test_auto_next_monitor_repairs_empty_cycle_plan(tmp_path: Path, monkeypatch):
+    from vibe_research import automation
+
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    create_idea(VibePaths(tmp_path), "online method candidate", status="actionable_next_run")
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    plan_path = tmp_path / ".vibe" / "cycles" / "c001" / "portfolio_plan.md"
+    plan_path.write_text("")
+
+    monkeypatch.setattr(automation, "compute_next_action", lambda paths: ("vibe monitor", ""))
+    monkeypatch.setattr(automation, "monitor", lambda paths: None)
+
+    result = auto_next(VibePaths(tmp_path), offline=True)
+    assert result == "monitored repaired=c001"
+    repaired = plan_path.read_text()
+    assert "## Idea pool candidates considered" in repaired
+    assert "online method candidate" in repaired
 
 
 def test_codex_runner_uses_fake_codex_and_writes_artifact(tmp_path: Path, monkeypatch):
