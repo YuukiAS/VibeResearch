@@ -70,6 +70,16 @@ If you want no generated files in the target repo root:
 vibe init --no-root-portal --goal "..." --background "..."
 ```
 
+## Codex-Assisted Onboarding
+
+If you want Codex to install and bootstrap VibeResearch for a downstream repo
+instead of following the README manually, give Codex the prompt in
+[`docs/bootstrap/CODEX_ONBOARDING_PROMPT_CN.md`](docs/bootstrap/CODEX_ONBOARDING_PROMPT_CN.md).
+That prompt tells Codex to clone from GitHub, install the framework, ask for the
+required project goal/background, run bootstrap, summarize readiness blockers,
+write your answers into the target repo's `.vibe/` files, and resume until the
+safe minimum capability is ready or explicitly blocked.
+
 ## Start A Local Mock Cycle
 
 v0.7.1 intentionally blocks placeholder experiments until adapter readiness is

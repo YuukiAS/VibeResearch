@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a Codex onboarding operator prompt so a fresh clone can be handed to
+  Codex for GitHub install, target-repo bootstrap, blocker questions, answer
+  writing, and resumable initialization without manual README-following.
 - Ignore local planning/TODO/prompt workspaces and remove concrete planning
   notes from the versioned framework surface so cloned checkouts contain only
   runnable package, docs, and tests.

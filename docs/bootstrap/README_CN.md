@@ -6,6 +6,11 @@
 
 ## 端到端 Bootstrap
 
+如果你希望直接把任务交给 Codex，而不是自己照 README 执行命令，请把
+[`CODEX_ONBOARDING_PROMPT_CN.md`](CODEX_ONBOARDING_PROMPT_CN.md) 里的提示交给
+Codex。它会负责 clone/install、初始化目标 repo、读取 readiness blocker、向你分批提问、
+写入答案并 `resume`。
+
 在目标研究仓库里先初始化 `.vibe/`，再运行可恢复的 bootstrap 编排：
 
 ```bash

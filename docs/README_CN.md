@@ -63,6 +63,15 @@ vibe next
 vibe init --no-root-portal --goal "..." --background "..."
 ```
 
+## 让 Codex 代你完成接入
+
+如果你希望后续 clone 仓库后直接对 Codex 说“安装这套框架并一步步完成初始化”，不要自己照
+README 手动执行，可以把
+[`docs/bootstrap/CODEX_ONBOARDING_PROMPT_CN.md`](bootstrap/CODEX_ONBOARDING_PROMPT_CN.md)
+里的提示交给 Codex。它会负责从 GitHub clone/install、询问目标 repo、项目目标/背景、
+budget/autonomy/metrics 等 blocker，把你的回答写入目标 repo 的 `.vibe/` 文件，并运行
+`vibe bootstrap resume`。
+
 ## 跑一个本地 Mock Cycle
 
 v0.7.1 默认会在 adapter readiness 未满足时阻止 placeholder 实验。要跑内置本地
