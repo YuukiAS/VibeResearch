@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .adapter_onboarding import adapter_readiness, bootstrap_adapter_on_init, clear_adapter_block_if_ready, set_adapter_block
 from .dashboard import sync_dashboard
 from .config import write_config_schema
 from .decisions import write_block_decision
@@ -90,7 +91,17 @@ def init_project(
     write_yaml(paths.vibe / "config.yaml", config_data)
     write_json(paths.vibe / "config.json", config_data)
     write_yaml(paths.vibe / "config.local.yaml", {"local": {"notes": "local-only overrides; not auto-merged into config.yaml"}})
-    write_text(paths.vibe / ".gitignore", "config.local.yaml\nconfig.detected.yaml\nruntime/env\n")
+    write_text(
+        paths.vibe / ".gitignore",
+        "# Local config overrides\n"
+        "config.local.yaml\n"
+        "config.detected.yaml\n\n"
+        "# Local runtime environments\n"
+        "runtime/env\n\n"
+        "# Adapter contract-test scratch output\n"
+        "bootstrap_metrics/\n"
+        "run_contracts/\n",
+    )
     write_config_schema(paths)
 
     state = default_state()
@@ -142,6 +153,7 @@ def init_project(
     write_default_prompts(paths)
     write_run_md(paths)
     write_agents_files(paths, config_data["project_name"])
+    bootstrap_adapter_on_init(paths, minimal=minimal)
     record_event(paths, "initialized", "Initialized VibeResearch control layer", status="ok")
     sync_dashboard(paths)
     if root_portal != "none":
@@ -367,6 +379,13 @@ def add_directive(paths: VibePaths, text: str) -> None:
 def create_cycle(paths: VibePaths, *, mode: str | None = None) -> str:
     paths.require_initialized()
     state = read_json(paths.state / "state.json", default_state())
+    readiness = adapter_readiness(paths)
+    if not readiness.get("ready_for_experiments"):
+        reason = "adapter readiness is incomplete; run vibe adapter doctor and activate instrumentation capability"
+        set_adapter_block(paths, reason)
+        raise RuntimeError(reason)
+    clear_adapter_block_if_ready(paths)
+    state = read_json(paths.state / "state.json", default_state())
     block = cycle_revised_plan_block(paths, state)
     if block:
         raise RuntimeError(block)
@@ -557,6 +576,7 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
                         "outputs": spec.get("outputs", {}),
                         "evaluation": spec.get("evaluation", {}),
                         "success_criteria": spec.get("success_criteria", {}),
+                        "adapter_metadata": spec.get("adapter_metadata", {}),
                     }
                 )
     if not specs:
@@ -591,6 +611,7 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
             outputs=spec["outputs"],
             evaluation=spec["evaluation"],
             success_criteria=spec["success_criteria"],
+            adapter_metadata=spec["adapter_metadata"],
         )
         run_dir = paths.runs / run_id
         ensure_dir(run_dir / "artifacts")

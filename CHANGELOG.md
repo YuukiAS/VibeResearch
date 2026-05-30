@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.7.1 - 2026-05-30
+
+- Add adapter manifest schema, lifecycle CLI, adapter questions, lint/doctor reports, contract tests, activation provenance, and maturity/readiness gating.
+- Bootstrap downstream execution wrappers and script plans during normal init, while keeping generated wrappers draft/untrusted until activation.
+- Require active contract-tested capabilities for planner compilation, including new adapter block states and adapter metadata on compiled plans/runs.
+- Surface adapter readiness, blockers, contract status, and adapter metadata in Markdown/static dashboard output.
+- Update docs and regression tests for adapter onboarding, direct-YAML bypass prevention, readiness gating, and config/toy adapter compatibility.
+
 ## 0.7.0 - 2026-05-30
 
 - Add structured run/cycle decision contracts, validation CLI, and block decisions for missing adapters or repeating evidence.

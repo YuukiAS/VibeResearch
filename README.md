@@ -72,9 +72,15 @@ vibe init --no-root-portal --goal "..." --background "..."
 
 ## Start A Local Mock Cycle
 
-v0.7.0 intentionally blocks placeholder experiments. To run a local mock cycle,
-use the bundled `toy` adapter so a structured decision can compile into a real
-resource plan:
+v0.7.1 intentionally blocks placeholder experiments until adapter readiness is
+met. To run the packaged local smoke workflow, use:
+
+```bash
+vibe dogfood
+```
+
+For tests and local development, the bundled generic `toy` adapter can compile a
+structured decision into a real resource plan:
 
 ```yaml
 # .vibe/config.local.yaml
@@ -105,12 +111,6 @@ vibe decision write c001 --type launch_gpu_gate --action "compile next toy adapt
 vibe revise-cycle c001 --offline
 ```
 
-Or run the packaged smoke workflow:
-
-```bash
-vibe dogfood
-```
-
 ## What Gets Created
 
 ```text
@@ -119,6 +119,15 @@ vibe dogfood
   config.yaml
   config.schema.json
   config.local.yaml
+  adapter.yaml
+  adapter_questions.yaml
+  research_brief.md
+  discovery_report.md
+  script_bootstrap_plan.md
+  scripts/
+  contract_tests/
+  run_contracts/
+  adapter_history.jsonl
   state/
   cycles/
   runs/
@@ -148,18 +157,73 @@ vibe init --install-agents-snippet --goal "..." --background "..."
 ## Core Workflow
 
 1. Capture context: `vibe init --goal ... --background ...`
-2. Capture ideas: `vibe idea "..."`, `vibe ideas triage`
-3. Plan a portfolio: `vibe plan-cycle`
-4. Review the portfolio: `vibe review-cycle c001`
-5. Write or obtain a structured cycle decision: `.vibe/cycles/c001/cycle_decision.json`
-6. Compile it through a project adapter: `vibe compile-decision c001`
-7. Generate runs only from the compiled plan: `vibe generate-runs c001`
-8. Review and patch each run: `vibe review`, `vibe patch`
-9. Dry-run and queue: `vibe dryrun`, `vibe queue`
-10. Submit and monitor: `vibe submit-queue`, `vibe monitor`
-11. Collect schema-valid metrics: `vibe collect --metrics-file ...`
-12. Reflect and revise: `vibe reflect`, `vibe revise-plan`, `vibe revise-cycle`
-13. Build dashboard and meeting report: `vibe dashboard build`, `vibe export-meeting`
+2. Bring the adapter to readiness: `vibe adapter doctor`
+3. Capture ideas: `vibe idea "..."`, `vibe ideas triage`
+4. Plan a portfolio: `vibe plan-cycle`
+5. Review the portfolio: `vibe review-cycle c001`
+6. Write or obtain a structured cycle decision: `.vibe/cycles/c001/cycle_decision.json`
+7. Compile it through a project adapter: `vibe compile-decision c001`
+8. Generate runs only from the compiled plan: `vibe generate-runs c001`
+9. Review and patch each run: `vibe review`, `vibe patch`
+10. Dry-run and queue: `vibe dryrun`, `vibe queue`
+11. Submit and monitor: `vibe submit-queue`, `vibe monitor`
+12. Collect schema-valid metrics: `vibe collect --metrics-file ...`
+13. Reflect and revise: `vibe reflect`, `vibe revise-plan`, `vibe revise-cycle`
+14. Build dashboard and meeting report: `vibe dashboard build`, `vibe export-meeting`
+
+## Adapter Onboarding
+
+v0.7.1 turns the project adapter into an explicit capability contract. The
+adapter says what VibeResearch is allowed to do; execution scripts are thin
+repo-owned wrappers that implement those capabilities. VibeResearch does not
+store project-specific training, evaluation, or submission logic in the main
+framework.
+
+Normal `vibe init` creates a partial adapter and script bootstrap surface:
+
+```bash
+vibe adapter discover
+vibe adapter draft
+vibe adapter ask
+vibe script bootstrap --plan
+vibe adapter lint
+vibe adapter doctor
+```
+
+Only `active` capabilities can be selected by the planner. `candidate`, `draft`,
+`blocked_missing_script`, `blocked_missing_metrics_schema`, and
+`blocked_missing_user_answer` capabilities are visible in the dashboard but are
+not executable. A capability becomes active only after:
+
+```bash
+vibe adapter contract-test metrics_export
+vibe adapter activate metrics_export --confirm "reviewed by project owner"
+```
+
+Generated wrappers in `.vibe/scripts/` are draft/untrusted. They include
+provenance headers and must be replaced or reviewed by the downstream repo
+before activation. Establish evaluation or metrics-export capabilities before
+training automation; GPU and long-run capabilities remain blocked unless the
+adapter resource policy explicitly allows them.
+
+The static dashboard and Markdown mirrors show adapter maturity, active/draft
+and blocked capabilities, missing scripts, missing metrics schemas, unanswered
+questions, lint status, contract-test status, adapter revision, and adapter
+metadata on compiled runs.
+
+Migrating a v0.7.0 project:
+
+```bash
+vibe adapter init
+vibe adapter discover
+vibe adapter draft
+vibe adapter doctor
+```
+
+Move any real `.vibe/adapter.yaml` `task:` command into a capability with
+`dryrun`, `entrypoint`, `metrics_schema`, `artifact_rules`, `resources`,
+`trust_checks`, and `contract_tests`. Placeholder commands remain blocked and
+old trusted/untrusted leaderboard provenance is preserved.
 
 ## Decision-To-Execution Safety
 
@@ -220,10 +284,10 @@ cycle_revised_plan.md / revised_plan.md
   -> trusted metrics only after schema + provenance checks
 ```
 
-By default, the adapter is `noop`; it blocks with
-`blocked_missing_adapter` instead of generating fake CPU/GPU placeholder work.
-Use `adapter.kind: config` with `.vibe/adapter.yaml` for a real downstream repo,
-or `adapter.kind: toy` for local smoke tests. The new commands are:
+By default, the adapter is `config` and reads `.vibe/adapter.yaml`. It blocks
+with adapter readiness and missing-capability statuses instead of generating
+fake CPU/GPU placeholder work. Use `adapter.kind: toy` only for local smoke
+tests. Useful commands include:
 
 ```bash
 vibe validate-decision c001
@@ -234,24 +298,38 @@ vibe compile-decision c001
 vibe validate-resource-plan c001
 ```
 
-Minimal `.vibe/adapter.yaml` shape for `adapter.kind: config`:
+Minimal active capability shape for `adapter.kind: config`:
 
 ```yaml
-task:
-  key: gpu-gate
-  direction_id: d001_candidate
-  hypothesis: Run the project-specific GPU gate.
-  dryrun_command: python scripts/smoke.py
-  entrypoint_command: python scripts/train.py --config configs/gate.yaml
-  expected_output_path: outputs/gate/metrics.json
-  metrics_file_path: outputs/gate/metrics.json
-  metrics_schema:
-    primary: number
-  resources:
-    gpu: 1
-    cpus: 8
-    mem_gb: 32
-    time: "04:00:00"
+capabilities:
+  - id: metrics_export
+    version: v1
+    status: active
+    task_type: metrics_export
+    supported_decisions: [collect_more_metrics]
+    dryrun:
+      command: python .vibe/scripts/metrics_export.py --dryrun
+    entrypoint:
+      type: local
+      command: python .vibe/scripts/metrics_export.py --smoke
+    outputs:
+      expected_output_path: .vibe/bootstrap_metrics/metrics_export.json
+      metrics_file_path: .vibe/bootstrap_metrics/metrics_export.json
+    metrics_schema:
+      required: [primary]
+      types:
+        primary: number
+      version: v1
+    artifact_rules:
+      expected_outputs: [.vibe/bootstrap_metrics/metrics_export.json]
+      version: v1
+    resources:
+      automatic_submission_allowed: false
+      default: {gpu: 0, cpus: 1, mem_gb: 1, time: "00:05:00"}
+    trust_checks: [schema_valid_metrics, expected_output_exists]
+    contract_tests: [metrics_export]
+    activation:
+      contract_status: passed
 ```
 
 Repeated evidence-only loops and missing/default metrics are marked untrusted or

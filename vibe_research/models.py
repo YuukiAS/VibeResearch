@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.7.0"
+    vibe_version: str = "0.7.1"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -122,9 +122,11 @@ class ProjectConfig(BaseModel):
     )
     adapter: dict[str, Any] = Field(
         default_factory=lambda: {
-            "kind": "noop",
+            "kind": "config",
             "config_path": ".vibe/adapter.yaml",
             "require_for_experiments": True,
+            "script_dir": ".vibe/scripts",
+            "max_autonomy": "adapter_ready",
         }
     )
     loop_guard: dict[str, Any] = Field(
@@ -205,6 +207,7 @@ class RunManifest(BaseModel):
     outputs: dict[str, Any] = Field(default_factory=dict)
     evaluation: dict[str, Any] = Field(default_factory=dict)
     success_criteria: dict[str, Any] = Field(default_factory=dict)
+    adapter_metadata: dict[str, Any] = Field(default_factory=dict)
     provenance_required: dict[str, bool] = Field(
         default_factory=lambda: {
             "git_diff": True,

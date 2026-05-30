@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_config
+from .adapter_onboarding import adapter_readiness
 from .ideas import read_ideas
 from .io import ensure_dir, read_json, read_jsonl, write_text
 from .papers import list_papers
@@ -29,6 +30,7 @@ def dashboard_data(paths: VibePaths) -> dict[str, Any]:
     return {
         "project": load_config(paths).get("project", {}),
         "status": read_json(paths.dashboard / "status.json", {}),
+        "adapter_readiness": adapter_readiness(paths),
         "state": state,
         "timeline": read_jsonl(paths.dashboard / "timeline.jsonl"),
         "timeline_markdown": render_timeline_markdown(paths),
@@ -81,6 +83,10 @@ def render_dashboard_html(data: dict[str, Any]) -> str:
     deep_candidates = [row for row in ideas if row.get("status") == "needs_deep_research"]
     cycle_cards = "".join(card(row["id"], row["artifacts"].keys()) for row in data["cycles"]) or "<p>No cycles yet.</p>"
     run_cards = "".join(card(row["id"], row["artifacts"].keys()) for row in data["runs"]) or "<p>No runs yet.</p>"
+    run_meta_rows = "".join(
+        f"<tr><td><code>{esc(row.get('run_id',''))}</code></td><td>{esc(row.get('status',''))}</td><td>{esc(row.get('trust_status',''))}</td><td>{esc(row.get('schema_status',''))}</td><td>{esc((row.get('adapter_metadata') or {}).get('capability_id',''))}</td><td>{esc((row.get('adapter_metadata') or {}).get('adapter_revision',''))}</td></tr>"
+        for row in data.get("status", {}).get("runs", [])
+    ) or "<tr><td colspan='6'>No run metadata yet.</td></tr>"
     idea_rows = "".join(
         f"<tr><td><code>{esc(row.get('idea_id',''))}</code></td><td>{esc(row.get('status',''))}</td><td>{esc(row.get('priority',''))}</td><td>{esc(row.get('confidence',''))}</td><td>{esc(row.get('next_action',''))}</td><td>{esc(row.get('raw_text',''))}</td></tr>"
         for row in ideas
@@ -97,6 +103,23 @@ def render_dashboard_html(data: dict[str, Any]) -> str:
         for row in data["decisions"][-20:]
     ) or "<tr><td colspan='4'>No decisions yet.</td></tr>"
     timeline = "".join(f"<li><time>{esc(row.get('created_at',''))}</time> <strong>{esc(row.get('event',''))}</strong> {esc(row.get('summary',''))}</li>" for row in data["timeline"][-30:])
+    readiness = data.get("adapter_readiness", {})
+    readiness_rows = "".join(
+        f"<tr><td>{esc(key)}</td><td>{esc(value)}</td></tr>"
+        for key, value in [
+            ("maturity", readiness.get("maturity_level", "missing")),
+            ("revision", readiness.get("adapter_revision", "")),
+            ("ready", readiness.get("ready_for_experiments", False)),
+            ("active", ", ".join(readiness.get("active_capabilities", [])) or "none"),
+            ("draft", ", ".join(readiness.get("draft_capabilities", [])) or "none"),
+            ("blocked", ", ".join(readiness.get("blocked_capabilities", [])) or "none"),
+            ("missing scripts", ", ".join(readiness.get("missing_scripts", [])) or "none"),
+            ("missing metrics", ", ".join(readiness.get("missing_metrics_schemas", [])) or "none"),
+            ("missing answers", len(readiness.get("missing_user_answers", []))),
+            ("last lint", readiness.get("last_lint_status", "not_run")),
+        ]
+    )
+    blocker_rows = "".join(f"<li>{esc(item)}</li>" for item in readiness.get("next_blockers", [])[:12]) or "<li>none</li>"
     artifacts = "".join(f"<li><code>{esc(path)}</code></li>" for path in data["artifacts"][:80])
     meetings = "".join(f"<li><code>{esc(path)}</code></li>" for path in data["meeting_reports"]) or "<li>No meeting reports yet.</li>"
     papers = "".join(f"<li><code>{esc(row.get('paper_id',''))}</code> {esc(row.get('title',''))}</li>" for row in data["papers"][:30]) or "<li>No papers yet.</li>"
@@ -125,8 +148,10 @@ ul {{ margin: 0; padding-left: 20px; }}
 <header><h1>{esc(data.get('project', {}).get('name') or data.get('project', {}).get('project_name') or 'VibeResearch')}</h1><div>Codex quota: <code>{esc(data['codex_quota'])}</code></div></header>
 <main>
 <section><h2>Idea Intake</h2><p>Submit a prompt with <code>vibe idea "..."</code>. Dashboard actions are read-only by default.</p></section>
+<section><h2>Adapter Readiness</h2><table><tr><th>Field</th><th>Value</th></tr>{readiness_rows}</table><h3>Next Blockers</h3><ul>{blocker_rows}</ul></section>
 <section><h2>Cycle Cards</h2><div class="grid">{cycle_cards}</div></section>
 <section><h2>Run Cards</h2><div class="grid">{run_cards}</div></section>
+<section><h2>Run Evidence And Adapter Metadata</h2><table><tr><th>Run</th><th>Status</th><th>Trust</th><th>Schema</th><th>Capability</th><th>Adapter Revision</th></tr>{run_meta_rows}</table></section>
 <section><h2>Direction Board</h2><pre>{esc(json.dumps(data['leaderboard']['best_by_direction'], indent=2, sort_keys=True))}</pre></section>
 <section><h2>Scheduler / Slurm Status</h2><pre>{esc(json.dumps(data['scheduler'], indent=2, sort_keys=True)[:8000])}</pre></section>
 <section><h2>Decisions</h2><table><tr><th>Target</th><th>Decision</th><th>Confidence</th><th>Rationale</th></tr>{decision_rows}</table></section>

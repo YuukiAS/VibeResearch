@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ..adapter_schema import AdapterCapability, hash_dict, load_adapter_manifest
 from ..config import load_config
-from ..io import read_yaml
+from ..io import read_json, read_yaml
 from ..paths import VibePaths
 
 
@@ -58,7 +59,12 @@ class ConfigAdapter(BaseAdapter):
         self.adapter_config = read_yaml(adapter_path, {}) if adapter_path.exists() else {}
 
     def compile_decision(self, decision: Any, cycle_id: str) -> CompileResult:
+        manifest = load_adapter_manifest(self.paths)
+        if manifest.capabilities:
+            return compile_from_active_capabilities(self.paths, cycle_id, decision, manifest)
         task = (self.adapter_config or {}).get("task", {})
+        if not task:
+            return CompileResult(False, block_reason="adapter manifest has no active capability for automated experiments", block_type="blocked_missing_capability")
         if not isinstance(task, dict):
             return CompileResult(False, block_reason="adapter config is missing task declaration")
         plan = resource_plan_from_task(cycle_id, decision, task)
@@ -97,7 +103,7 @@ class ToyAdapter(BaseAdapter):
 def get_adapter(paths: VibePaths) -> BaseAdapter:
     config = load_config(paths)
     adapter_config = config.get("adapter", {}) if isinstance(config.get("adapter"), dict) else {}
-    kind = adapter_config.get("kind", "noop")
+    kind = adapter_config.get("kind", "config")
     if kind == "toy":
         return ToyAdapter(paths, adapter_config)
     if kind == "config":
@@ -128,12 +134,101 @@ def resource_plan_from_task(cycle_id: str, decision: Any, task: dict[str, Any]) 
                     "trust_rules": task.get("trust_rules", {}),
                     "baseline_comparison_target": getattr(decision, "baseline_comparison_target", "") or task.get("baseline_comparison_target", ""),
                 },
+                "adapter_metadata": task.get("adapter_metadata", {}),
                 "depends_on": list(task.get("depends_on", [])),
                 "cancel_if_failed": list(task.get("cancel_if_failed", [])),
             }
         },
         "cancel_rules": list(task.get("cancel_rules", [])),
     }
+
+
+def compile_from_active_capabilities(paths: VibePaths, cycle_id: str, decision: Any, manifest: Any) -> CompileResult:
+    matches = [
+        cap
+        for cap in manifest.capabilities
+        if getattr(cap, "status", "") == "active" and getattr(decision, "decision_type", "") in getattr(cap, "supported_decisions", [])
+    ]
+    if not matches:
+        return CompileResult(False, block_reason=f"No active adapter capability supports {getattr(decision, 'decision_type', '')}", block_type="blocked_missing_capability")
+    capability = choose_capability(matches, decision)
+    missing = capability_block_reason(paths, capability, decision)
+    if missing:
+        return CompileResult(False, block_reason=missing[1], block_type=missing[0])
+    task = task_from_capability(manifest, capability, decision)
+    plan = resource_plan_from_task(cycle_id, decision, task)
+    errors = validate_compiled_plan(plan)
+    if errors:
+        return CompileResult(False, block_reason="; ".join(errors), block_type="blocked_missing_resource_plan")
+    return CompileResult(True, plan=plan)
+
+
+def choose_capability(caps: list[AdapterCapability], decision: Any) -> AdapterCapability:
+    # Deterministic selection. Prefer explicit selected direction matches, then
+    # lower resource demand, then id for stable plans.
+    selected = getattr(decision, "selected_direction", "")
+    if selected:
+        for cap in caps:
+            if cap.id == selected or cap.task_type == selected:
+                return cap
+    return sorted(caps, key=lambda cap: (int(cap.resources.default.get("gpu", 0) or 0), cap.id))[0]
+
+
+def capability_block_reason(paths: VibePaths, capability: AdapterCapability, decision: Any) -> tuple[str, str] | None:
+    if not capability.entrypoint.get("command"):
+        return "blocked_missing_script", f"{capability.id} is missing entrypoint.command"
+    if not capability.dryrun.get("command"):
+        return "blocked_missing_script", f"{capability.id} is missing dryrun.command"
+    if not (capability.metrics_schema.required or capability.metrics_schema.types):
+        return "blocked_missing_metrics_schema", f"{capability.id} is missing metrics schema"
+    contract = read_json(paths.vibe / "contract_tests" / f"{capability.id}.json", {})
+    if contract.get("status") != "passed" or capability.activation.get("contract_status") != "passed":
+        return "blocked_contract_test_failed", f"{capability.id} has not passed contract tests"
+    decision_type = getattr(decision, "decision_type", "")
+    if decision_type == "launch_gpu_gate" and not capability.resources.automatic_submission_allowed:
+        return "blocked_resource_policy", f"{capability.id} resource policy does not allow automatic submission"
+    if decision_type == "promote_to_baseline_compare" and not getattr(decision, "baseline_comparison_target", ""):
+        return "blocked_missing_resource_plan", "baseline comparison requires baseline_comparison_target"
+    return None
+
+
+def task_from_capability(manifest: Any, capability: AdapterCapability, decision: Any) -> dict[str, Any]:
+    expected_output = capability.outputs.get("expected_output_path") or (capability.artifact_rules.expected_outputs[0] if capability.artifact_rules.expected_outputs else "")
+    metrics_file = capability.outputs.get("metrics_file_path") or expected_output
+    metadata = {
+        "adapter_revision": manifest.adapter_revision,
+        "capability_id": capability.id,
+        "capability_version": capability.version,
+        "command_template_hash": capability.activation.get("command_template_hash") or hash_dict(capability.entrypoint),
+        "metrics_schema_version": capability.metrics_schema.version,
+        "metrics_schema_hash": capability.activation.get("metrics_schema_hash") or hash_dict(capability.metrics_schema.model_dump()),
+        "artifact_rule_version": capability.artifact_rules.version,
+        "artifact_rule_hash": capability.activation.get("artifact_rule_hash") or hash_dict(capability.artifact_rules.model_dump()),
+        "contract_test_result_id": capability.activation.get("contract_test_result_id", ""),
+        "planner_selection_rationale": f"selected active capability {capability.id} for decision {getattr(decision, 'decision_type', '')}",
+    }
+    return {
+        "key": capability.id,
+        "direction_id": getattr(decision, "selected_direction", "") or capability.id,
+        "hypothesis": capability.description or getattr(decision, "required_action", "") or capability.id,
+        "expected_learning": capability.description or capability.id,
+        "dryrun_command": capability.dryrun.get("command", ""),
+        "entrypoint_command": capability.entrypoint.get("command", ""),
+        "expected_output_path": expected_output,
+        "metrics_file_path": metrics_file,
+        "metrics_schema": metrics_schema_for_plan(capability),
+        "resources": capability.resources.default,
+        "trust_rules": {"checks": capability.trust_checks, "require_metrics_schema": True, "allow_manual_metric": False},
+        "baseline_comparison_target": getattr(decision, "baseline_comparison_target", ""),
+        "adapter_metadata": metadata,
+    }
+
+
+def metrics_schema_for_plan(capability: AdapterCapability) -> dict[str, Any]:
+    if capability.metrics_schema.types:
+        return capability.metrics_schema.types
+    primary = capability.metrics_schema.primary_metric or "primary"
+    return {primary: "number"}
 
 
 def is_placeholder_command(command: str) -> bool:

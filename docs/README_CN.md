@@ -65,8 +65,15 @@ vibe init --no-root-portal --goal "..." --background "..."
 
 ## 跑一个本地 Mock Cycle
 
-v0.7.0 默认会阻止 placeholder 实验。要跑本地 mock cycle，先使用内置
-`toy` adapter，让结构化 decision 能编译成真实的 resource plan：
+v0.7.1 默认会在 adapter readiness 未满足时阻止 placeholder 实验。要跑内置本地
+smoke workflow，可以直接执行：
+
+```bash
+vibe dogfood
+```
+
+测试和本地开发也可以使用内置 generic `toy` adapter，让结构化 decision 编译成真实
+resource plan：
 
 ```yaml
 # .vibe/config.local.yaml
@@ -97,12 +104,6 @@ vibe decision write c001 --type launch_gpu_gate --action "compile next toy adapt
 vibe revise-cycle c001 --offline
 ```
 
-也可以直接运行内置 smoke workflow：
-
-```bash
-vibe dogfood
-```
-
 ## 会创建哪些文件
 
 ```text
@@ -111,6 +112,15 @@ vibe dogfood
   config.yaml
   config.schema.json
   config.local.yaml
+  adapter.yaml
+  adapter_questions.yaml
+  research_brief.md
+  discovery_report.md
+  script_bootstrap_plan.md
+  scripts/
+  contract_tests/
+  run_contracts/
+  adapter_history.jsonl
   state/
   cycles/
   runs/
@@ -138,18 +148,68 @@ vibe init --install-agents-snippet --goal "..." --background "..."
 ## 核心工作流
 
 1. 初始化项目上下文：`vibe init --goal ... --background ...`
-2. 捕获想法：`vibe idea "..."`，`vibe ideas triage`
-3. 制定 portfolio：`vibe plan-cycle`
-4. 审核 portfolio：`vibe review-cycle c001`
-5. 写入或获得结构化 cycle decision：`.vibe/cycles/c001/cycle_decision.json`
-6. 通过项目 adapter 编译：`vibe compile-decision c001`
-7. 只从已编译 resource plan 生成 runs：`vibe generate-runs c001`
-8. 审核并 patch 每个 run：`vibe review`，`vibe patch`
-9. dry-run 并入队：`vibe dryrun`，`vibe queue`
-10. 提交并监控：`vibe submit-queue`，`vibe monitor`
-11. 收集 schema-valid 指标：`vibe collect --metrics-file ...`
-12. 复盘并修订计划：`vibe reflect`，`vibe revise-plan`，`vibe revise-cycle`
-13. 构建 dashboard 和组会材料：`vibe dashboard build`，`vibe export-meeting`
+2. 先完成 adapter readiness：`vibe adapter doctor`
+3. 捕获想法：`vibe idea "..."`，`vibe ideas triage`
+4. 制定 portfolio：`vibe plan-cycle`
+5. 审核 portfolio：`vibe review-cycle c001`
+6. 写入或获得结构化 cycle decision：`.vibe/cycles/c001/cycle_decision.json`
+7. 通过项目 adapter 编译：`vibe compile-decision c001`
+8. 只从已编译 resource plan 生成 runs：`vibe generate-runs c001`
+9. 审核并 patch 每个 run：`vibe review`，`vibe patch`
+10. dry-run 并入队：`vibe dryrun`，`vibe queue`
+11. 提交并监控：`vibe submit-queue`，`vibe monitor`
+12. 收集 schema-valid 指标：`vibe collect --metrics-file ...`
+13. 复盘并修订计划：`vibe reflect`，`vibe revise-plan`，`vibe revise-cycle`
+14. 构建 dashboard 和组会材料：`vibe dashboard build`，`vibe export-meeting`
+
+## Adapter Onboarding / 接入流程
+
+v0.7.1 把 project adapter 变成明确的 capability contract。adapter 描述
+VibeResearch 允许做什么；execution scripts 是下游 repo 自己维护的薄 wrapper，
+负责真正调用项目的 train/eval/infer/submission 逻辑。VibeResearch 主框架不保存任何
+项目特定训练、评估或提交逻辑。
+
+普通 `vibe init` 会创建 partial adapter 和脚本 bootstrap surface：
+
+```bash
+vibe adapter discover
+vibe adapter draft
+vibe adapter ask
+vibe script bootstrap --plan
+vibe adapter lint
+vibe adapter doctor
+```
+
+planner 只会选择 `active` capability。`candidate`、`draft`、
+`blocked_missing_script`、`blocked_missing_metrics_schema` 和
+`blocked_missing_user_answer` 只会显示在 dashboard 中，不会被自动执行。
+capability 只有通过 contract test 后才能激活：
+
+```bash
+vibe adapter contract-test metrics_export
+vibe adapter activate metrics_export --confirm "reviewed by project owner"
+```
+
+`.vibe/scripts/` 里生成的 wrapper 默认是 draft/untrusted，带 provenance header，
+需要下游 repo 审查或替换后才能激活。应先建立 evaluation 或 metrics-export 能力，
+再建立 training automation；GPU 和 long-run capability 必须有明确 resource policy。
+
+dashboard 和 Markdown 镜像会显示 adapter maturity、active/draft/blocked capability、
+缺失脚本、缺失 metrics schema、未回答问题、lint 状态、contract-test 状态、adapter
+revision，以及 run metadata 中使用的 adapter/capability 信息。
+
+从 v0.7.0 迁移时：
+
+```bash
+vibe adapter init
+vibe adapter discover
+vibe adapter draft
+vibe adapter doctor
+```
+
+把已有真实 `task:` 命令迁移为包含 `dryrun`、`entrypoint`、`metrics_schema`、
+`artifact_rules`、`resources`、`trust_checks` 和 `contract_tests` 的 capability。
+placeholder command 会继续被阻塞，旧 leaderboard 的 trusted/untrusted provenance 不会被静默覆盖。
 
 ## Decision-To-Execution Safety
 
@@ -209,9 +269,9 @@ cycle_revised_plan.md / revised_plan.md
   -> 只有通过 schema + provenance 检查的 trusted metrics 才更新 leaderboard best
 ```
 
-默认 adapter 是 `noop`，它会以 `blocked_missing_adapter` 阻塞，而不是继续生成假的
-CPU/GPU placeholder 工作。真实下游 repo 应使用 `adapter.kind: config` 和
-`.vibe/adapter.yaml`；本地 smoke test 可以使用 `adapter.kind: toy`。
+默认 adapter 是 `config`，并读取 `.vibe/adapter.yaml`。如果 readiness 或 active
+capability 不足，它会以明确的 adapter blocker 停止，而不是继续生成假的 CPU/GPU
+placeholder 工作。本地 smoke test 可以使用 `adapter.kind: toy`。
 
 ```bash
 vibe validate-decision c001
@@ -222,24 +282,38 @@ vibe compile-decision c001
 vibe validate-resource-plan c001
 ```
 
-`adapter.kind: config` 对应的最小 `.vibe/adapter.yaml` 示例：
+`adapter.kind: config` 对应的最小 active capability 示例：
 
 ```yaml
-task:
-  key: gpu-gate
-  direction_id: d001_candidate
-  hypothesis: Run the project-specific GPU gate.
-  dryrun_command: python scripts/smoke.py
-  entrypoint_command: python scripts/train.py --config configs/gate.yaml
-  expected_output_path: outputs/gate/metrics.json
-  metrics_file_path: outputs/gate/metrics.json
-  metrics_schema:
-    primary: number
-  resources:
-    gpu: 1
-    cpus: 8
-    mem_gb: 32
-    time: "04:00:00"
+capabilities:
+  - id: metrics_export
+    version: v1
+    status: active
+    task_type: metrics_export
+    supported_decisions: [collect_more_metrics]
+    dryrun:
+      command: python .vibe/scripts/metrics_export.py --dryrun
+    entrypoint:
+      type: local
+      command: python .vibe/scripts/metrics_export.py --smoke
+    outputs:
+      expected_output_path: .vibe/bootstrap_metrics/metrics_export.json
+      metrics_file_path: .vibe/bootstrap_metrics/metrics_export.json
+    metrics_schema:
+      required: [primary]
+      types:
+        primary: number
+      version: v1
+    artifact_rules:
+      expected_outputs: [.vibe/bootstrap_metrics/metrics_export.json]
+      version: v1
+    resources:
+      automatic_submission_allowed: false
+      default: {gpu: 0, cpus: 1, mem_gb: 1, time: "00:05:00"}
+    trust_checks: [schema_valid_metrics, expected_output_exists]
+    contract_tests: [metrics_export]
+    activation:
+      contract_status: passed
 ```
 
 重复 evidence-only 循环、缺失指标和默认 0.0 指标会被标记为 untrusted 或 blocked，不再更新

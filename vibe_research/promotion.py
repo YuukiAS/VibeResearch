@@ -26,7 +26,17 @@ def compile_decision(paths: VibePaths, cycle_id: str) -> tuple[bool, str]:
     adapter = get_adapter(paths)
     result = adapter.compile_decision(decision, cycle_id)
     if not result.ok or not result.plan:
-        block_type = result.block_type if result.block_type in {"blocked_missing_adapter", "blocked_missing_resource_plan"} else "blocked_missing_resource_plan"
+        allowed_blocks = {
+            "blocked_missing_adapter",
+            "blocked_missing_resource_plan",
+            "blocked_missing_capability",
+            "blocked_missing_script",
+            "blocked_missing_metrics_schema",
+            "blocked_missing_user_answer",
+            "blocked_contract_test_failed",
+            "blocked_resource_policy",
+        }
+        block_type = result.block_type if result.block_type in allowed_blocks else "blocked_missing_resource_plan"
         write_block_decision(paths, cycle_id, result.block_reason or "compiler failed", decision_type=block_type)
         record_event(paths, "resource_plan_blocked", f"{cycle_id}: {result.block_reason}", cycle_id=cycle_id, status=block_type)
         return False, result.block_reason

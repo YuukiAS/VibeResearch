@@ -22,6 +22,12 @@ DecisionType = Literal[
     "ask_user",
     "blocked_missing_decision",
     "blocked_missing_adapter",
+    "blocked_missing_capability",
+    "blocked_missing_script",
+    "blocked_missing_metrics_schema",
+    "blocked_missing_user_answer",
+    "blocked_contract_test_failed",
+    "blocked_resource_policy",
     "blocked_missing_resource_plan",
     "blocked_repeating_evidence",
 ]
@@ -32,10 +38,16 @@ Confidence = Literal["low", "medium", "high", "blocked"]
 BLOCK_DECISIONS = {
     "blocked_missing_decision",
     "blocked_missing_adapter",
+    "blocked_missing_capability",
+    "blocked_missing_script",
+    "blocked_missing_metrics_schema",
+    "blocked_missing_user_answer",
+    "blocked_contract_test_failed",
+    "blocked_resource_policy",
     "blocked_missing_resource_plan",
     "blocked_repeating_evidence",
 }
-EXECUTABLE_DECISIONS = {"launch_gpu_gate", "promote_to_baseline_compare"}
+EXECUTABLE_DECISIONS = {"collect_more_metrics", "launch_gpu_gate", "promote_to_baseline_compare"}
 
 
 class ResearchDecision(BaseModel):

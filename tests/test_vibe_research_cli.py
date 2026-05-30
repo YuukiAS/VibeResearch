@@ -6,6 +6,7 @@ import os
 from typer.testing import CliRunner
 
 from vibe_research.artifacts import validate_artifact
+from vibe_research.adapter_schema import AdapterCapability, AdapterManifest, ArtifactRules, MetricsSchema, ResourcePolicy, load_adapter_manifest, write_adapter_manifest
 from vibe_research.codex_adapter import run_codex
 from vibe_research.cli import app
 from vibe_research.config import detect_config
@@ -27,6 +28,33 @@ def invoke(*args: str, cwd: Path | None = None):
 
 def enable_toy_adapter(root: Path) -> None:
     (root / ".vibe" / "config.local.yaml").write_text("adapter:\n  kind: toy\n")
+    paths = VibePaths(root)
+    manifest = AdapterManifest(
+        project_id=root.name,
+        project_name=root.name,
+        open_questions=[],
+        capabilities=[
+            AdapterCapability(
+                id="toy-metrics-export",
+                version="test",
+                status="active",
+                task_type="metrics_export",
+                supported_decisions=["collect_more_metrics"],
+                description="Test-only active instrumentation capability for toy adapter readiness.",
+                dryrun={"command": "python3 -c 'import json, pathlib; p=pathlib.Path(\".vibe/toy_contract.json\"); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps({\"primary\": 1.0})+\"\\n\")'"},
+                entrypoint={"type": "local", "command": "python3 -c 'import json, pathlib; p=pathlib.Path(\".vibe/toy_contract.json\"); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps({\"primary\": 1.0})+\"\\n\")'"},
+                outputs={"expected_output_path": ".vibe/toy_contract.json", "metrics_file_path": ".vibe/toy_contract.json"},
+                metrics_schema=MetricsSchema(required=["primary"], types={"primary": "number"}, primary_metric="primary", version="test"),
+                artifact_rules=ArtifactRules(expected_outputs=[".vibe/toy_contract.json"], trusted_path_patterns=[".vibe/*.json"], version="test"),
+                resources=ResourcePolicy(automatic_submission_allowed=False, user_confirmation_required=False),
+                trust_checks=["schema_valid_metrics", "expected_output_exists"],
+                contract_tests=["toy-metrics-export"],
+                activation={"contract_status": "passed", "contract_test_result_id": "test", "command_template_hash": "test", "metrics_schema_hash": "test", "artifact_rule_hash": "test"},
+            )
+        ],
+    )
+    write_adapter_manifest(paths, manifest)
+    write_json(root / ".vibe" / "contract_tests" / "toy-metrics-export.json", {"capability_id": "toy-metrics-export", "status": "passed", "created_at": "test"})
 
 
 def compile_toy_cycle(root: Path, cycle_id: str = "c001") -> None:
@@ -115,7 +143,7 @@ def test_minimal_init_marks_missing_brief(tmp_path: Path):
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     assert state["project_brief_missing"] is True
     result = invoke("next", "--target", str(tmp_path))
-    assert "project_brief_missing" in result.output
+    assert "adapter_readiness_incomplete" in result.output
 
 
 def test_config_commands_and_schema_validation(tmp_path: Path):
@@ -124,7 +152,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.7.0" in show.output
+    assert "0.7.1" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -223,13 +251,16 @@ def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
 
 def test_v070_decision_and_compiler_contracts(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 1
+    enable_toy_adapter(tmp_path)
     assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    (tmp_path / ".vibe" / "config.local.yaml").write_text("adapter:\n  kind: config\n")
     assert invoke("decision", "write", "c001", "--type", "launch_gpu_gate", "--action", "run configured adapter task", "--target", str(tmp_path)).exit_code == 0
     assert invoke("validate-decision", "c001", "--target", str(tmp_path)).exit_code == 0
     result = invoke("compile-decision", "c001", "--target", str(tmp_path))
     assert result.exit_code == 1
     decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
-    assert decision["decision_type"] == "blocked_missing_adapter"
+    assert decision["decision_type"] == "blocked_missing_capability"
 
 
 def test_v070_valid_toy_decision_compiles_executable_resource_plan(tmp_path: Path):
@@ -245,8 +276,80 @@ def test_v070_valid_toy_decision_compiles_executable_resource_plan(tmp_path: Pat
     assert spec["evaluation"]["metrics_schema"] == {"primary": "number"}
 
 
+def test_v071_init_bootstraps_adapter_and_blocks_until_ready(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    for rel in [
+        ".vibe/adapter.yaml",
+        ".vibe/adapter_questions.yaml",
+        ".vibe/research_brief.md",
+        ".vibe/discovery_report.md",
+        ".vibe/discovery_report.json",
+        ".vibe/script_bootstrap_plan.md",
+        ".vibe/adapter_gitignore_suggestion.md",
+        ".vibe/contract_tests",
+        ".vibe/run_contracts",
+        ".vibe/adapter_history.jsonl",
+        ".vibe/scripts/environment_probe.py",
+        ".vibe/scripts/metrics_export.py",
+        ".vibe/adapter_doctor.md",
+    ]:
+        assert (tmp_path / rel).exists()
+    result = invoke("plan-cycle", "--offline", "--target", str(tmp_path))
+    assert result.exit_code == 1
+    readiness = read_json(tmp_path / ".vibe" / "dashboard" / "status.json", {})["adapter_readiness"]
+    assert readiness["ready_for_experiments"] is False
+    assert "metrics_export" in readiness["blocked_capabilities"]
+    assert "Adapter Readiness" in (tmp_path / "VIBE_STATUS.md").read_text()
+
+
+def test_v071_contract_test_and_activation_unlock_config_planner(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    manifest = load_adapter_manifest(VibePaths(tmp_path))
+    for cap in manifest.capabilities:
+        if cap.id == "metrics_export":
+            cap.status = "draft"
+            cap.supported_decisions = ["collect_more_metrics"]
+            cap.metrics_schema = MetricsSchema(required=["primary"], types={"primary": "number"}, primary_metric="primary", version="test-v1")
+            cap.artifact_rules.expected_outputs = [".vibe/bootstrap_metrics/metrics_export.json"]
+            cap.artifact_rules.trusted_path_patterns = [".vibe/bootstrap_metrics/*.json"]
+    write_adapter_manifest(VibePaths(tmp_path), manifest)
+    for question in manifest.open_questions:
+        assert invoke("adapter", "ask", "--target", str(tmp_path), "--id", question.id, "--answer", "confirmed for test", "--confirm").exit_code == 0
+    assert invoke("adapter", "contract-test", "metrics_export", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("adapter", "activate", "metrics_export", "--target", str(tmp_path), "--confirm", "test activation").exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("decision", "write", "c001", "--type", "collect_more_metrics", "--action", "collect metrics", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("compile-decision", "c001", "--target", str(tmp_path)).exit_code == 0
+    plan = read_yaml(tmp_path / ".vibe" / "cycles" / "c001" / "resource_plan.yaml", {})
+    metadata = plan["runs"]["metrics_export"]["adapter_metadata"]
+    assert metadata["capability_id"] == "metrics_export"
+    assert metadata["adapter_revision"]
+    assert metadata["metrics_schema_version"] == "test-v1"
+
+
+def test_v071_direct_yaml_active_cannot_bypass_contract_test(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    manifest = load_adapter_manifest(VibePaths(tmp_path))
+    for cap in manifest.capabilities:
+        if cap.id == "metrics_export":
+            cap.status = "active"
+            cap.supported_decisions = ["collect_more_metrics"]
+            cap.metrics_schema = MetricsSchema(required=["primary"], types={"primary": "number"})
+            cap.artifact_rules.expected_outputs = [".vibe/bootstrap_metrics/metrics_export.json"]
+            cap.trust_checks = ["schema_valid_metrics"]
+            cap.contract_tests = ["metrics_export"]
+    write_adapter_manifest(VibePaths(tmp_path), manifest)
+    result = invoke("adapter", "doctor", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    readiness = read_json(tmp_path / ".vibe" / "adapter_readiness.json", {})
+    assert readiness["ready_for_experiments"] is False
+    assert "metrics_export" in readiness["contract_failures"]
+
+
 def test_v070_config_adapter_missing_entrypoint_blocks(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     (tmp_path / ".vibe" / "config.local.yaml").write_text("adapter:\n  kind: config\n")
     (tmp_path / ".vibe" / "adapter.yaml").write_text(
         "task:\n"
@@ -262,7 +365,6 @@ def test_v070_config_adapter_missing_entrypoint_blocks(tmp_path: Path):
         "    mem_gb: 1\n"
         "    time: '00:05:00'\n"
     )
-    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("decision", "write", "c001", "--type", "launch_gpu_gate", "--action", "run config task", "--target", str(tmp_path)).exit_code == 0
     assert invoke("compile-decision", "c001", "--target", str(tmp_path)).exit_code == 1
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
@@ -272,6 +374,7 @@ def test_v070_config_adapter_missing_entrypoint_blocks(tmp_path: Path):
 
 def test_v070_existing_real_resource_plan_remains_usable(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
     assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
     write_yaml(
@@ -370,6 +473,7 @@ def test_v070_anti_loop_detects_repeated_decisions_and_zero_metrics(tmp_path: Pa
 
 def test_literature_and_deep_research_interfaces(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
     assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("lit-refresh-cycle", "c001", "--target", str(tmp_path), "--query", "segmentation topology").exit_code == 0
     assert invoke("deep-request-cycle", "c001", "route selection", "--offline", "--target", str(tmp_path)).exit_code == 0
@@ -552,6 +656,7 @@ def test_slurm_dry_backend_records_launch(tmp_path: Path):
 
 def test_blocking_deep_research_blocks_next(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
     assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("deep-request-cycle", "c001", "route selection", "--blocking", "--offline", "--target", str(tmp_path)).exit_code == 0
     result = invoke("next", "--target", str(tmp_path))
@@ -561,6 +666,7 @@ def test_blocking_deep_research_blocks_next(tmp_path: Path):
 
 def test_auto_cycle_reaches_first_submission(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
     result = invoke("auto-cycle", "--offline", "--dry-submit", "--max-steps", "12", "--target", str(tmp_path))
     assert result.exit_code == 0
     assert "planned c001" in result.output
@@ -570,6 +676,7 @@ def test_auto_cycle_reaches_first_submission(tmp_path: Path):
 
 def test_codex_runner_uses_fake_codex_and_writes_artifact(tmp_path: Path, monkeypatch):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
     assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -601,6 +708,8 @@ def test_todo_cli_commands_exist():
         "dashboard",
         "status",
         "idea",
+        "adapter",
+        "script",
         "directive",
         "vendor-runtime",
         "decision",

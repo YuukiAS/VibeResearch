@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .adapter_onboarding import adapter_readiness
 from .ideas import ensure_idea_pool, read_ideas, render_idea_views
 from .io import read_json, read_jsonl, write_json, write_text
 from .paths import VibePaths
@@ -27,17 +28,36 @@ def render_status(paths: VibePaths) -> str:
     ]
     if state.get("blocked_reason"):
         lines.append(f"Blocked: {state['blocked_reason']}")
+    readiness = adapter_readiness(paths)
+    lines.extend(
+        [
+            "",
+            "## Adapter Readiness",
+            "",
+            f"Maturity: `{readiness.get('maturity_level', 'missing')}`",
+            f"Adapter revision: `{readiness.get('adapter_revision', '')}`",
+            f"Ready for experiments: `{readiness.get('ready_for_experiments', False)}`",
+            "",
+            "| Active | Draft/Candidate | Blocked | Missing Answers |",
+            "|---|---|---|---|",
+            f"| {', '.join(readiness.get('active_capabilities', [])) or 'none'} | "
+            f"{', '.join(readiness.get('draft_capabilities', [])) or 'none'} | "
+            f"{', '.join(readiness.get('blocked_capabilities', [])) or 'none'} | "
+            f"{len(readiness.get('missing_user_answers', []))} |",
+        ]
+    )
     lines.extend(["", "## Runs", ""])
     runs = state.get("runs", {})
     if not runs:
         lines.append("No runs generated yet.")
     else:
-        lines.extend(["| Run | Direction | Status | Branch | Cost | Trust | Schema |", "|---|---|---|---|---|---|---|"])
+        lines.extend(["| Run | Direction | Status | Branch | Cost | Trust | Schema | Adapter Capability |", "|---|---|---|---|---|---|---|---|"])
         for run_id, run in sorted(runs.items()):
             metrics = read_json(paths.runs / run_id / "metrics.json", {})
+            adapter_meta = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata", {}), dict) else {}
             lines.append(
                 f"| `{run_id}` | `{run.get('direction_id', '')}` | `{run.get('status', '')}` | `{run.get('branch', '')}` | `{run.get('cost', '')}` | "
-                f"`{metrics.get('trust_status', '')}` | `{metrics.get('schema_status', '')}` |"
+                f"`{metrics.get('trust_status', '')}` | `{metrics.get('schema_status', '')}` | `{adapter_meta.get('capability_id', '')}` |"
             )
     decisions = read_jsonl(paths.state / "decisions.jsonl")
     if decisions:
@@ -74,8 +94,13 @@ def render_todo(paths: VibePaths) -> str:
     lines.extend(["", "## BLOCKED", ""])
     if state.get("blocked_reason"):
         lines.append(f"- [ ] {state['blocked_reason']}")
+    readiness = adapter_readiness(paths)
+    if not readiness.get("ready_for_experiments"):
+        for blocker in readiness.get("next_blockers", [])[:8]:
+            lines.append(f"- [ ] adapter: {blocker}")
     else:
-        lines.append("None.")
+        if not state.get("blocked_reason"):
+            lines.append("None.")
     lines.extend(["", "## Idea Intake", ""])
     lines.append('Submit a raw prompt with `vibe idea "..."`.')
     lines.extend(["", "### Recent raw inbox prompts", ""])
@@ -140,6 +165,7 @@ def render_run_table(paths: VibePaths) -> list[dict[str, Any]]:
             "branch": run.get("branch", ""),
             "trust_status": read_json(paths.runs / run_id / "metrics.json", {}).get("trust_status", ""),
             "schema_status": read_json(paths.runs / run_id / "metrics.json", {}).get("schema_status", ""),
+            "adapter_metadata": run.get("adapter_metadata", {}),
         }
         for run_id, run in sorted(state.get("runs", {}).items())
     ]
@@ -156,6 +182,6 @@ def sync_dashboard(paths: VibePaths) -> None:
     write_text(paths.dashboard / "TODO.md", todo)
     write_portal_text(paths, "VIBE_TODO.md", todo)
     write_portal_text(paths, "VIBE_LEADERBOARD.md", leaderboard)
-    write_json(paths.dashboard / "status.json", {"runs": render_run_table(paths)})
+    write_json(paths.dashboard / "status.json", {"runs": render_run_table(paths), "adapter_readiness": adapter_readiness(paths)})
     sync_timeline_files(paths)
     build_portal(paths)

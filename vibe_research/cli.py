@@ -13,6 +13,17 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from .adapter_onboarding import (
+    activate_capability,
+    adapter_discover,
+    adapter_doctor,
+    adapter_draft,
+    adapter_init,
+    adapter_lint,
+    adapter_questions,
+    run_contract_test,
+    script_bootstrap,
+)
 from .artifacts import validate_artifact, validate_hard_rules
 from .audit import current_alignment_audit
 from .automation import auto_cycle as run_auto_cycle
@@ -54,6 +65,8 @@ audit_app = typer.Typer(help="Generate alignment audit reports.")
 ideas_app = typer.Typer(help="Manage the maintained research idea pool.")
 dashboard_app = typer.Typer(help="Build and serve the read-only static dashboard.")
 decision_app = typer.Typer(help="Inspect and write structured research decisions.")
+adapter_app = typer.Typer(help="Manage adapter onboarding, readiness, and capability activation.")
+script_app = typer.Typer(help="Bootstrap downstream execution wrapper scripts.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -61,6 +74,8 @@ app.add_typer(audit_app, name="audit")
 app.add_typer(ideas_app, name="ideas")
 app.add_typer(dashboard_app, name="dashboard")
 app.add_typer(decision_app, name="decision")
+app.add_typer(adapter_app, name="adapter")
+app.add_typer(script_app, name="script")
 console = Console()
 
 
@@ -115,6 +130,118 @@ def vendor_runtime_cmd(target: Path = typer.Option(Path("."), "--target", "-t"))
 
     path = vendor_runtime(paths(target))
     console.print(f"Vendored runtime scaffold at {path}")
+
+
+@adapter_app.command("init")
+def adapter_init_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), minimal: bool = typer.Option(False, "--minimal")) -> None:
+    """Create adapter onboarding files without activating capabilities."""
+
+    p = paths(target)
+    if not p.vibe.exists():
+        init_project(target, minimal=True, root_portal="none")
+    result = adapter_init(p, minimal=minimal)
+    sync_dashboard(p)
+    console.print_json(data=result)
+
+
+@adapter_app.command("discover")
+def adapter_discover_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Scan a downstream repo for candidate scripts, metrics, configs, and risks."""
+
+    p = paths(target)
+    result = adapter_discover(p)
+    sync_dashboard(p)
+    console.print_json(data=result)
+
+
+@adapter_app.command("draft")
+def adapter_draft_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Update draft adapter capabilities and blocker questions from discovery."""
+
+    p = paths(target)
+    manifest = adapter_draft(p)
+    sync_dashboard(p)
+    console.print(f"Drafted adapter {manifest.adapter_revision}")
+
+
+@adapter_app.command("ask")
+def adapter_ask_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    question_id: Optional[str] = typer.Option(None, "--id"),
+    answer: Optional[str] = typer.Option(None, "--answer"),
+    confirm: bool = typer.Option(False, "--confirm"),
+) -> None:
+    """Show or update adapter questions."""
+
+    update = (question_id, answer) if question_id and answer is not None else None
+    p = paths(target)
+    rows = adapter_questions(p, answer=update, confirm=confirm)
+    sync_dashboard(p)
+    console.print_json(data={"questions": rows})
+
+
+@adapter_app.command("lint")
+def adapter_lint_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Lint adapter manifest and write .vibe/adapter_lint.json."""
+
+    p = paths(target)
+    result = adapter_lint(p)
+    sync_dashboard(p)
+    console.print_json(data=result)
+    if not result.get("ok"):
+        raise typer.Exit(1)
+
+
+@adapter_app.command("doctor")
+def adapter_doctor_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Write and print adapter readiness diagnostics."""
+
+    p = paths(target)
+    result = adapter_doctor(p)
+    sync_dashboard(p)
+    console.print_json(data=result)
+
+
+@adapter_app.command("contract-test")
+def adapter_contract_test_cmd(capability_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Run lightweight contract tests for one capability."""
+
+    p = paths(target)
+    result = run_contract_test(p, capability_id)
+    sync_dashboard(p)
+    console.print_json(data=result)
+    if result.get("status") != "passed":
+        raise typer.Exit(1)
+
+
+@adapter_app.command("activate")
+def adapter_activate_cmd(
+    capability_id: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    confirm: str = typer.Option("", "--confirm"),
+) -> None:
+    """Activate a linted and contract-tested capability."""
+
+    p = paths(target)
+    result = activate_capability(p, capability_id, user_confirmation=confirm)
+    adapter_lint(p)
+    adapter_doctor(p)
+    sync_dashboard(p)
+    console.print_json(data=result)
+
+
+@script_app.command("bootstrap")
+def script_bootstrap_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    plan: bool = typer.Option(False, "--plan", help="Only write the bootstrap plan; do not generate wrappers."),
+    script_dir: str = typer.Option(".vibe/scripts", "--script-dir"),
+) -> None:
+    """Write a script bootstrap plan and optional draft wrappers."""
+
+    p = paths(target)
+    path = script_bootstrap(p, generate=not plan, script_dir=script_dir)
+    sync_dashboard(p)
+    console.print(str(path))
 
 
 @app.command("validate-decision")
@@ -475,7 +602,11 @@ def plan_cycle(
     """Create a portfolio plan for the next cycle."""
 
     p = paths(target)
-    cycle_id = create_cycle(p, mode=mode)
+    try:
+        cycle_id = create_cycle(p, mode=mode)
+    except RuntimeError as exc:
+        console.print(f"[error] {exc}")
+        raise typer.Exit(1)
     result = run_codex(p, "portfolio_planner", cycle_id, offline=offline)
     issues = validate_artifact(p, "portfolio_planner", cycle_id)
     if issues:
