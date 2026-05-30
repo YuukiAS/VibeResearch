@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.13 - 2026-05-30
+
+- Bind daemon session names to a hash of the target root and make
+  `daemon start` reject an already-running session whose pane path, recorded
+  target, or captured command target points at a different checkout.
+- Report daemon target-root binding fields in `daemon status`.
+- Record launch workdirs for local and Slurm jobs, and mark Slurm active jobs
+  as `unsafe_stale` when their recorded or scheduler-reported `WorkDir` does
+  not match the current target root.
+
 ## 0.8.12 - 2026-05-30
 
 - Start tmux daemons through an explicit shell invocation

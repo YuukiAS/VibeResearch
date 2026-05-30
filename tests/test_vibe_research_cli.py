@@ -14,6 +14,7 @@ from vibe_research.adapter_schema import AdapterCapability, AdapterManifest, Art
 from vibe_research.codex_adapter import run_codex
 from vibe_research.cli import app
 from vibe_research.config import detect_config
+from vibe_research.daemon import daemon_start
 from vibe_research.decisions import make_decision, write_decision
 from vibe_research.io import read_json, read_jsonl, read_yaml, write_json, write_yaml
 from vibe_research.loop_guard import apply_loop_guard
@@ -158,7 +159,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.12" in show.output
+    assert "0.8.13" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1144,6 +1145,44 @@ def test_v0812_daemon_launches_command_through_explicit_shell(tmp_path: Path, mo
     assert "auto-cycle" in launch_args[-1]
     daemon = read_json(tmp_path / ".vibe" / "state" / "daemon.json", {})
     assert daemon["shell"] == launch_args[-3]
+
+
+def test_v0813_daemon_rejects_existing_session_bound_to_other_target(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["tmux", "has-session"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:3] == ["tmux", "display-message", "-p"] and args[-1] == "#{pane_current_path}":
+            return subprocess.CompletedProcess(args, 0, stdout="/tmp/other-target\n", stderr="")
+        if args[:3] == ["tmux", "display-message", "-p"] and args[-1] == "#{pane_current_command}":
+            return subprocess.CompletedProcess(args, 0, stdout="bash\n", stderr="")
+        if args[:2] == ["tmux", "capture-pane"]:
+            return subprocess.CompletedProcess(args, 0, stdout="vibe auto-cycle --target /tmp/other-target\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.daemon.shutil.which", lambda name: "/usr/bin/tmux" if name == "tmux" else None)
+    monkeypatch.setattr("vibe_research.daemon.subprocess.run", fake_run)
+    try:
+        daemon_start(VibePaths(tmp_path))
+    except RuntimeError as exc:
+        assert "target_mismatch" in str(exc)
+    else:
+        raise AssertionError("expected target mismatch")
+
+
+def test_v0813_slurm_poll_marks_mismatched_workdir_unsafe(tmp_path: Path, monkeypatch):
+    def fake_run(args, **kwargs):
+        if args[:3] == ["scontrol", "show", "job"]:
+            return subprocess.CompletedProcess(args, 0, stdout="JobId=123 WorkDir=/tmp/other-target\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    backend = SlurmBackend(VibePaths(tmp_path), {"execution": {"slurm": {}}})
+    poll = backend.poll({"job_id": "123", "partition": "preferred", "resource_request": {"time": "04:00:00"}, "launch_workdir": str(tmp_path)})
+    assert poll.finished is True
+    assert poll.status == "unsafe_stale"
+    assert poll.details["reason"] == "slurm_workdir_target_mismatch"
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

@@ -56,6 +56,7 @@ class LocalBackend(ExecutionBackend):
             "run_id": run_id,
             "cycle_id": manifest.get("cycle_id", ""),
             "backend": "local",
+            "launch_workdir": str(self.paths.root.resolve()),
             "launcher": launcher,
             "command": command,
             "submitted_at": utc_now(),
@@ -142,6 +143,7 @@ class SlurmBackend(ExecutionBackend):
             "run_id": run_id,
             "cycle_id": manifest.get("cycle_id", ""),
             "backend": "slurm",
+            "launch_workdir": str(self.paths.root.resolve()),
             "command": manifest["entrypoint"]["command"],
             "submitted_at": utc_now(),
             "status": "dry_submitted" if dry else "submitted",
@@ -167,6 +169,9 @@ class SlurmBackend(ExecutionBackend):
 
     def poll(self, launch: dict[str, Any]) -> PollResult:
         job_id = str(launch.get("job_id", ""))
+        workdir_check = slurm_workdir_check(job_id, launch, self.paths.root)
+        if workdir_check.get("unsafe_stale"):
+            return PollResult("unsafe_stale", True, workdir_check)
         if launch.get("status") == "dry_submitted" or job_id.startswith("slurm-dry-"):
             return PollResult("finished", True, {"dry": True})
         sq = subprocess.run(["squeue", "-j", job_id, "-h", "-o", "%T|%R"], text=True, capture_output=True, check=False)
@@ -209,6 +214,38 @@ def parse_sbatch_job_id(stdout: str) -> str:
         if token.isdigit():
             return token
     return stdout.strip().splitlines()[-1].strip() if stdout.strip() else ""
+
+
+def slurm_workdir_check(job_id: str, launch: dict[str, Any], target_root: Path) -> dict[str, Any]:
+    expected = str(target_root.resolve())
+    launch_workdir = str(launch.get("launch_workdir") or "")
+    if launch_workdir and Path(launch_workdir).resolve() != Path(expected).resolve():
+        return {
+            "unsafe_stale": True,
+            "reason": "launch_workdir_target_mismatch",
+            "expected_workdir": expected,
+            "launch_workdir": launch_workdir,
+        }
+    if not job_id or job_id.startswith("slurm-dry-"):
+        return {"expected_workdir": expected, "launch_workdir": launch_workdir}
+    result = subprocess.run(["scontrol", "show", "job", job_id], text=True, capture_output=True, check=False)
+    workdir = parse_slurm_workdir(result.stdout)
+    details = {
+        "expected_workdir": expected,
+        "launch_workdir": launch_workdir,
+        "slurm_workdir": workdir,
+        "scontrol_stderr": result.stderr.strip(),
+    }
+    if workdir and Path(workdir).resolve() != Path(expected).resolve():
+        details.update({"unsafe_stale": True, "reason": "slurm_workdir_target_mismatch"})
+    return details
+
+
+def parse_slurm_workdir(text: str) -> str:
+    for token in text.replace("\n", " ").split():
+        if token.startswith("WorkDir="):
+            return token.partition("=")[2]
+    return ""
 
 
 def slurm_wait_evidence(job_id: str, launch: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -17,21 +18,51 @@ from .paths import VibePaths
 def daemon_session(paths: VibePaths) -> str:
     config = load_config(paths)
     prefix = config.get("execution", {}).get("local", {}).get("tmux_session_prefix", "vibe")
-    return f"{prefix}-{paths.root.name}-daemon".replace("_", "-")[:80]
+    target_hash = hashlib.sha1(str(paths.root.resolve()).encode("utf-8")).hexdigest()[:8]
+    return f"{prefix}-{paths.root.name}-{target_hash}-daemon".replace("_", "-")[:80]
 
 
 def daemon_status(paths: VibePaths) -> dict[str, Any]:
     session = daemon_session(paths)
+    target_root = str(paths.root.resolve())
+    daemon_state = read_json(paths.state / "daemon.json", {})
+    recorded_target_root = str(daemon_state.get("target_root", ""))
     queue = read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued", [])
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
     completed = read_jsonl(paths.scheduler / "completed_jobs.jsonl")
     state = read_json(paths.state / "state.json", {})
     next_collect = [run_id for run_id, run in state.get("runs", {}).items() if run.get("status") in {"finished", "submitted_dry"}]
-    base = {"session": session, "queued_jobs": len(queue), "active_jobs": len(active), "completed_jobs": len(completed), "next_collection_runs": next_collect}
+    base = {
+        "session": session,
+        "target_root": target_root,
+        "recorded_target_root": recorded_target_root,
+        "queued_jobs": len(queue),
+        "active_jobs": len(active),
+        "completed_jobs": len(completed),
+        "next_collection_runs": next_collect,
+    }
     if not shutil.which("tmux"):
         return {**base, "available": False, "running": False, "reason": "tmux not found"}
     result = subprocess.run(["tmux", "has-session", "-t", session], text=True, capture_output=True, check=False)
-    return {**base, "available": True, "running": result.returncode == 0}
+    running = result.returncode == 0
+    if not running:
+        return {**base, "available": True, "running": False, "target_match": True}
+    pane_current_path = tmux_output(["tmux", "display-message", "-p", "-t", session, "#{pane_current_path}"])
+    pane_current_command = tmux_output(["tmux", "display-message", "-p", "-t", session, "#{pane_current_command}"])
+    pane_text = tmux_output(["tmux", "capture-pane", "-pt", session, "-S", "-20"])
+    command_target_root = parse_command_target(pane_text)
+    pane_match = not pane_current_path or same_path(pane_current_path, target_root)
+    recorded_match = not recorded_target_root or same_path(recorded_target_root, target_root)
+    command_match = not command_target_root or same_path(command_target_root, target_root)
+    return {
+        **base,
+        "available": True,
+        "running": True,
+        "pane_current_path": pane_current_path,
+        "pane_current_command": pane_current_command,
+        "command_target_root": command_target_root,
+        "target_match": pane_match and recorded_match and command_match,
+    }
 
 
 def daemon_start(
@@ -48,6 +79,11 @@ def daemon_start(
     if not status["available"]:
         raise RuntimeError(status["reason"])
     if status["running"]:
+        if not status.get("target_match", True):
+            raise RuntimeError(
+                "target_mismatch: existing daemon session "
+                f"{status['session']} is not bound to {paths.root.resolve()}"
+            )
         return status
     if mode not in {"auto-cycle", "monitor"}:
         raise ValueError("mode must be auto-cycle or monitor")
@@ -75,6 +111,7 @@ def daemon_start(
         paths.state / "daemon.json",
         {
             "session": status["session"],
+            "target_root": str(paths.root.resolve()),
             "started_at": utc_now(),
             "interval": interval,
             "auto_next": auto_next,
@@ -87,6 +124,26 @@ def daemon_start(
         },
     )
     return daemon_status(paths)
+
+
+def tmux_output(args: list[str]) -> str:
+    result = subprocess.run(args, text=True, capture_output=True, check=False)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def parse_command_target(text: str) -> str:
+    tokens = shlex.split(text.replace("\n", " ")) if text.strip() else []
+    for index, token in enumerate(tokens[:-1]):
+        if token == "--target":
+            return tokens[index + 1]
+    return ""
+
+
+def same_path(left: str, right: str) -> bool:
+    try:
+        return Path(left).resolve() == Path(right).resolve()
+    except Exception:
+        return left == right
 
 
 def daemon_stop(paths: VibePaths) -> dict[str, Any]:
