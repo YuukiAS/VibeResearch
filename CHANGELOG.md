@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.19 - 2026-05-30
+
+- Add explicit regression coverage for branchless adapter-backed real
+  experiment runs in dirty target worktrees, including branch-skip metadata and
+  empty patch recording.
+
 ## 0.8.18 - 2026-05-30
 
 - Add regression coverage that `submit-queue --dry` without an explicit backend

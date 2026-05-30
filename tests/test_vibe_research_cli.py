@@ -20,7 +20,7 @@ from vibe_research.io import read_json, read_jsonl, read_yaml, write_json, write
 from vibe_research.loop_guard import apply_loop_guard
 from vibe_research.paths import VibePaths
 from vibe_research.portal import GENERATED_NOTICE
-from vibe_research.promotion import compile_decision, ensure_executable_resource_plan
+from vibe_research.promotion import compile_decision, ensure_executable_resource_plan, synthesize_cycle_decision
 from vibe_research.research_manager import default_candidates
 from vibe_research.scheduler import collect as collect_run
 from vibe_research.backends import SlurmBackend
@@ -196,7 +196,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.18" in show.output
+    assert "0.8.19" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1073,6 +1073,8 @@ def test_synthesized_cycle_decision_uses_supported_train_decision(tmp_path: Path
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     assert state["runs"][run_id]["status"] == "patched"
     assert state["next_action"] == f"vibe dryrun {run_id}"
+    assert "branch_skipped=adapter_backed_run" in (tmp_path / ".vibe" / "runs" / run_id / "branch.txt").read_text()
+    assert (tmp_path / ".vibe" / "runs" / run_id / "patch.diff").read_text() == ""
 
     assert invoke("dryrun", run_id, "--target", str(tmp_path)).exit_code == 0
     assert invoke("queue", run_id, "--target", str(tmp_path)).exit_code == 0
@@ -1102,6 +1104,32 @@ def test_new_cycle_clears_stale_run_block_for_next_action(tmp_path: Path):
     assert next_result.exit_code == 0
     assert "Blocked:" not in next_result.output
     assert "vibe review-cycle c001" in next_result.output
+
+
+def test_synthesized_cycle_decision_rotates_less_used_capability(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    paths = VibePaths(tmp_path)
+    manifest = load_adapter_manifest(paths)
+    second = manifest.capabilities[0].model_copy(deep=True)
+    second.id = "train-smoke-b"
+    second.description = "Second train smoke capability."
+    second.outputs["expected_output_path"] = ".vibe/train_metrics_b.json"
+    second.outputs["metrics_file_path"] = ".vibe/train_metrics_b.json"
+    second.artifact_rules.expected_outputs = [".vibe/train_metrics_b.json"]
+    second.contract_tests = ["train-smoke-b"]
+    manifest.capabilities.append(second)
+    write_adapter_manifest(paths, manifest)
+    write_json(tmp_path / ".vibe" / "contract_tests" / "train-smoke-b.json", {"capability_id": "train-smoke-b", "status": "passed", "created_at": "test"})
+
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
+    first = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
+    assert first["selected_direction"] == "train-smoke"
+
+    second_decision = synthesize_cycle_decision(paths, "c002")
+    assert second_decision.selected_direction == "train-smoke-b"
 
 
 def test_v086_strict_preferred_partition_overrides_sinfo_fallback(monkeypatch):
