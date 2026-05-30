@@ -83,6 +83,10 @@ REVISED_DECISIONS = {
     "stop_branch",
     "merge_candidate",
     "ask_user",
+    "blocked_missing_decision",
+    "blocked_missing_adapter",
+    "blocked_missing_resource_plan",
+    "blocked_repeating_evidence",
 }
 
 
@@ -140,6 +144,8 @@ def validate_hard_rules(paths: VibePaths) -> list[ArtifactIssue]:
             for name in ["cycle_reflect.md", "cycle_revised_plan.md"]:
                 if not has_text(cycle_dir / name):
                     issues.append(ArtifactIssue("error", f"{cycle_id} missing {name}"))
+        if state.get("cycles", {}).get(cycle_id, {}).get("status") in {"revised", "blocked"} and not has_text(cycle_dir / "cycle_decision.json"):
+            issues.append(ArtifactIssue("error", f"{cycle_id} missing cycle_decision.json"))
     for run_id, run in state.get("runs", {}).items():
         run_dir = paths.runs / run_id
         for name in ["proposal.md", "review.md", "manifest.json", "patch.diff", "branch.txt"]:
@@ -151,6 +157,8 @@ def validate_hard_rules(paths: VibePaths) -> list[ArtifactIssue]:
             issues.append(ArtifactIssue("error", f"{run_id} missing reflect.md"))
         if run.get("status") in {"revised", "merged"} and not has_text(run_dir / "revised_plan.md"):
             issues.append(ArtifactIssue("error", f"{run_id} missing revised_plan.md"))
+        if run.get("status") in {"revised", "blocked", "merged"} and not has_text(run_dir / "decision.json"):
+            issues.append(ArtifactIssue("error", f"{run_id} missing decision.json"))
         if run.get("status") == "merged" and run.get("merge_review") != "MERGE_OK":
             issues.append(ArtifactIssue("error", f"{run_id} merged without MERGE_OK"))
         launch = read_json(run_dir / "launch.json", {})

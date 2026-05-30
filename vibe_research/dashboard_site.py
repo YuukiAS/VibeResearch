@@ -32,6 +32,7 @@ def dashboard_data(paths: VibePaths) -> dict[str, Any]:
         "state": state,
         "timeline": read_jsonl(paths.dashboard / "timeline.jsonl"),
         "timeline_markdown": render_timeline_markdown(paths),
+        "decisions": read_jsonl(paths.state / "decisions.jsonl"),
         "leaderboard": {
             "best": read_json(paths.leaderboard / "best.json", {}),
             "best_by_direction": read_json(paths.leaderboard / "best_by_direction.json", {}),
@@ -88,9 +89,13 @@ def render_dashboard_html(data: dict[str, Any]) -> str:
         f"<li><code>{esc(row.get('idea_id',''))}</code> <code>vibe deep-request-from-idea {esc(row.get('idea_id',''))}</code></li>" for row in deep_candidates
     ) or "<li>No deep research candidates.</li>"
     history_rows = "".join(
-        f"<tr><td>{esc(row.get('run_id',''))}</td><td>{esc(row.get('direction_id',''))}</td><td>{esc(row.get('primary_metric',''))}</td><td>{esc(row.get('trusted',''))}</td></tr>"
+        f"<tr><td>{esc(row.get('run_id',''))}</td><td>{esc(row.get('direction_id',''))}</td><td>{esc(row.get('primary_metric',''))}</td><td>{esc(row.get('trusted',''))}</td><td>{esc(row.get('trust_status',''))}</td><td>{esc(row.get('schema_status',''))}</td></tr>"
         for row in data["leaderboard"]["history"][-20:]
-    ) or "<tr><td colspan='4'>No leaderboard rows.</td></tr>"
+    ) or "<tr><td colspan='6'>No leaderboard rows.</td></tr>"
+    decision_rows = "".join(
+        f"<tr><td><code>{esc(row.get('target_id',''))}</code></td><td>{esc(row.get('decision_type',''))}</td><td>{esc(row.get('confidence',''))}</td><td>{esc(row.get('rationale',''))}</td></tr>"
+        for row in data["decisions"][-20:]
+    ) or "<tr><td colspan='4'>No decisions yet.</td></tr>"
     timeline = "".join(f"<li><time>{esc(row.get('created_at',''))}</time> <strong>{esc(row.get('event',''))}</strong> {esc(row.get('summary',''))}</li>" for row in data["timeline"][-30:])
     artifacts = "".join(f"<li><code>{esc(path)}</code></li>" for path in data["artifacts"][:80])
     meetings = "".join(f"<li><code>{esc(path)}</code></li>" for path in data["meeting_reports"]) or "<li>No meeting reports yet.</li>"
@@ -124,7 +129,8 @@ ul {{ margin: 0; padding-left: 20px; }}
 <section><h2>Run Cards</h2><div class="grid">{run_cards}</div></section>
 <section><h2>Direction Board</h2><pre>{esc(json.dumps(data['leaderboard']['best_by_direction'], indent=2, sort_keys=True))}</pre></section>
 <section><h2>Scheduler / Slurm Status</h2><pre>{esc(json.dumps(data['scheduler'], indent=2, sort_keys=True)[:8000])}</pre></section>
-<section><h2>Leaderboard</h2><table><tr><th>Run</th><th>Direction</th><th>Metric</th><th>Trusted</th></tr>{history_rows}</table></section>
+<section><h2>Decisions</h2><table><tr><th>Target</th><th>Decision</th><th>Confidence</th><th>Rationale</th></tr>{decision_rows}</table></section>
+<section><h2>Leaderboard</h2><table><tr><th>Run</th><th>Direction</th><th>Metric</th><th>Trusted</th><th>Trust status</th><th>Schema</th></tr>{history_rows}</table></section>
 <section><h2>Timeline</h2><ul>{timeline or '<li>No timeline events.</li>'}</ul></section>
 <section><h2>Idea Pool</h2><table><tr><th>Idea</th><th>Status</th><th>Priority</th><th>Confidence</th><th>Next action</th><th>Text</th></tr>{idea_rows}</table></section>
 <section><h2>Deep Research Decisions</h2><ul>{deep_rows}</ul></section>

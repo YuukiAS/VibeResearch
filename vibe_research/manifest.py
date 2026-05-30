@@ -6,6 +6,7 @@ import shlex
 from dataclasses import dataclass
 from typing import Any
 
+from .adapters import is_placeholder_command
 from .io import read_json
 from .models import RunManifest
 from .paths import VibePaths
@@ -66,9 +67,10 @@ def validate_command(command: str, label: str) -> list[ValidationIssue]:
         return [ValidationIssue("error", f"{label}.command is empty")]
     if argv[0].split("/")[-1] in DANGEROUS_BINS:
         issues.append(ValidationIssue("error", f"{label}.command uses blocked executable: {argv[0]}"))
+    if is_placeholder_command(command):
+        issues.append(ValidationIssue("error", f"{label}.command is placeholder and cannot be scheduled"))
     return issues
 
 
 def manifest_has_errors(paths: VibePaths, run_id: str) -> bool:
     return any(issue.level == "error" for issue in validate_manifest(paths, run_id))
-

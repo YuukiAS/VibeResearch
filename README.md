@@ -72,24 +72,36 @@ vibe init --no-root-portal --goal "..." --background "..."
 
 ## Start A Local Mock Cycle
 
-This path is safe on machines without Slurm, GPU, network, or Codex auth:
+v0.7.0 intentionally blocks placeholder experiments. To run a local mock cycle,
+use the bundled `toy` adapter so a structured decision can compile into a real
+resource plan:
+
+```yaml
+# .vibe/config.local.yaml
+adapter:
+  kind: toy
+```
 
 ```bash
 vibe idea "try a cheap baseline diagnostic before expensive training"
 vibe ideas triage
 vibe plan-cycle --offline
 vibe review-cycle c001 --offline
+vibe decision write c001 --type launch_gpu_gate --action "run toy adapter task" --direction d001_toy
+vibe compile-decision c001
 vibe generate-runs c001 --count 1
-vibe review r001_baseline_check --offline
-vibe patch r001_baseline_check --offline
-vibe dryrun r001_baseline_check
-vibe queue r001_baseline_check
+vibe review r001_toy_audit --offline
+vibe patch r001_toy_audit --offline
+vibe dryrun r001_toy_audit
+vibe queue r001_toy_audit
 vibe submit-queue --dry
 vibe monitor
-vibe collect r001_baseline_check --metric 0.1
-vibe reflect r001_baseline_check --offline
-vibe revise-plan r001_baseline_check --offline
+vibe collect r001_toy_audit --metric 0.1
+vibe reflect r001_toy_audit --offline
+vibe decision write r001_toy_audit --type collect_more_metrics --action "collect schema-valid metrics"
+vibe revise-plan r001_toy_audit --offline
 vibe reflect-cycle c001 --offline
+vibe decision write c001 --type launch_gpu_gate --action "compile next toy adapter task" --direction d001_toy
 vibe revise-cycle c001 --offline
 ```
 
@@ -139,13 +151,111 @@ vibe init --install-agents-snippet --goal "..." --background "..."
 2. Capture ideas: `vibe idea "..."`, `vibe ideas triage`
 3. Plan a portfolio: `vibe plan-cycle`
 4. Review the portfolio: `vibe review-cycle c001`
-5. Generate runs: `vibe generate-runs c001`
-6. Review and patch each run: `vibe review`, `vibe patch`
-7. Dry-run and queue: `vibe dryrun`, `vibe queue`
-8. Submit and monitor: `vibe submit-queue`, `vibe monitor`
-9. Collect metrics: `vibe collect`
-10. Reflect and revise: `vibe reflect`, `vibe revise-plan`, `vibe revise-cycle`
-11. Build dashboard and meeting report: `vibe dashboard build`, `vibe export-meeting`
+5. Write or obtain a structured cycle decision: `.vibe/cycles/c001/cycle_decision.json`
+6. Compile it through a project adapter: `vibe compile-decision c001`
+7. Generate runs only from the compiled plan: `vibe generate-runs c001`
+8. Review and patch each run: `vibe review`, `vibe patch`
+9. Dry-run and queue: `vibe dryrun`, `vibe queue`
+10. Submit and monitor: `vibe submit-queue`, `vibe monitor`
+11. Collect schema-valid metrics: `vibe collect --metrics-file ...`
+12. Reflect and revise: `vibe reflect`, `vibe revise-plan`, `vibe revise-cycle`
+13. Build dashboard and meeting report: `vibe dashboard build`, `vibe export-meeting`
+
+## Decision-To-Execution Safety
+
+v0.7.0 adds a structured three-layer bridge between plan text and executable
+work:
+
+```mermaid
+flowchart TD
+  subgraph Brain["Agent Research Brain"]
+    A[portfolio_plan.md]
+    B[reflect.md / cycle_reflect.md]
+    C[revised_plan.md / cycle_revised_plan.md]
+    D[cycle_decision.json / decision.json]
+  end
+
+  subgraph Compiler["Generic Decision-To-Execution Compiler"]
+    E[validate decision schema]
+    F[compile-decision]
+    G{executable and trustable?}
+    H[resource_plan.yaml]
+    I[blocked_missing_adapter / blocked_missing_resource_plan / blocked_repeating_evidence]
+  end
+
+  subgraph Adapter["Project Adapter"]
+    J[task capabilities]
+    K[dryrun and entrypoint templates]
+    L[resources, outputs, metrics schema, trust rules]
+  end
+
+  subgraph Execution["Backend + Evidence Loop"]
+    M[generate-runs]
+    N[review / patch / dryrun / queue / submit / monitor]
+    O[collect --metrics-file]
+    P{schema + provenance trusted?}
+    Q[trusted leaderboard + reflection]
+    R[untrusted/block state shown in dashboard/timeline]
+  end
+
+  A --> C
+  B --> C
+  C --> D
+  D --> E --> F --> G
+  J --> F
+  K --> F
+  L --> F
+  G -- yes --> H --> M --> N --> O --> P
+  G -- no --> I --> R
+  P -- yes --> Q --> C
+  P -- no --> R --> C
+```
+
+```text
+cycle_revised_plan.md / revised_plan.md
+  -> cycle_decision.json / decision.json
+  -> project adapter
+  -> compiled resource_plan.yaml
+  -> run manifests
+  -> trusted metrics only after schema + provenance checks
+```
+
+By default, the adapter is `noop`; it blocks with
+`blocked_missing_adapter` instead of generating fake CPU/GPU placeholder work.
+Use `adapter.kind: config` with `.vibe/adapter.yaml` for a real downstream repo,
+or `adapter.kind: toy` for local smoke tests. The new commands are:
+
+```bash
+vibe validate-decision c001
+vibe decision show c001
+vibe decision write c001 --type launch_gpu_gate --action "run configured adapter task"
+vibe decision write-block c001 --reason "adapter missing"
+vibe compile-decision c001
+vibe validate-resource-plan c001
+```
+
+Minimal `.vibe/adapter.yaml` shape for `adapter.kind: config`:
+
+```yaml
+task:
+  key: gpu-gate
+  direction_id: d001_candidate
+  hypothesis: Run the project-specific GPU gate.
+  dryrun_command: python scripts/smoke.py
+  entrypoint_command: python scripts/train.py --config configs/gate.yaml
+  expected_output_path: outputs/gate/metrics.json
+  metrics_file_path: outputs/gate/metrics.json
+  metrics_schema:
+    primary: number
+  resources:
+    gpu: 1
+    cpus: 8
+    mem_gb: 32
+    time: "04:00:00"
+```
+
+Repeated evidence-only loops and missing/default metrics are marked untrusted or
+blocked; they no longer update best/best-by-direction leaderboard state.
 
 ## Idea Pool
 

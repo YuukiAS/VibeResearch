@@ -32,11 +32,18 @@ def render_status(paths: VibePaths) -> str:
     if not runs:
         lines.append("No runs generated yet.")
     else:
-        lines.extend(["| Run | Direction | Status | Branch | Cost |", "|---|---|---|---|---|"])
+        lines.extend(["| Run | Direction | Status | Branch | Cost | Trust | Schema |", "|---|---|---|---|---|---|---|"])
         for run_id, run in sorted(runs.items()):
+            metrics = read_json(paths.runs / run_id / "metrics.json", {})
             lines.append(
-                f"| `{run_id}` | `{run.get('direction_id', '')}` | `{run.get('status', '')}` | `{run.get('branch', '')}` | `{run.get('cost', '')}` |"
+                f"| `{run_id}` | `{run.get('direction_id', '')}` | `{run.get('status', '')}` | `{run.get('branch', '')}` | `{run.get('cost', '')}` | "
+                f"`{metrics.get('trust_status', '')}` | `{metrics.get('schema_status', '')}` |"
             )
+    decisions = read_jsonl(paths.state / "decisions.jsonl")
+    if decisions:
+        lines.extend(["", "## Recent Decisions", "", "| Target | Decision | Confidence | Rationale |", "|---|---|---|---|"])
+        for row in decisions[-10:]:
+            lines.append(f"| `{row.get('target_id', '')}` | `{row.get('decision_type', '')}` | `{row.get('confidence', '')}` | {str(row.get('rationale', ''))[:120]} |")
     lines.extend(["", "## Scheduler", ""])
     lines.append(f"Queued: {len(queue.get('queued', []))}")
     lines.append(f"Active: {len(active.get('active', []))}")
@@ -108,12 +115,13 @@ def render_leaderboard(paths: VibePaths) -> str:
         lines.append(f"Best trusted: `{best.get('run_id', 'none')}` metric={best.get('primary_metric', 'n/a')}")
     else:
         lines.append("No trusted best yet.")
-    lines.extend(["", "| Cycle | Run | Direction | Branch | Metric | Guardrails | Trusted | Status |", "|---|---|---|---|---:|---|---|---|"])
+    lines.extend(["", "| Cycle | Run | Direction | Branch | Metric | Guardrails | Trusted | Trust Status | Schema | Status |", "|---|---|---|---|---:|---|---|---|---|---|"])
     for row in history[-100:]:
         guardrails = row.get("metrics", {}).get("guardrails", "") if isinstance(row.get("metrics"), dict) else ""
         lines.append(
             f"| `{row.get('cycle_id', '')}` | `{row.get('run_id', '')}` | `{row.get('direction_id', '')}` | `{row.get('branch', '')}` | "
-            f"{row.get('primary_metric', '')} | {guardrails} | {row.get('trusted', False)} | `{row.get('status', '')}` |"
+            f"{row.get('primary_metric', '')} | {guardrails} | {row.get('trusted', False)} | `{row.get('trust_status', '')}` | "
+            f"`{row.get('schema_status', '')}` | `{row.get('status', '')}` |"
         )
     if best_by_direction:
         lines.extend(["", "## Best By Direction", "", "| Direction | Run | Metric |", "|---|---|---:|"])
@@ -130,6 +138,8 @@ def render_run_table(paths: VibePaths) -> list[dict[str, Any]]:
             "direction": run.get("direction_id", ""),
             "status": run.get("status", ""),
             "branch": run.get("branch", ""),
+            "trust_status": read_json(paths.runs / run_id / "metrics.json", {}).get("trust_status", ""),
+            "schema_status": read_json(paths.runs / run_id / "metrics.json", {}).get("schema_status", ""),
         }
         for run_id, run in sorted(state.get("runs", {}).items())
     ]

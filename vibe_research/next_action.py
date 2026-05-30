@@ -12,6 +12,8 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     queue = read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued", [])
     if state.get("project_brief_missing"):
         return "add project goal/background with vibe init --goal ... --background ...", "project_brief_missing"
+    if state.get("blocked_reason") or str(state.get("status", "")).startswith("blocked_"):
+        return state.get("next_action") or "vibe decision show <target_id>", state.get("blocked_reason") or state.get("status", "blocked")
     if any(row.get("status") == "new" for row in read_jsonl(paths.ideas / "registry.jsonl")):
         return "vibe ideas triage", ""
     if any(row.get("status") == "needs_deep_research" and not row.get("linked_deep_request_id") for row in read_jsonl(paths.ideas / "registry.jsonl")):

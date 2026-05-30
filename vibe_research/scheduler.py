@@ -7,8 +7,10 @@ import subprocess
 import hashlib
 import json
 import platform
+from pathlib import Path
 from typing import Any
 
+from .adapters import is_placeholder_command
 from .backends import get_backend
 from .config import load_config
 from .dashboard import sync_dashboard
@@ -268,44 +270,91 @@ def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted:
     run = state.get("runs", {}).get(run_id)
     if not run:
         raise ValueError(f"Unknown run: {run_id}")
-    external_metrics = read_external_metrics(metrics_file) if metrics_file else {}
-    value = external_metrics.get("primary_metric", 0.0 if metric is None else metric)
+    evaluation = run.get("evaluation", {}) if isinstance(run.get("evaluation"), dict) else {}
+    configured_metrics_file = metrics_file or evaluation.get("metrics_file_path", "")
+    resolved_metrics_file = resolve_project_path(paths, configured_metrics_file) if configured_metrics_file else ""
+    external_metrics = read_external_metrics(resolved_metrics_file) if resolved_metrics_file and Path(resolved_metrics_file).exists() else {}
+    missing_metrics = not external_metrics and metric is None
+    metric_values = external_metrics.get("metrics", external_metrics) if external_metrics else ({"primary": metric} if metric is not None else {})
+    value = external_metrics.get("primary_metric", metric if metric is not None else 0.0)
+    schema = evaluation.get("metrics_schema") or read_yaml(paths.leaderboard / "metrics_schema.yaml", {})
+    schema_errors = [] if missing_metrics else validate_metrics_schema(metric_values, schema)
+    schema_status = "missing" if missing_metrics else ("valid" if not schema_errors else "failed")
+    expected_output_path = ""
+    outputs = run.get("outputs", {}) if isinstance(run.get("outputs"), dict) else {}
+    expected_output_path = str(outputs.get("expected_output_path", "") or "")
+    resolved_expected_output = resolve_project_path(paths, expected_output_path) if expected_output_path else ""
+    expected_output_exists = bool(resolved_expected_output and Path(resolved_expected_output).exists())
     provenance = build_provenance(paths, run_id)
     if trusted and not provenance_complete(provenance):
         raise RuntimeError("Trusted collection requires complete metric provenance.")
-    trusted_now = bool(trusted and has_revised_plan(paths, run_id))
+    trust_rules = evaluation.get("trust_rules", {}) if isinstance(evaluation.get("trust_rules"), dict) else {}
+    if trusted and configured_metrics_file and not external_metrics and not trust_rules.get("allow_manual_metric", True):
+        raise RuntimeError("Trusted collection requires metrics_file_path output; manual metric is disabled by trust_rules.")
+    if trusted and expected_output_path and not expected_output_exists:
+        raise RuntimeError("Trusted collection requires expected output artifact to exist.")
+    if trusted and (missing_metrics or schema_errors):
+        raise RuntimeError("Trusted collection requires schema-valid metrics from a file or explicit metric.")
+    commands_valid = not (
+        is_placeholder_command(run.get("dryrun", {}).get("command", ""))
+        or is_placeholder_command(run.get("entrypoint", {}).get("command", ""))
+    )
+    trusted_candidate = bool(trusted and not missing_metrics and not schema_errors and commands_valid and (not expected_output_path or expected_output_exists))
+    trusted_now = bool(trusted_candidate and has_revised_plan(paths, run_id))
+    trust_status = "trusted" if trusted_now else "trusted_candidate" if trusted_candidate else "untrusted"
+    if missing_metrics:
+        trust_status = "untrusted_missing_metrics"
+    elif schema_errors:
+        trust_status = "untrusted_schema_failed"
+    elif expected_output_path and not expected_output_exists:
+        trust_status = "untrusted_missing_output"
+        schema_status = "failed"
+        schema_errors.append(f"expected output missing: {expected_output_path}")
+    elif not commands_valid:
+        trust_status = "untrusted_placeholder_command"
     metrics = {
         "run_id": run_id,
         "cycle_id": run.get("cycle_id", ""),
         "direction_id": run.get("direction_id", ""),
         "branch": run.get("branch", ""),
         "primary_metric": value,
-        "metrics": external_metrics.get("metrics", external_metrics),
+        "metrics": metric_values,
         "trusted": trusted_now,
-        "trusted_candidate": bool(trusted),
+        "trusted_candidate": trusted_candidate,
+        "trust_status": trust_status,
+        "schema_status": schema_status,
+        "schema_errors": schema_errors,
+        "metrics_file_path": configured_metrics_file,
+        "expected_output_path": expected_output_path,
+        "expected_output_exists": expected_output_exists,
+        "missing_metrics": missing_metrics,
         "status": "collected",
         "provenance": provenance,
     }
     write_json(paths.runs / run_id / "metrics.json", metrics)
-    write_text(paths.runs / run_id / "result.md", f"# Result\n\nPrimary metric: {value}\nTrusted: {trusted}\n")
+    write_text(paths.runs / run_id / "result.md", f"# Result\n\nPrimary metric: {value}\nTrust status: {trust_status}\nSchema status: {schema_status}\n")
     append_jsonl(paths.leaderboard / "history.jsonl", metrics)
     if trusted_now:
         best = read_json(paths.leaderboard / "best.json", {})
         if is_better(paths, metrics, best):
             write_json(paths.leaderboard / "best.json", metrics)
-    best_by_direction = read_json(paths.leaderboard / "best_by_direction.json", {})
-    direction = run.get("direction_id", "")
-    previous = best_by_direction.get(direction)
-    if direction and (previous is None or is_better(paths, metrics, previous)):
-        best_by_direction[direction] = metrics
-        write_json(paths.leaderboard / "best_by_direction.json", best_by_direction)
+        best_by_direction = read_json(paths.leaderboard / "best_by_direction.json", {})
+        direction = run.get("direction_id", "")
+        previous = best_by_direction.get(direction)
+        if direction and (previous is None or is_better(paths, metrics, previous)):
+            best_by_direction[direction] = metrics
+            write_json(paths.leaderboard / "best_by_direction.json", best_by_direction)
     run["status"] = "collected"
     state["runs"][run_id] = run
     state["next_action"] = f"vibe reflect {run_id}"
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
-    record_event(paths, "metrics_collected", f"Collected primary={value}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status="collected")
-    record_event(paths, "leaderboard_updated", f"Updated leaderboard with {run_id}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status="updated")
+    event = "trusted_evidence_recorded" if trusted_now else "metrics_untrusted"
+    if schema_errors:
+        record_event(paths, "metrics_schema_failed", "; ".join(schema_errors[:3]), cycle_id=run.get("cycle_id", ""), run_id=run_id, status=trust_status)
+    record_event(paths, event, f"Collected primary={value}; trust={trust_status}; schema={schema_status}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status=trust_status)
+    if trusted_now:
+        record_event(paths, "leaderboard_updated", f"Updated leaderboard with {run_id}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status="updated")
     sync_dashboard(paths)
 
 
@@ -344,12 +393,49 @@ def apply_failure_rules(paths: VibePaths, state: dict[str, Any], failed_run_id: 
         record_event(paths, "direction_paused", direction, direction_id=direction, status="paused")
 
 
+def resolve_project_path(paths: VibePaths, path: str | Path) -> str:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = paths.root / candidate
+    return str(candidate)
+
+
 def read_external_metrics(path: str) -> dict[str, Any]:
-    data = json.loads(__import__("pathlib").Path(path).read_text())
+    data = json.loads(Path(path).read_text())
     if "primary_metric" not in data and "metrics" in data and isinstance(data["metrics"], dict):
         first = next(iter(data["metrics"].values()), 0.0)
         data["primary_metric"] = first
+    if "primary_metric" not in data and "primary" in data:
+        data["primary_metric"] = data["primary"]
     return data
+
+
+def validate_metrics_schema(metrics: dict[str, Any], schema: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(metrics, dict) or not metrics:
+        return ["metrics are missing"]
+    required = schema.get("required", []) if isinstance(schema, dict) else []
+    primary_spec = schema.get("primary", {}) if isinstance(schema, dict) else {}
+    if isinstance(primary_spec, dict) and primary_spec:
+        required = list(required) + ["primary"]
+    if not required and isinstance(schema, dict):
+        required = [key for key, value in schema.items() if isinstance(value, str)]
+    for name in required:
+        if name not in metrics:
+            errors.append(f"missing required metric `{name}`")
+    typed_specs: dict[str, Any] = {}
+    if isinstance(primary_spec, dict) and primary_spec.get("type"):
+        typed_specs["primary"] = primary_spec.get("type")
+    if isinstance(schema, dict):
+        typed_specs.update({key: value for key, value in schema.items() if isinstance(value, str)})
+    for name, expected in typed_specs.items():
+        if name in metrics and expected == "number" and not isinstance(metrics[name], (int, float)):
+            errors.append(f"`{name}` must be number")
+        if name in metrics and expected == "string" and not isinstance(metrics[name], str):
+            errors.append(f"`{name}` must be string")
+        if name in metrics and expected in {"bool", "boolean"} and not isinstance(metrics[name], bool):
+            errors.append(f"`{name}` must be boolean")
+    return errors
 
 
 def build_provenance(paths: VibePaths, run_id: str) -> dict[str, Any]:
@@ -404,9 +490,10 @@ def has_revised_plan(paths: VibePaths, run_id: str) -> bool:
 def promote_trusted_candidate(paths: VibePaths, run_id: str) -> None:
     metrics_path = paths.runs / run_id / "metrics.json"
     metrics = read_json(metrics_path, {})
-    if not metrics.get("trusted_candidate") or metrics.get("trusted") or not has_revised_plan(paths, run_id):
+    if not metrics.get("trusted_candidate") or metrics.get("trusted") or metrics.get("schema_status") != "valid" or not has_revised_plan(paths, run_id):
         return
     metrics["trusted"] = True
+    metrics["trust_status"] = "trusted"
     write_json(metrics_path, metrics)
     append_jsonl(paths.leaderboard / "history.jsonl", metrics)
     best = read_json(paths.leaderboard / "best.json", {})

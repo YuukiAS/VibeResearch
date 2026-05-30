@@ -5,11 +5,14 @@ from __future__ import annotations
 from .dashboard import sync_dashboard
 import re
 
+from .decisions import BLOCK_DECISIONS, ensure_decision_after_revise
 from .ideas import create_idea as create_pool_idea
 from .ideas import sync_plan_idea_updates
 from .io import append_jsonl, ensure_dir, read_json, read_jsonl, utc_now, write_json, write_text
+from .loop_guard import apply_loop_guard
 from .papers import add_paper
 from .paths import VibePaths
+from .promotion import compile_decision as compile_cycle_decision
 from .scheduler import promote_trusted_candidate
 from .timeline import record_event
 
@@ -43,7 +46,7 @@ This scaffold records the result and requires a revised plan before NEXT.
     sync_dashboard(paths)
 
 
-def revise_plan(paths: VibePaths, run_id: str, decision: str = "collect_more_metrics", *, keep_existing: bool = False) -> None:
+def revise_plan(paths: VibePaths, run_id: str, decision: str = "collect_more_metrics", *, keep_existing: bool = False, offline: bool = False) -> None:
     state = read_json(paths.state / "state.json", {})
     run = state.get("runs", {}).get(run_id)
     if not run:
@@ -88,13 +91,26 @@ Stop if repeated runs fail guardrails or provenance.
         write_text(revised_path, text)
     ensure_idea_update_section(revised_path)
     sync_plan_idea_updates(paths, revised_path.read_text())
-    promote_trusted_candidate(paths, run_id)
-    run["status"] = "revised"
+    structured = ensure_decision_after_revise(paths, run_id, revised_path.read_text(), offline=offline)
+    loop_block = apply_loop_guard(paths, run_id)
+    state = read_json(paths.state / "state.json", {})
+    run = state.get("runs", {}).get(run_id, run)
+    blocked = bool(loop_block) or structured.decision_type in BLOCK_DECISIONS
+    if not blocked:
+        promote_trusted_candidate(paths, run_id)
+        state = read_json(paths.state / "state.json", {})
+        run = state.get("runs", {}).get(run_id, run)
+    run["status"] = "blocked" if blocked else "revised"
     state["runs"][run_id] = run
-    state["next_action"] = f"vibe reflect-cycle {run.get('cycle_id', '')}"
+    if blocked:
+        state["next_action"] = f"vibe decision show {run_id}"
+    else:
+        state["blocked_reason"] = ""
+        state["next_action"] = f"vibe reflect-cycle {run.get('cycle_id', '')}"
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
-    record_event(paths, "run_revised_plan_written", f"Decision={decision}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status="revised")
+    status = "blocked" if blocked else "revised"
+    record_event(paths, "run_revised_plan_written", f"Decision={structured.decision_type}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status=status)
     sync_dashboard(paths)
 
 
@@ -113,7 +129,7 @@ def reflect_cycle(paths: VibePaths, cycle_id: str, *, keep_existing: bool = Fals
     sync_dashboard(paths)
 
 
-def revise_cycle(paths: VibePaths, cycle_id: str, mode: str | None = None, *, keep_existing: bool = False) -> None:
+def revise_cycle(paths: VibePaths, cycle_id: str, mode: str | None = None, *, keep_existing: bool = False, offline: bool = False) -> None:
     state = read_json(paths.state / "state.json", {})
     next_mode = mode or state.get("portfolio_mode", "exploration")
     text = f"""# Cycle Revised Plan for {cycle_id}
@@ -150,12 +166,23 @@ Stop or shrink directions after repeated provenance or guardrail failures.
         write_text(revised_path, text)
     ensure_idea_update_section(revised_path)
     sync_plan_idea_updates(paths, revised_path.read_text())
-    state.setdefault("cycles", {}).setdefault(cycle_id, {})["status"] = "revised"
+    structured = ensure_decision_after_revise(paths, cycle_id, revised_path.read_text(), offline=offline)
+    loop_block = apply_loop_guard(paths, cycle_id)
+    compiled_ok = False
+    if structured.decision_type not in BLOCK_DECISIONS and not loop_block:
+        compiled_ok, _ = compile_cycle_decision(paths, cycle_id)
+    state = read_json(paths.state / "state.json", {})
+    blocked = bool(loop_block) or structured.decision_type in BLOCK_DECISIONS or not compiled_ok
+    state.setdefault("cycles", {}).setdefault(cycle_id, {})["status"] = "blocked" if blocked else "revised"
     state["portfolio_mode"] = next_mode
-    state["next_action"] = "vibe plan-cycle"
+    if blocked:
+        state["next_action"] = f"vibe decision show {cycle_id}"
+    else:
+        state["blocked_reason"] = ""
+        state["next_action"] = "vibe plan-cycle"
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
-    record_event(paths, "cycle_revised_plan_written", f"Next mode={next_mode}", cycle_id=cycle_id, status="revised")
+    record_event(paths, "cycle_revised_plan_written", f"Decision={structured.decision_type}; next mode={next_mode}", cycle_id=cycle_id, status="blocked" if blocked else "revised")
     sync_dashboard(paths)
 
 

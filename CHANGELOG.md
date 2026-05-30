@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-05-30
+
+- Add structured run/cycle decision contracts, validation CLI, and block decisions for missing adapters or repeating evidence.
+- Add a generic adapter interface with noop/config/toy adapters and a decision-to-execution compiler that blocks placeholder plans.
+- Gate metrics trust and trusted leaderboard updates on schema-valid metrics, non-placeholder commands, provenance, and revised-plan promotion.
+- Make offline revised-plan fallback safe by writing explicit block decisions instead of fake progress.
+- Surface trust, schema, and block states in status, TODO, leaderboard, timeline, and static dashboard output.
+- Document the three-layer architecture with Mermaid diagrams and add v0.7.0 regression tests for compiler, trust, backward-compatibility, and anti-loop behavior.
+
 ## 0.6.0 - 2026-05-29
 
 - Add static dashboard build/serve, meeting story-pack export, dogfood report generation, and portal install/usage docs.

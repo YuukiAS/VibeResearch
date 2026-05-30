@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.6.0"
+    vibe_version: str = "0.7.0"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -120,6 +120,19 @@ class ProjectConfig(BaseModel):
             "allow_markdown_ingest": True,
         }
     )
+    adapter: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "kind": "noop",
+            "config_path": ".vibe/adapter.yaml",
+            "require_for_experiments": True,
+        }
+    )
+    loop_guard: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "repeated_threshold": 2,
+            "default_primary_metric": 0.0,
+        }
+    )
     research: dict[str, Any] = Field(
         default_factory=lambda: {
             "offline": True,
@@ -212,7 +225,7 @@ def default_state() -> dict[str, Any]:
         "updated_at": "",
         "next_action": "plan-cycle",
         "blocked_reason": "",
-        "schema_version": 2,
+        "schema_version": 3,
     }
 
 

@@ -23,6 +23,7 @@ from .config import detect_config, load_config, migrate_project, validate_config
 from .daemon import daemon_start, daemon_status, daemon_stop
 from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .dashboard_site import build_dashboard_site, serve_dashboard_site
+from .decisions import decision_json, make_decision, validate_decision_file, write_block_decision, write_decision
 from .directions import set_direction_status
 from .git_ops import abandon_run, create_branch, git_available, git_current_branch, git_diff_text, merge_review, merge_run, protected_diff_paths
 from .ideas import archive_idea as archive_pool_idea
@@ -36,6 +37,8 @@ from .papers import add_paper, download_paper, list_papers, paper_search, pdf_to
 from .paths import VibePaths
 from .portal import build_portal
 from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio, vendor_runtime
+from .promotion import compile_decision as compile_cycle_decision
+from .promotion import validate_resource_plan
 from .research import deep_request, ingest_deep_research, literature_refresh, reflect, reflect_cycle, revise_cycle, revise_plan
 from .reports import generate_alignment_after_changes, generate_dogfood_reports, write_portal_docs
 from .scheduler import collect as collect_run
@@ -50,12 +53,14 @@ portal_app = typer.Typer(help="Build root portal mirrors from .vibe/portal.")
 audit_app = typer.Typer(help="Generate alignment audit reports.")
 ideas_app = typer.Typer(help="Manage the maintained research idea pool.")
 dashboard_app = typer.Typer(help="Build and serve the read-only static dashboard.")
+decision_app = typer.Typer(help="Inspect and write structured research decisions.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
 app.add_typer(audit_app, name="audit")
 app.add_typer(ideas_app, name="ideas")
 app.add_typer(dashboard_app, name="dashboard")
+app.add_typer(decision_app, name="decision")
 console = Console()
 
 
@@ -110,6 +115,87 @@ def vendor_runtime_cmd(target: Path = typer.Option(Path("."), "--target", "-t"))
 
     path = vendor_runtime(paths(target))
     console.print(f"Vendored runtime scaffold at {path}")
+
+
+@app.command("validate-decision")
+def validate_decision_cmd(target_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Validate a structured run or cycle decision JSON file."""
+
+    issues = validate_decision_file(paths(target), target_id)
+    if issues:
+        for issue in issues:
+            console.print(f"[error] {issue}")
+        raise typer.Exit(1)
+    console.print(f"Decision OK: {target_id}")
+
+
+@decision_app.command("show")
+def decision_show(target_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Print structured run or cycle decision JSON."""
+
+    console.print(decision_json(paths(target), target_id))
+
+
+@decision_app.command("write-block")
+def decision_write_block(
+    target_id: str,
+    reason: str = typer.Option(..., "--reason"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    decision_type: str = typer.Option("blocked_missing_decision", "--decision-type"),
+) -> None:
+    """Write an explicit block decision for operator recovery."""
+
+    write_block_decision(paths(target), target_id, reason, decision_type=decision_type)  # type: ignore[arg-type]
+    console.print(f"Blocked {target_id}: {reason}")
+
+
+@decision_app.command("write")
+def decision_write(
+    target_id: str,
+    decision_type: str = typer.Option("launch_gpu_gate", "--type"),
+    action: str = typer.Option(..., "--action"),
+    rationale: str = typer.Option("", "--rationale"),
+    direction: str = typer.Option("", "--direction"),
+    baseline: str = typer.Option("", "--baseline"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Write a structured non-block decision for adapter compilation."""
+
+    decision = make_decision(
+        paths(target),
+        target_id,
+        decision_type,  # type: ignore[arg-type]
+        rationale=rationale or action,
+        selected_direction=direction,
+        required_action=action,
+        baseline_comparison_target=baseline or ("trusted_baseline" if decision_type == "promote_to_baseline_compare" else ""),
+        provenance={"source": "operator_cli"},
+    )
+    write_decision(paths(target), decision)
+    console.print(f"Wrote decision {decision.decision_id} for {target_id}: {decision.decision_type}")
+
+
+@app.command("compile-decision")
+def compile_decision_cmd(cycle_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Compile a structured cycle decision into an executable resource plan."""
+
+    ok, message = compile_cycle_decision(paths(target), cycle_id)
+    if not ok:
+        console.print(f"[error] {message}")
+        raise typer.Exit(1)
+    console.print(f"Compiled {cycle_id}: {message}")
+
+
+@app.command("validate-resource-plan")
+def validate_resource_plan_cmd(cycle_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Validate compiled resource plan executability and trust metadata."""
+
+    issues = validate_resource_plan(paths(target), cycle_id)
+    if issues:
+        for issue in issues:
+            console.print(f"[error] {issue}")
+        raise typer.Exit(1)
+    console.print(f"Resource plan OK: {cycle_id}")
 
 
 @config_app.command("show")
@@ -427,7 +513,11 @@ def generate_runs_cmd(
 ) -> None:
     """Generate run directories, proposals, manifests, and branch names."""
 
-    run_ids = generate_runs(paths(target), cycle_id=cycle_id, count=count)
+    try:
+        run_ids = generate_runs(paths(target), cycle_id=cycle_id, count=count)
+    except RuntimeError as exc:
+        console.print(f"[error] {exc}")
+        raise typer.Exit(1) from exc
     console.print(f"Generated runs: {', '.join(run_ids)}")
 
 
@@ -727,7 +817,7 @@ def revise_plan_cmd(
         for issue in issues:
             console.print(f"[{issue.level}] {issue.message}")
         raise typer.Exit(1)
-    revise_plan(p, run_id, decision=decision, keep_existing=True)
+    revise_plan(p, run_id, decision=decision, keep_existing=True, offline=offline)
     console.print(f"Revised plan for {run_id} via {'offline fallback' if offline else 'Codex'} ({result.call_id})")
 
 
@@ -766,7 +856,7 @@ def revise_cycle_cmd(
         for issue in issues:
             console.print(f"[{issue.level}] {issue.message}")
         raise typer.Exit(1)
-    revise_cycle(p, cycle_id, mode=mode, keep_existing=True)
+    revise_cycle(p, cycle_id, mode=mode, keep_existing=True, offline=offline)
     console.print(f"Revised cycle {cycle_id} via {'offline fallback' if offline else 'Codex'} ({result.call_id})")
 
 

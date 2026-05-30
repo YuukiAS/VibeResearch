@@ -65,24 +65,35 @@ vibe init --no-root-portal --goal "..." --background "..."
 
 ## 跑一个本地 Mock Cycle
 
-下面这条路径适合无 Slurm、无 GPU、无网络、无 Codex 登录的机器：
+v0.7.0 默认会阻止 placeholder 实验。要跑本地 mock cycle，先使用内置
+`toy` adapter，让结构化 decision 能编译成真实的 resource plan：
+
+```yaml
+# .vibe/config.local.yaml
+adapter:
+  kind: toy
+```
 
 ```bash
 vibe idea "先跑一个便宜的 baseline diagnostic，再考虑昂贵训练"
 vibe ideas triage
 vibe plan-cycle --offline
 vibe review-cycle c001 --offline
+vibe decision write c001 --type launch_gpu_gate --action "run toy adapter task" --direction d001_toy
+vibe compile-decision c001
 vibe generate-runs c001 --count 1
-vibe review r001_baseline_check --offline
-vibe patch r001_baseline_check --offline
-vibe dryrun r001_baseline_check
-vibe queue r001_baseline_check
+vibe review r001_toy_audit --offline
+vibe patch r001_toy_audit --offline
+vibe dryrun r001_toy_audit
+vibe queue r001_toy_audit
 vibe submit-queue --dry
 vibe monitor
-vibe collect r001_baseline_check --metric 0.1
-vibe reflect r001_baseline_check --offline
-vibe revise-plan r001_baseline_check --offline
+vibe collect r001_toy_audit --metric 0.1
+vibe reflect r001_toy_audit --offline
+vibe decision write r001_toy_audit --type collect_more_metrics --action "collect schema-valid metrics"
+vibe revise-plan r001_toy_audit --offline
 vibe reflect-cycle c001 --offline
+vibe decision write c001 --type launch_gpu_gate --action "compile next toy adapter task" --direction d001_toy
 vibe revise-cycle c001 --offline
 ```
 
@@ -130,13 +141,109 @@ vibe init --install-agents-snippet --goal "..." --background "..."
 2. 捕获想法：`vibe idea "..."`，`vibe ideas triage`
 3. 制定 portfolio：`vibe plan-cycle`
 4. 审核 portfolio：`vibe review-cycle c001`
-5. 生成 runs：`vibe generate-runs c001`
-6. 审核并 patch 每个 run：`vibe review`，`vibe patch`
-7. dry-run 并入队：`vibe dryrun`，`vibe queue`
-8. 提交并监控：`vibe submit-queue`，`vibe monitor`
-9. 收集指标：`vibe collect`
-10. 复盘并修订计划：`vibe reflect`，`vibe revise-plan`，`vibe revise-cycle`
-11. 构建 dashboard 和组会材料：`vibe dashboard build`，`vibe export-meeting`
+5. 写入或获得结构化 cycle decision：`.vibe/cycles/c001/cycle_decision.json`
+6. 通过项目 adapter 编译：`vibe compile-decision c001`
+7. 只从已编译 resource plan 生成 runs：`vibe generate-runs c001`
+8. 审核并 patch 每个 run：`vibe review`，`vibe patch`
+9. dry-run 并入队：`vibe dryrun`，`vibe queue`
+10. 提交并监控：`vibe submit-queue`，`vibe monitor`
+11. 收集 schema-valid 指标：`vibe collect --metrics-file ...`
+12. 复盘并修订计划：`vibe reflect`，`vibe revise-plan`，`vibe revise-cycle`
+13. 构建 dashboard 和组会材料：`vibe dashboard build`，`vibe export-meeting`
+
+## Decision-To-Execution Safety
+
+v0.7.0 增加了从文字计划到可执行实验的三层结构化桥接：
+
+```mermaid
+flowchart TD
+  subgraph Brain["Agent Research Brain"]
+    A[portfolio_plan.md]
+    B[reflect.md / cycle_reflect.md]
+    C[revised_plan.md / cycle_revised_plan.md]
+    D[cycle_decision.json / decision.json]
+  end
+
+  subgraph Compiler["Generic Decision-To-Execution Compiler"]
+    E[validate decision schema]
+    F[compile-decision]
+    G{executable and trustable?}
+    H[resource_plan.yaml]
+    I[blocked_missing_adapter / blocked_missing_resource_plan / blocked_repeating_evidence]
+  end
+
+  subgraph Adapter["Project Adapter"]
+    J[task capabilities]
+    K[dryrun and entrypoint templates]
+    L[resources, outputs, metrics schema, trust rules]
+  end
+
+  subgraph Execution["Backend + Evidence Loop"]
+    M[generate-runs]
+    N[review / patch / dryrun / queue / submit / monitor]
+    O[collect --metrics-file]
+    P{schema + provenance trusted?}
+    Q[trusted leaderboard + reflection]
+    R[untrusted/block state shown in dashboard/timeline]
+  end
+
+  A --> C
+  B --> C
+  C --> D
+  D --> E --> F --> G
+  J --> F
+  K --> F
+  L --> F
+  G -- yes --> H --> M --> N --> O --> P
+  G -- no --> I --> R
+  P -- yes --> Q --> C
+  P -- no --> R --> C
+```
+
+```text
+cycle_revised_plan.md / revised_plan.md
+  -> cycle_decision.json / decision.json
+  -> project adapter
+  -> compiled resource_plan.yaml
+  -> run manifests
+  -> 只有通过 schema + provenance 检查的 trusted metrics 才更新 leaderboard best
+```
+
+默认 adapter 是 `noop`，它会以 `blocked_missing_adapter` 阻塞，而不是继续生成假的
+CPU/GPU placeholder 工作。真实下游 repo 应使用 `adapter.kind: config` 和
+`.vibe/adapter.yaml`；本地 smoke test 可以使用 `adapter.kind: toy`。
+
+```bash
+vibe validate-decision c001
+vibe decision show c001
+vibe decision write c001 --type launch_gpu_gate --action "run configured adapter task"
+vibe decision write-block c001 --reason "adapter missing"
+vibe compile-decision c001
+vibe validate-resource-plan c001
+```
+
+`adapter.kind: config` 对应的最小 `.vibe/adapter.yaml` 示例：
+
+```yaml
+task:
+  key: gpu-gate
+  direction_id: d001_candidate
+  hypothesis: Run the project-specific GPU gate.
+  dryrun_command: python scripts/smoke.py
+  entrypoint_command: python scripts/train.py --config configs/gate.yaml
+  expected_output_path: outputs/gate/metrics.json
+  metrics_file_path: outputs/gate/metrics.json
+  metrics_schema:
+    primary: number
+  resources:
+    gpu: 1
+    cpus: 8
+    mem_gb: 32
+    time: "04:00:00"
+```
+
+重复 evidence-only 循环、缺失指标和默认 0.0 指标会被标记为 untrusted 或 blocked，不再更新
+best / best-by-direction leaderboard 状态。
 
 ## Idea Pool / 想法池
 

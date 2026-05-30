@@ -33,7 +33,10 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
         review_cycle(paths, target_id)
         return f"reviewed {target_id}"
     if command == "generate-runs":
-        runs = generate_runs(paths, cycle_id=target_id)
+        try:
+            runs = generate_runs(paths, cycle_id=target_id)
+        except RuntimeError as exc:
+            return f"blocked: {exc}"
         return f"generated {','.join(runs)}"
     if command == "review":
         run_codex(paths, "reviewer", target_id, offline=offline)
@@ -70,7 +73,7 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
         return f"reflected {target_id}"
     if command == "revise-plan":
         run_codex(paths, "revised_plan", target_id, offline=offline)
-        revise_plan(paths, target_id, keep_existing=True)
+        revise_plan(paths, target_id, keep_existing=True, offline=offline)
         return f"revised {target_id}"
     if command == "reflect-cycle":
         run_codex(paths, "cycle_reflect", target_id, offline=offline)
@@ -78,7 +81,7 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
         return f"reflected {target_id}"
     if command == "revise-cycle":
         run_codex(paths, "cycle_revised_plan", target_id, offline=offline)
-        revise_cycle(paths, target_id, keep_existing=True)
+        revise_cycle(paths, target_id, keep_existing=True, offline=offline)
         return f"revised {target_id}"
     return f"manual: {action}"
 

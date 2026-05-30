@@ -9,9 +9,13 @@ from vibe_research.artifacts import validate_artifact
 from vibe_research.codex_adapter import run_codex
 from vibe_research.cli import app
 from vibe_research.config import detect_config
-from vibe_research.io import read_json, read_jsonl, read_yaml
+from vibe_research.decisions import make_decision, write_decision
+from vibe_research.io import read_json, read_jsonl, read_yaml, write_json, write_yaml
+from vibe_research.loop_guard import apply_loop_guard
 from vibe_research.paths import VibePaths
 from vibe_research.portal import GENERATED_NOTICE
+from vibe_research.promotion import compile_decision
+from vibe_research.scheduler import collect as collect_run
 
 
 runner = CliRunner()
@@ -19,6 +23,49 @@ runner = CliRunner()
 
 def invoke(*args: str, cwd: Path | None = None):
     return runner.invoke(app, list(args), catch_exceptions=False, env={}, prog_name="vibe")
+
+
+def enable_toy_adapter(root: Path) -> None:
+    (root / ".vibe" / "config.local.yaml").write_text("adapter:\n  kind: toy\n")
+
+
+def compile_toy_cycle(root: Path, cycle_id: str = "c001") -> None:
+    paths = VibePaths(root)
+    decision = make_decision(
+        paths,
+        cycle_id,
+        "launch_gpu_gate",
+        rationale="test toy adapter compilation",
+        selected_direction="d001_toy",
+        required_action="run toy adapter task",
+        confidence="high",
+    )
+    write_decision(paths, decision)
+    ok, message = compile_decision(paths, cycle_id)
+    assert ok, message
+
+
+def write_run_decision(root: Path, run_id: str) -> None:
+    paths = VibePaths(root)
+    decision = make_decision(
+        paths,
+        run_id,
+        "collect_more_metrics",
+        rationale="test run decision",
+        required_action="collect schema-valid metrics",
+        confidence="medium",
+    )
+    write_decision(paths, decision)
+
+
+def prepare_toy_run(root: Path) -> str:
+    assert invoke("init", "--target", str(root)).exit_code == 0
+    enable_toy_adapter(root)
+    assert invoke("plan-cycle", "--offline", "--target", str(root)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(root)).exit_code == 0
+    compile_toy_cycle(root)
+    assert invoke("generate-runs", "c001", "--target", str(root), "--count", "1").exit_code == 0
+    return sorted(read_json(root / ".vibe" / "state" / "state.json", {})["runs"])[0]
 
 
 def test_init_creates_required_surface(tmp_path: Path):
@@ -77,7 +124,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.6.0" in show.output
+    assert "0.7.0" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -146,9 +193,11 @@ def test_audit_current_writes_alignment_report(tmp_path: Path):
 
 def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
     assert invoke("idea", "try topology cleanup", "--target", str(tmp_path)).exit_code == 0
     assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    compile_toy_cycle(tmp_path)
     assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "2").exit_code == 0
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     run_id = sorted(state["runs"])[0]
@@ -159,15 +208,164 @@ def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
     assert invoke("queue", run_id, "--target", str(tmp_path)).exit_code == 0
     assert invoke("submit-queue", "--target", str(tmp_path), "--dry").exit_code == 0
     assert invoke("monitor", "--target", str(tmp_path)).exit_code == 0
-    assert invoke("collect", run_id, "--target", str(tmp_path), "--metric", "0.7", "--trusted").exit_code == 0
+    assert invoke("collect", run_id, "--target", str(tmp_path), "--metric", "0.7").exit_code == 0
     assert invoke("reflect", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
+    write_run_decision(tmp_path, run_id)
     assert invoke("revise-plan", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("reflect-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    compile_toy_cycle(tmp_path)
     assert invoke("revise-cycle", "c001", "--offline", "--target", str(tmp_path), "--mode", "balanced").exit_code == 0
     assert invoke("validate-hard-rules", "--target", str(tmp_path)).exit_code == 0
     assert (tmp_path / ".vibe" / "runs" / run_id / "revised_plan.md").read_text()
     assert "0.7" in (tmp_path / "VIBE_LEADERBOARD.md").read_text()
     assert "cycle_revised_plan_written" in (tmp_path / "VIBE_TIMELINE.md").read_text()
+
+
+def test_v070_decision_and_compiler_contracts(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("decision", "write", "c001", "--type", "launch_gpu_gate", "--action", "run configured adapter task", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("validate-decision", "c001", "--target", str(tmp_path)).exit_code == 0
+    result = invoke("compile-decision", "c001", "--target", str(tmp_path))
+    assert result.exit_code == 1
+    decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
+    assert decision["decision_type"] == "blocked_missing_adapter"
+
+
+def test_v070_valid_toy_decision_compiles_executable_resource_plan(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    compile_toy_cycle(tmp_path)
+    assert invoke("validate-resource-plan", "c001", "--target", str(tmp_path)).exit_code == 0
+    plan = read_yaml(tmp_path / ".vibe" / "cycles" / "c001" / "resource_plan.yaml", {})
+    spec = plan["runs"]["toy-audit"]
+    assert spec["dryrun"]["command"]
+    assert spec["entrypoint"]["command"]
+    assert spec["evaluation"]["metrics_schema"] == {"primary": "number"}
+
+
+def test_v070_config_adapter_missing_entrypoint_blocks(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    (tmp_path / ".vibe" / "config.local.yaml").write_text("adapter:\n  kind: config\n")
+    (tmp_path / ".vibe" / "adapter.yaml").write_text(
+        "task:\n"
+        "  key: broken\n"
+        "  dryrun_command: python -c 'print(\"ok\")'\n"
+        "  metrics_file_path: outputs/metrics.json\n"
+        "  expected_output_path: outputs/metrics.json\n"
+        "  metrics_schema:\n"
+        "    primary: number\n"
+        "  resources:\n"
+        "    gpu: 0\n"
+        "    cpus: 1\n"
+        "    mem_gb: 1\n"
+        "    time: '00:05:00'\n"
+    )
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("decision", "write", "c001", "--type", "launch_gpu_gate", "--action", "run config task", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("compile-decision", "c001", "--target", str(tmp_path)).exit_code == 1
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert state["status"] == "blocked_missing_resource_plan"
+    assert "entrypoint.command" in state["blocked_reason"]
+
+
+def test_v070_existing_real_resource_plan_remains_usable(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    write_yaml(
+        tmp_path / ".vibe" / "cycles" / "c001" / "resource_plan.yaml",
+        {
+            "cycle_id": "c001",
+            "mode": "legacy-real",
+            "runs": {
+                "legacy-real": {
+                    "priority": 1,
+                    "direction_id": "d001_legacy",
+                    "hypothesis": "Run a legacy real command plan.",
+                    "expected_learning": "legacy plan can still execute",
+                    "cost": "low",
+                    "dryrun": {"command": "python -c 'print(\"legacy dryrun ok\")'", "max_minutes": 5},
+                    "entrypoint": {"type": "local", "command": "python -c 'print(\"legacy run ok\")'"},
+                    "resources": {"gpu": 0, "cpus": 1, "mem_gb": 1, "time": "00:05:00"},
+                    "outputs": {"expected_output_path": ".vibe/legacy_metrics.json"},
+                    "evaluation": {"metrics_file_path": ".vibe/legacy_metrics.json", "metrics_schema": {"primary": "number"}},
+                    "depends_on": [],
+                    "cancel_if_failed": [],
+                }
+            },
+        },
+    )
+    assert invoke("validate-resource-plan", "c001", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    run_id = sorted(state["runs"])[0]
+    assert run_id == "r001_legacy_real"
+
+
+def test_v070_metrics_schema_and_trust_gating(tmp_path: Path):
+    run_id = prepare_toy_run(tmp_path)
+    paths = VibePaths(tmp_path)
+    collect_run(paths, run_id)
+    metrics = read_json(tmp_path / ".vibe" / "runs" / run_id / "metrics.json", {})
+    assert metrics["trust_status"] == "untrusted_missing_metrics"
+    assert metrics["schema_status"] == "missing"
+    assert read_json(tmp_path / ".vibe" / "leaderboard" / "best.json", {}) == {}
+
+    bad_metrics = tmp_path / "bad_metrics.json"
+    bad_metrics.write_text('{"other": 1.0}\n')
+    collect_run(paths, run_id, metrics_file=str(bad_metrics))
+    metrics = read_json(tmp_path / ".vibe" / "runs" / run_id / "metrics.json", {})
+    assert metrics["trust_status"] == "untrusted_schema_failed"
+    assert any("primary" in item for item in metrics["schema_errors"])
+    assert read_json(tmp_path / ".vibe" / "leaderboard" / "best.json", {}) == {}
+
+
+def test_v070_missing_expected_output_and_placeholder_stay_untrusted(tmp_path: Path):
+    run_id = prepare_toy_run(tmp_path)
+    paths = VibePaths(tmp_path)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    run = state["runs"][run_id]
+    run["dryrun"]["command"] = "python -c 'print(\"vibe dryrun placeholder\")'"
+    state["runs"][run_id] = run
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    write_json(tmp_path / ".vibe" / "runs" / run_id / "manifest.json", run)
+    write_json(tmp_path / ".vibe" / "runs" / run_id / "manifest.yaml", run)
+    collect_run(paths, run_id, metric=0.9)
+    metrics = read_json(tmp_path / ".vibe" / "runs" / run_id / "metrics.json", {})
+    assert metrics["trust_status"] in {"untrusted_missing_output", "untrusted_placeholder_command"}
+    assert metrics["trusted"] is False
+    assert read_json(tmp_path / ".vibe" / "leaderboard" / "best.json", {}) == {}
+
+
+def test_v070_offline_revise_writes_block_decision(tmp_path: Path):
+    run_id = prepare_toy_run(tmp_path)
+    assert invoke("reflect", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("revise-plan", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
+    decision = read_json(tmp_path / ".vibe" / "runs" / run_id / "decision.json", {})
+    assert decision["decision_type"] == "blocked_missing_decision"
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert state["runs"][run_id]["status"] == "blocked"
+
+
+def test_v070_anti_loop_detects_repeated_decisions_and_zero_metrics(tmp_path: Path):
+    run_id = prepare_toy_run(tmp_path)
+    paths = VibePaths(tmp_path)
+    write_run_decision(tmp_path, run_id)
+    write_run_decision(tmp_path, run_id)
+    assert apply_loop_guard(paths, run_id)
+    decision = read_json(tmp_path / ".vibe" / "runs" / run_id / "decision.json", {})
+    assert decision["decision_type"] == "blocked_repeating_evidence"
+
+    second = tmp_path / "zero-metrics"
+    run_id = prepare_toy_run(second)
+    paths = VibePaths(second)
+    collect_run(paths, run_id)
+    collect_run(paths, run_id)
+    assert apply_loop_guard(paths, run_id)
+    decision = read_json(second / ".vibe" / "runs" / run_id / "decision.json", {})
+    assert decision["decision_type"] == "blocked_repeating_evidence"
 
 
 def test_literature_and_deep_research_interfaces(tmp_path: Path):
@@ -218,14 +416,18 @@ def test_deep_request_from_idea_contextual_request(tmp_path: Path):
 
 def test_revised_plan_includes_idea_pool_update(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
     assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    compile_toy_cycle(tmp_path)
     assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
     run_id = sorted(read_json(tmp_path / ".vibe" / "state" / "state.json", {})["runs"])[0]
     assert invoke("reflect", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
+    write_run_decision(tmp_path, run_id)
     assert invoke("revise-plan", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
     assert "## Idea pool update" in (tmp_path / ".vibe" / "runs" / run_id / "revised_plan.md").read_text()
     assert invoke("reflect-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    compile_toy_cycle(tmp_path)
     assert invoke("revise-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
     assert "## Idea pool update" in (tmp_path / ".vibe" / "cycles" / "c001" / "cycle_revised_plan.md").read_text()
 
@@ -310,8 +512,10 @@ def test_dogfood_command_runs_mock_cycle(tmp_path: Path):
 
 def test_expanded_operator_commands(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
     assert invoke("migrate", "--target", str(tmp_path)).exit_code == 0
     assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    compile_toy_cycle(tmp_path)
     assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     run_id = sorted(state["runs"])[0]
@@ -329,7 +533,9 @@ def test_expanded_operator_commands(tmp_path: Path):
 
 def test_slurm_dry_backend_records_launch(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_toy_adapter(tmp_path)
     assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    compile_toy_cycle(tmp_path)
     assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     run_id = sorted(state["runs"])[0]
@@ -359,8 +565,7 @@ def test_auto_cycle_reaches_first_submission(tmp_path: Path):
     assert result.exit_code == 0
     assert "planned c001" in result.output
     assert "reviewed c001" in result.output
-    assert "generated r001_baseline_check" in result.output
-    assert "submitted r001_baseline_check" in result.output
+    assert "blocked:" in result.output or "Cannot generate runs without compiled executable resource_plan" in result.output
 
 
 def test_codex_runner_uses_fake_codex_and_writes_artifact(tmp_path: Path, monkeypatch):
@@ -398,6 +603,10 @@ def test_todo_cli_commands_exist():
         "idea",
         "directive",
         "vendor-runtime",
+        "decision",
+        "validate-decision",
+        "compile-decision",
+        "validate-resource-plan",
         "plan-cycle",
         "review-cycle",
         "generate-runs",

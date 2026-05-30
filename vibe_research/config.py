@@ -79,7 +79,7 @@ def migrate_project(paths: VibePaths) -> dict[str, Any]:
 
     state = read_json(paths.state / "state.json", {})
     state = deep_merge(default_state(), state if isinstance(state, dict) else {})
-    state["schema_version"] = 2
+    state["schema_version"] = 3
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
     return config

@@ -7,6 +7,7 @@ from typing import Any
 
 from .dashboard import sync_dashboard
 from .config import write_config_schema
+from .decisions import write_block_decision
 from .ideas import create_idea as create_pool_idea
 from .ideas import ensure_idea_pool
 from .ideas import render_idea_views
@@ -15,6 +16,7 @@ from .models import IdeaRecord, ProjectConfig, RunManifest, default_budget, defa
 from .papers import connect
 from .paths import VibePaths
 from .portal import build_portal, install_agents_snippet, write_agents_files, write_portal_text
+from .promotion import validate_resource_plan
 from .timeline import record_event
 
 
@@ -520,6 +522,13 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
     state.setdefault("runs", {})
     existing = list(state["runs"].keys())
     resource_plan = load_resource_plan(paths, cycle)
+    plan_errors = validate_resource_plan(paths, cycle)
+    if plan_errors:
+        reason = "Cannot generate runs without compiled executable resource_plan.yaml: " + "; ".join(plan_errors[:6])
+        write_block_decision(paths, cycle, reason, decision_type="blocked_missing_resource_plan")
+        record_event(paths, "run_generation_blocked", reason, cycle_id=cycle, status="blocked_missing_resource_plan")
+        sync_dashboard(paths)
+        raise RuntimeError(reason)
     plan_runs = resource_plan.get("runs", {})
     cancel_map: dict[str, list[str]] = {}
     for rule in resource_plan.get("cancel_rules", []):
@@ -533,28 +542,35 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
         for short, spec in list(plan_runs.items())[:count]:
             if isinstance(spec, dict):
                 specs.append(
-                    (
-                        slugify(short, 32),
-                        spec.get("direction_id", "d000_unknown"),
-                        spec.get("hypothesis", spec.get("expected_learning", short)),
-                        spec.get("cost", "low"),
-                        int(spec.get("priority", 100)),
-                        list(spec.get("depends_on", [])),
-                        list(spec.get("cancel_if_failed", [])) + cancel_map.get(str(short), []),
-                    )
+                    {
+                        "short": slugify(short, 32),
+                        "direction_id": spec.get("direction_id", "d000_unknown"),
+                        "hypothesis": spec.get("hypothesis", spec.get("expected_learning", short)),
+                        "expected_learning": spec.get("expected_learning", spec.get("hypothesis", short)),
+                        "cost": spec.get("cost", "low"),
+                        "priority": int(spec.get("priority", 100)),
+                        "depends_on": list(spec.get("depends_on", [])),
+                        "cancel_if_failed": list(spec.get("cancel_if_failed", [])) + cancel_map.get(str(short), []),
+                        "dryrun": spec.get("dryrun", {}),
+                        "entrypoint": spec.get("entrypoint", {}),
+                        "resources": spec.get("resources", {}),
+                        "outputs": spec.get("outputs", {}),
+                        "evaluation": spec.get("evaluation", {}),
+                        "success_criteria": spec.get("success_criteria", {}),
+                    }
                 )
     if not specs:
-        specs = [
-            ("baseline-check", "d001_baseline", "Verify a trusted local baseline and evaluator provenance.", "low", 1, [], []),
-            ("diagnostic-check", "d002_diagnostics", "Run cheap diagnostics for evaluator, data, and logging reliability.", "low", 1, [], []),
-            ("first-hypothesis", "d003_experiment", "Test the highest-priority research hypothesis from inbox or brief.", "medium", 2, [], []),
-            ("literature-scout", "d004_literature", "Collect targeted evidence for the next portfolio decision.", "low", 3, [], []),
-            ("external-smoke", "d005_external_repo", "Smoke test a relevant external repo or weight source.", "low", 3, [], []),
-            ("seed-repeat", "d006_validation", "Repeat a candidate result for stability.", "medium", 4, [], []),
-        ][:count]
+        raise RuntimeError(f"Cycle {cycle} has no compiled run specifications")
     run_ids: list[str] = []
     name_to_run_id: dict[str, str] = {}
-    for short, direction_id, hypothesis, cost, priority, depends_on, cancel_if_failed in specs:
+    for spec in specs:
+        short = spec["short"]
+        direction_id = spec["direction_id"]
+        hypothesis = spec["hypothesis"]
+        cost = spec["cost"]
+        priority = spec["priority"]
+        depends_on = spec["depends_on"]
+        cancel_if_failed = spec["cancel_if_failed"]
         run_id = f"{next_numeric_id(existing + run_ids, 'r')}_{short.replace('-', '_')}"
         name_to_run_id[short] = run_id
         resolved_deps = [name_to_run_id.get(str(dep), str(dep)) for dep in depends_on]
@@ -566,19 +582,15 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
             direction_id=direction_id,
             branch=branch,
             hypothesis=hypothesis,
-            change_summary="Generated scaffold; fill in project-specific command before submit.",
-            expected_learning=hypothesis,
-            dryrun={"command": "python -c 'print(\"vibe dryrun placeholder\")'", "max_minutes": 5},
-            entrypoint={"type": "local", "command": "python -c 'print(\"vibe run placeholder\")'"},
-            resources={
-                "gpu": 0 if cost == "low" else 1,
-                "cpus": 1 if cost == "low" else 4,
-                "mem_gb": 4 if cost == "low" else 16,
-                "time": "00:30:00" if cost == "low" else "04:00:00",
-                "preferred_partitions": ["gpu_short"],
-                "fallback_partitions": ["gpu", "a100", "general_gpu"],
-            },
+            change_summary="Generated from compiled adapter resource plan.",
+            expected_learning=spec["expected_learning"],
+            dryrun=spec["dryrun"],
+            entrypoint=spec["entrypoint"],
+            resources=spec["resources"],
             dependencies={"run_after": resolved_deps, "cancel_if_failed": resolved_cancel},
+            outputs=spec["outputs"],
+            evaluation=spec["evaluation"],
+            success_criteria=spec["success_criteria"],
         )
         run_dir = paths.runs / run_id
         ensure_dir(run_dir / "artifacts")
