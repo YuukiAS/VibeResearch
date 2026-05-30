@@ -270,6 +270,49 @@ promotion 必须有 trusted 且 schema-valid 的 evidence，并且 protected met
 或明确的用户决定。portfolio scheduler 会阻塞缺 active capability、缺脚本、缺 metrics
 schema、unknown cost、超预算、超自治等级，以及没有新变量或 failure analysis 的同构重复实验。
 
+## Bootstrap Orchestrator / 接入编排与 Dogfood
+
+v0.8.1 把 adapter onboarding 和 research manager 串成可恢复的项目部署流程。它不会把
+下游项目写死进 VibeResearch 主框架，而是生成草案、验证草案、只激活通过 contract test
+的 capability，并输出 readiness report，说明当前能安全执行什么、什么被阻塞、最小下一步是什么。
+
+```bash
+vibe bootstrap init --goal "..." --background "..."
+vibe bootstrap run
+vibe bootstrap status
+vibe bootstrap resume
+vibe bootstrap doctor
+```
+
+bootstrap 会写入 `.vibe/bootstrap/state.json`、
+`.vibe/bootstrap/sessions/<session>.json`、`.vibe/bootstrap/readiness_report.md`
+和 `.vibe/bootstrap/readiness.json`。阶段包括 `intake`、`discovery`、`draft`、
+`questions`、`validation`、`activation` 和 `report`。每个阶段都会记录输入 hash、
+输出、warning、blocker、retry、下一步、生成文件和 provenance。resume 会保留用户改过的
+adapter、script、question 和 policy 文件，必要时写 merge warning，不会静默覆盖。
+
+本地 dogfood sandbox 默认被 git 忽略：
+
+```bash
+vibe bootstrap dogfood --profile 0.8.1-happy-path
+vibe bootstrap dogfood --profile 0.8.1-missing-metrics
+vibe bootstrap dogfood --profile 0.8.1-policy-conflict
+vibe bootstrap dogfood --profile 0.8.1-placeholder-script
+```
+
+外部 repo dogfood 应只把项目特异内容留在外部 repo 或 report 里，不写进主框架：
+
+```bash
+vibe bootstrap dogfood --external-repo /path/to/repo --brief-file /path/to/problem.md --dry-run --output-report /tmp/dogfood.json
+vibe bootstrap archive --source /path/to/repo --note "legacy automation before fresh bootstrap"
+vibe bootstrap import-legacy .vibe/archives/<id>/manifest.json
+```
+
+旧结果导入后默认是 `imported_unverified` 历史上下文。只有当前 adapter revision、
+capability id、metrics schema、artifact rules 和 provenance 都能验证时，旧结果才可能成为
+trusted evidence。policy completeness gate 会阻止不安全自动化：缺 budget 不能 queue，
+缺 autonomy 不能自动执行，缺 stage gate 不能 promotion，缺 protected metrics 不能自动进入更高阶段。
+
 ## Decision-To-Execution Safety
 
 v0.7.0 增加了从文字计划到可执行实验的三层结构化桥接：

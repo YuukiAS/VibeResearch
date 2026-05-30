@@ -29,6 +29,18 @@ from .audit import current_alignment_audit
 from .automation import auto_cycle as run_auto_cycle
 from .automation import auto_next as run_auto_next
 from .automation import scheduler_explain as render_scheduler_explain
+from .bootstrap import (
+    archive_legacy,
+    bootstrap_init,
+    bootstrap_resume,
+    bootstrap_run,
+    bootstrap_status,
+    build_readiness,
+    create_local_dogfood_profile,
+    export_readiness_dashboard,
+    import_legacy,
+    run_dogfood,
+)
 from .codex_adapter import artifact_path, prompt_packet, run_codex
 from .config import detect_config, load_config, migrate_project, validate_config
 from .daemon import daemon_start, daemon_status, daemon_stop
@@ -88,6 +100,7 @@ dashboard_app = typer.Typer(help="Build and serve the read-only static dashboard
 decision_app = typer.Typer(help="Inspect and write structured research decisions.")
 adapter_app = typer.Typer(help="Manage adapter onboarding, readiness, and capability activation.")
 script_app = typer.Typer(help="Bootstrap downstream execution wrapper scripts.")
+bootstrap_app = typer.Typer(help="Run resumable project bootstrap, readiness, archive, and dogfood workflows.")
 research_app = typer.Typer(help="Initialize and audit bounded autonomous research state.")
 hypothesis_app = typer.Typer(help="Manage hypothesis registry records.")
 experiment_app = typer.Typer(help="Manage experiment registry and evidence links.")
@@ -105,6 +118,7 @@ app.add_typer(dashboard_app, name="dashboard")
 app.add_typer(decision_app, name="decision")
 app.add_typer(adapter_app, name="adapter")
 app.add_typer(script_app, name="script")
+app.add_typer(bootstrap_app, name="bootstrap")
 app.add_typer(research_app, name="research")
 app.add_typer(hypothesis_app, name="hypothesis")
 app.add_typer(experiment_app, name="experiment")
@@ -278,6 +292,118 @@ def script_bootstrap_cmd(
     p = paths(target)
     path = script_bootstrap(p, generate=not plan, script_dir=script_dir)
     sync_dashboard(p)
+    console.print(str(path))
+
+
+@bootstrap_app.command("init")
+def bootstrap_init_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    goal: str = typer.Option("", "--goal"),
+    background: str = typer.Option("", "--background"),
+    memo_language: str = typer.Option("zh-CN", "--memo-language"),
+    autonomy_level: str = typer.Option("analysis_only", "--autonomy-level"),
+    mode: str = typer.Option("fresh", "--mode"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Create or refresh bootstrap session state."""
+
+    p = paths(target)
+    if not p.vibe.exists():
+        init_project(target, goal=goal, background=background, root_portal="none")
+    state = bootstrap_init(p, mode=mode, goal=goal, background=background, memo_language=memo_language, autonomy_level=autonomy_level, force=force)
+    console.print_json(data={"session_id": state["session_id"], "state": str(p.vibe / "bootstrap" / "state.json")})
+
+
+@bootstrap_app.command("run")
+def bootstrap_run_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    start_phase: Optional[str] = typer.Option(None, "--start-phase"),
+    stop_after: Optional[str] = typer.Option(None, "--stop-after"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Run ordered bootstrap phases until complete or blocked."""
+
+    p = paths(target)
+    state = bootstrap_run(p, start_phase=start_phase, stop_after=stop_after, non_interactive=True, force=force)
+    sync_dashboard(p)
+    console.print_json(data={"session_id": state.get("session_id"), "current_phase": state.get("current_phase"), "readiness_level": state.get("readiness_level"), "blocked_phases": state.get("blocked_phases", [])})
+
+
+@bootstrap_app.command("resume")
+def bootstrap_resume_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Resume from the latest blocked or failed bootstrap phase without overwriting user edits."""
+
+    p = paths(target)
+    state = bootstrap_resume(p, non_interactive=True)
+    sync_dashboard(p)
+    console.print_json(data={"session_id": state.get("session_id"), "current_phase": state.get("current_phase"), "blocked_phases": state.get("blocked_phases", []), "merge_warnings": state.get("merge_warnings", [])})
+
+
+@bootstrap_app.command("status")
+def bootstrap_status_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Print bootstrap state and readiness summary."""
+
+    console.print_json(data=bootstrap_status(paths(target)))
+
+
+@bootstrap_app.command("doctor")
+def bootstrap_doctor_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Regenerate bootstrap readiness report and dashboard-ready readiness export."""
+
+    p = paths(target)
+    readiness = build_readiness(p)
+    from .io import write_json, write_text
+    from .bootstrap import bootstrap_dir, render_readiness_report
+
+    write_json(bootstrap_dir(p) / "readiness.json", readiness)
+    write_text(bootstrap_dir(p) / "readiness_report.md", render_readiness_report(readiness))
+    export_readiness_dashboard(p)
+    sync_dashboard(p)
+    console.print_json(data={"readiness_level": readiness["readiness_level"], "report": str(p.vibe / "bootstrap" / "readiness_report.md")})
+
+
+@bootstrap_app.command("archive")
+def bootstrap_archive_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    source: Optional[Path] = typer.Option(None, "--source"),
+    note: str = typer.Option("", "--note"),
+) -> None:
+    """Archive old VibeResearch/downstream automation state as untrusted regression evidence."""
+
+    result = archive_legacy(paths(target), source=source, note=note)
+    console.print_json(data={"archive_id": result["archive_id"], "file_count": result["file_count"], "manifest": str(paths(target).vibe / "archives" / result["archive_id"] / "manifest.json")})
+
+
+@bootstrap_app.command("import-legacy")
+def bootstrap_import_legacy_cmd(archive_manifest: Path, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Import archive summaries as imported_unverified historical context."""
+
+    console.print_json(data=import_legacy(paths(target), archive_manifest))
+
+
+@bootstrap_app.command("dogfood")
+def bootstrap_dogfood_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    profile: str = typer.Option("0.8.1-happy-path", "--profile"),
+    external_repo: Optional[Path] = typer.Option(None, "--external-repo"),
+    brief_file: Optional[Path] = typer.Option(None, "--brief-file"),
+    output_report: Optional[Path] = typer.Option(None, "--output-report"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Run local ignored sandbox or external-repo bootstrap dogfood."""
+
+    p = paths(target)
+    if not p.vibe.exists():
+        init_project(target, minimal=True, root_portal="none")
+    result = run_dogfood(p, profile=profile, external_repo=external_repo, brief_file=brief_file, output_report=output_report, dry_run=dry_run)
+    console.print_json(data={"profile": result["profile"], "repo": result["repo"], "issues": result["issues"], "report": str(output_report or (p.vibe / "bootstrap" / "dogfood_report.json"))})
+
+
+@bootstrap_app.command("sandbox")
+def bootstrap_sandbox_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), profile: str = typer.Option("0.8.1-happy-path", "--profile")) -> None:
+    """Create one ignored local `.vibe_dogfood/` profile without running bootstrap."""
+
+    path = create_local_dogfood_profile(paths(target).root, profile)
     console.print(str(path))
 
 
@@ -580,6 +706,7 @@ def dashboard_export_research_cmd(target: Path = typer.Option(Path("."), "--targ
     """Export research registry, graph, portfolio, and budget JSON for future visualization."""
 
     result = export_research_dashboard(paths(target))
+    export_readiness_dashboard(paths(target))
     console.print_json(data=result)
 
 
@@ -1086,7 +1213,11 @@ def dryrun(run_id: str, target: Path = typer.Option(Path("."), "--target", "-t")
 def queue(run_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
     """Queue a run for deterministic scheduler submission."""
 
-    queue_run(paths(target), run_id)
+    try:
+        queue_run(paths(target), run_id)
+    except RuntimeError as exc:
+        console.print(f"[error] {exc}")
+        raise typer.Exit(1) from exc
     console.print(f"Queued {run_id}")
 
 

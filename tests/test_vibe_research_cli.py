@@ -229,6 +229,9 @@ def test_v080_research_init_registry_policy_memory_memo_and_exports(tmp_path: Pa
     hypotheses = read_json(tmp_path / ".vibe" / "research" / "hypotheses.json", {})
     hyp_id = next(iter(hypotheses))
     assert invoke("experiment", "create", hyp_id, "--design", "calibration smoke", "--stage", "analysis", "--target", str(tmp_path)).exit_code == 0
+    stage_policy = read_yaml(tmp_path / ".vibe" / "policies" / "stage_gates.yaml", {})
+    stage_policy["protected_metrics"] = {"guardrail": {"max_regression": 0.0}}
+    write_yaml(tmp_path / ".vibe" / "policies" / "stage_gates.yaml", stage_policy)
     experiments = read_json(tmp_path / ".vibe" / "research" / "experiments.json", {})
     exp_id = next(iter(experiments))
     assert invoke("experiment", "analyze", exp_id, "--trusted", "--schema-valid", "--summary", "trusted positive evidence", "--primary-delta", "0.2", "--target", str(tmp_path)).exit_code == 0
@@ -300,6 +303,79 @@ def test_v080_promotion_stop_require_trusted_evidence(tmp_path: Path):
     assert invoke("hypothesis", "promote", hyp_id, "--reason", "not enough", "--target", str(tmp_path)).exit_code == 1
     assert invoke("hypothesis", "stop", hyp_id, "--reason", "untrusted only", "--target", str(tmp_path)).exit_code == 1
     assert invoke("hypothesis", "stop", hyp_id, "--reason", "operator stop", "--user-decision", "--target", str(tmp_path)).exit_code == 0
+
+
+def test_v081_bootstrap_dogfood_happy_path_and_readiness_exports(tmp_path: Path):
+    result = invoke("bootstrap", "dogfood", "--target", str(tmp_path), "--profile", "0.8.1-happy-path")
+    assert result.exit_code == 0
+    assert ".vibe_dogfood/" in (tmp_path / ".gitignore").read_text()
+    profile = tmp_path / ".vibe_dogfood" / "0.8.1-happy-path"
+    readiness = read_json(profile / ".vibe" / "bootstrap" / "readiness.json", {})
+    assert readiness["readiness_level"] == "active"
+    assert "evaluation_smoke" in readiness["active_capabilities"]
+    assert (profile / ".vibe" / "script_readiness.json").exists()
+    assert (profile / ".vibe" / "bootstrap" / "readiness_report.md").exists()
+    memo = next((profile / ".vibe" / "memos").glob("*.md")).read_text()
+    assert "初始化/接入工作" in memo
+    export = read_json(profile / ".vibe" / "dashboard" / "readiness_export.json", {})
+    assert "bootstrap_state" in export
+
+
+def test_v081_bootstrap_blocks_conflicts_placeholders_and_resume_preserves_user_policy(tmp_path: Path):
+    assert invoke("bootstrap", "dogfood", "--target", str(tmp_path), "--profile", "0.8.1-policy-conflict").exit_code == 0
+    conflict = tmp_path / ".vibe_dogfood" / "0.8.1-policy-conflict"
+    state = read_json(conflict / ".vibe" / "bootstrap" / "state.json", {})
+    assert "questions" in state.get("blocked_phases", [])
+    questions = read_jsonl(conflict / ".vibe" / "research" / "questions.jsonl")
+    assert any(row.get("question_id") == "q_readme_agents_conflict" for row in questions)
+
+    assert invoke("bootstrap", "dogfood", "--target", str(tmp_path), "--profile", "0.8.1-placeholder-script").exit_code == 0
+    placeholder = tmp_path / ".vibe_dogfood" / "0.8.1-placeholder-script"
+    report = read_json(placeholder / ".vibe" / "bootstrap" / "readiness.json", {})
+    assert "evaluation_smoke" in report.get("contract_test_failures", [])
+
+    assert invoke("bootstrap", "dogfood", "--target", str(tmp_path), "--profile", "0.8.1-resume-after-failure").exit_code == 0
+    resume_repo = tmp_path / ".vibe_dogfood" / "0.8.1-resume-after-failure"
+    budget = read_yaml(resume_repo / ".vibe" / "policies" / "budget.yaml", {})
+    budget["daily_job_cap"] = 9
+    write_yaml(resume_repo / ".vibe" / "policies" / "budget.yaml", budget)
+    assert invoke("bootstrap", "resume", "--target", str(resume_repo)).exit_code == 0
+    assert read_yaml(resume_repo / ".vibe" / "policies" / "budget.yaml", {})["daily_job_cap"] == 9
+    assert read_json(resume_repo / ".vibe" / "bootstrap" / "state.json", {}).get("merge_warnings")
+
+
+def test_v081_policy_gate_archive_import_and_external_dogfood(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b").exit_code == 0
+    (tmp_path / ".vibe" / "policies" / "budget.yaml").unlink()
+    run_id = prepare_toy_run(tmp_path / "toy")
+    toy = tmp_path / "toy"
+    (toy / ".vibe" / "policies" / "budget.yaml").unlink()
+    state = read_json(toy / ".vibe" / "state" / "state.json", {})
+    state["runs"][run_id]["status"] = "dryrun_passed"
+    write_json(toy / ".vibe" / "state" / "state.json", state)
+    queue_result = invoke("queue", run_id, "--target", str(toy))
+    assert queue_result.exit_code == 1
+    assert "Policy completeness blocked queue" in queue_result.output
+
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "VIBE_TIMELINE.md").write_text("collect_more_metrics primary=0.0 continued exploration\n")
+    assert invoke("bootstrap", "archive", "--target", str(toy), "--source", str(legacy), "--note", "test").exit_code == 0
+    archive_manifest = next((toy / ".vibe" / "archives").glob("*/manifest.json"))
+    manifest = read_json(archive_manifest, {})
+    assert manifest["trust_status"] == "historical_context_only"
+    assert manifest["failure_summary"]["regression_cases"]
+    assert invoke("bootstrap", "import-legacy", str(archive_manifest), "--target", str(toy)).exit_code == 0
+    assert read_json(toy / ".vibe" / "research" / "legacy_import.json", {})["status"] == "imported_unverified"
+
+    mock_external = tmp_path / "external"
+    mock_external.mkdir()
+    (mock_external / "README.md").write_text("External repo\n")
+    out = tmp_path / "dogfood.json"
+    assert invoke("bootstrap", "dogfood", "--target", str(toy), "--external-repo", str(mock_external), "--dry-run", "--output-report", str(out)).exit_code == 0
+    dogfood = read_json(out, {})
+    assert dogfood["dry_run"] is True
+    assert dogfood["issue_classes"]
 
 
 def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):

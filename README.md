@@ -289,6 +289,57 @@ when policy says to block, over-budget work, autonomy-level violations, and
 same-hypothesis same-stage duplicate experiments without a new variable or
 failure analysis.
 
+## Bootstrap Orchestrator And Dogfood
+
+v0.8.1 turns adapter onboarding and the research manager into a resumable
+project deployment workflow. It does not hardcode downstream projects. It
+creates drafts, validates them, activates only contract-tested capabilities,
+and writes readiness reports that explain what can run, what is blocked, and
+the smallest next action.
+
+```bash
+vibe bootstrap init --goal "..." --background "..."
+vibe bootstrap run
+vibe bootstrap status
+vibe bootstrap resume
+vibe bootstrap doctor
+```
+
+Bootstrap writes `.vibe/bootstrap/state.json`,
+`.vibe/bootstrap/sessions/<session>.json`,
+`.vibe/bootstrap/readiness_report.md`, and
+`.vibe/bootstrap/readiness.json`. Phases are `intake`, `discovery`, `draft`,
+`questions`, `validation`, `activation`, and `report`; each phase records
+inputs, hashes, outputs, warnings, blockers, retries, next actions, generated
+artifacts, and provenance. Resume preserves user-edited adapter, script,
+question, and policy files and emits merge warnings instead of silently
+overwriting them.
+
+Local dogfood sandboxes are ignored by git:
+
+```bash
+vibe bootstrap dogfood --profile 0.8.1-happy-path
+vibe bootstrap dogfood --profile 0.8.1-missing-metrics
+vibe bootstrap dogfood --profile 0.8.1-policy-conflict
+vibe bootstrap dogfood --profile 0.8.1-placeholder-script
+```
+
+External dogfood should inspect or bootstrap the downstream repo without
+copying project-specific logic into VibeResearch:
+
+```bash
+vibe bootstrap dogfood --external-repo /path/to/repo --brief-file /path/to/problem.md --dry-run --output-report /tmp/dogfood.json
+vibe bootstrap archive --source /path/to/repo --note "legacy automation before fresh bootstrap"
+vibe bootstrap import-legacy .vibe/archives/<id>/manifest.json
+```
+
+Legacy results import as `imported_unverified` historical context unless the
+current adapter revision, capability id, metrics schema, artifact rules, and
+provenance validate them. Policy completeness blocks unsafe execution: missing
+budget blocks queue submission, missing autonomy blocks automatic execution,
+missing stage gates block promotion, and missing protected metrics blocks
+automatic higher-stage promotion.
+
 ## Decision-To-Execution Safety
 
 v0.7.0 adds a structured three-layer bridge between plan text and executable

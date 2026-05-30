@@ -8,6 +8,15 @@
 - Ignore root-level `TODO-v*.md` source requirement drafts to prevent future
   planning notes from being accidentally committed.
 
+## 0.8.1 - 2026-05-30
+
+- Add a resumable bootstrap orchestrator with `vibe bootstrap init/run/resume/status/doctor/archive/import-legacy/dogfood/sandbox`.
+- Add machine-readable bootstrap state, sessions, readiness reports, readiness dashboard export, script readiness matrix, policy completeness checks, and initialization-aware daily memos.
+- Add local ignored `.vibe_dogfood/` sandbox support and a generic dogfood harness for local profiles or external dry-run inspection.
+- Add legacy archive/import semantics that preserve old automation state as `imported_unverified` regression evidence rather than trusted scientific evidence.
+- Harden script bootstrap and policy gates so placeholder wrappers, missing policies, missing protected metrics, and incomplete autonomy answers block unsafe execution or promotion.
+- Document end-to-end bootstrap, local sandbox dogfood, external dogfood, legacy archive/import, and the Plan Mode convention.
+
 ## 0.8.0 - 2026-05-30
 
 - Add the bounded autonomous research manager with append-only research events, hypothesis/experiment/evidence snapshots, research decisions, and a budget ledger.

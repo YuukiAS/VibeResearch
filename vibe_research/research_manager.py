@@ -304,6 +304,10 @@ def write_default_policies(
         "max_automatic_queue_depth": 1,
         "allowed_backends": ["local"],
         "allowed_adapter_capabilities": [],
+        "scripts_may_be_edited_automatically": False,
+        "jobs_may_be_submitted_automatically": False,
+        "archive_may_run_automatically": True,
+        "hypotheses_may_be_stopped_automatically": False,
     }
     memo = {"version": 1, "language": memo_language, "timezone": timezone, "daily_memo_time": "18:00"}
     policies = {"budget": budget, "stage_gates": stage_gates, "autonomy": autonomy, "memo": memo}
@@ -335,6 +339,66 @@ def research_readiness(paths: VibePaths) -> dict[str, Any]:
         "open_questions": open_questions,
         "adapter_ready": adapter.get("ready_for_experiments", False),
         "adapter_maturity": adapter.get("maturity_level", "missing"),
+    }
+
+
+def policy_completeness(paths: VibePaths) -> dict[str, Any]:
+    """Check whether policy files are complete enough for safe automation."""
+
+    budget = read_yaml(paths.vibe / "policies" / "budget.yaml", {})
+    stage = read_yaml(paths.vibe / "policies" / "stage_gates.yaml", {})
+    autonomy = read_yaml(paths.vibe / "policies" / "autonomy.yaml", {})
+    memo = read_yaml(paths.research / "memo_config.yaml", {}) or read_yaml(paths.vibe / "memos" / "memo_config.yaml", {})
+    issues: list[str] = []
+    warnings: list[str] = []
+    budget_required = [
+        "daily_job_cap",
+        "daily_gpu_hour_cap",
+        "per_hypothesis_gpu_hour_cap",
+        "per_experiment_gpu_hour_cap",
+        "long_run_confirmation_gpu_hours",
+        "unknown_cost_behavior",
+        "cooldown_after_failed_runs",
+        "max_consecutive_untrusted_runs",
+    ]
+    stage_required = ["stages", "target_metric_improvement", "max_failed_gates_before_reassessment", "allow_protected_metric_override"]
+    autonomy_required = ["level", "requires_user_approval", "max_concurrent_jobs", "max_automatic_queue_depth", "allowed_backends"]
+    if not budget:
+        issues.append("missing budget policy blocks queue submission")
+    else:
+        issues.extend(f"budget policy missing {key}" for key in budget_required if key not in budget)
+    if not stage:
+        issues.append("missing stage-gate policy blocks promotion")
+    else:
+        issues.extend(f"stage-gate policy missing {key}" for key in stage_required if key not in stage)
+        if not stage.get("protected_metrics"):
+            warnings.append("protected metrics are not configured; automatic higher-stage promotion is blocked")
+    if not autonomy:
+        issues.append("missing autonomy policy blocks automatic execution")
+    else:
+        issues.extend(f"autonomy policy missing {key}" for key in autonomy_required if key not in autonomy)
+        if "scripts_may_be_edited_automatically" not in autonomy:
+            warnings.append("autonomy policy should explicitly answer whether scripts may be edited automatically")
+        if "jobs_may_be_submitted_automatically" not in autonomy:
+            warnings.append("autonomy policy should explicitly answer whether jobs may be submitted automatically")
+        if "hypotheses_may_be_stopped_automatically" not in autonomy:
+            warnings.append("autonomy policy should explicitly answer whether hypotheses may be stopped automatically")
+    if not memo:
+        warnings.append("memo config missing; daily memo language/timezone may be incomplete")
+    safe_low_risk = bool(budget and autonomy and not any(item.startswith("missing budget") or item.startswith("missing autonomy") for item in issues))
+    return {
+        "complete": not issues and not warnings,
+        "safe_for_low_risk_execution": safe_low_risk,
+        "safe_for_promotion": bool(stage) and not issues and bool(stage.get("protected_metrics")),
+        "issues": issues,
+        "warnings": warnings,
+        "statuses": {
+            "budget": "passed" if budget and not any(item.startswith("budget") or item.startswith("missing budget") for item in issues) else "blocked",
+            "stage_gates": "passed" if stage and not any(item.startswith("stage") or item.startswith("missing stage") for item in issues) else "blocked",
+            "autonomy": "passed" if autonomy and not any(item.startswith("autonomy") or item.startswith("missing autonomy") for item in issues) else "blocked",
+            "memo": "passed" if memo else "untrusted",
+            "protected_metrics": "passed" if stage.get("protected_metrics") else "requires_user_answer",
+        },
     }
 
 
@@ -438,6 +502,10 @@ def trusted_evidence_for_hypothesis(paths: VibePaths, hypothesis_id: str, *, neg
 
 def change_hypothesis_status(paths: VibePaths, hypothesis_id: str, outcome: str, *, reason: str, user_decision: bool = False, remaining_upside: dict[str, Any] | None = None, failure_analysis: dict[str, Any] | None = None) -> dict[str, Any]:
     if outcome == "promote":
+        completeness = policy_completeness(paths)
+        if not completeness.get("safe_for_promotion"):
+            decision = write_research_decision(paths, {"hypothesis_id": hypothesis_id, "decision_type": "promote", "final_outcome": "blocked", "rationale": reason, "blocked_reasons": completeness.get("issues", []) + completeness.get("warnings", [])})
+            raise RuntimeError("promotion blocked by policy completeness: " + "; ".join(decision["blocked_reasons"]))
         trusted = trusted_evidence_for_hypothesis(paths, hypothesis_id, negative=False)
         regressions = [ev for ev in trusted if ev.get("protected_metric_regressions")]
         if not trusted or regressions:
@@ -1043,6 +1111,7 @@ def render_daily_memo(paths: VibePaths, *, date: str | None = None, language: st
     data = {
         "date": date,
         "language": language,
+        "bootstrap": bootstrap_memo_state(paths, date),
         "hypothesis_changes": [row for row in read_jsonl(research_paths(paths)["events"]) if str(row.get("created_at", "")).startswith(date) and "hypothesis" in row.get("event_type", "")],
         "experiments": [row for row in experiments.values() if str(row.get("created_at", "")).startswith(date) or str(row.get("updated_at", "")).startswith(date)],
         "trusted_evidence": trusted,
@@ -1061,9 +1130,16 @@ def render_daily_memo(paths: VibePaths, *, date: str | None = None, language: st
 
 
 def render_memo_markdown(data: dict[str, Any], *, zh: bool) -> str:
+    bootstrap = data.get("bootstrap", {})
     if zh:
+        onboarding = "今日主要完成初始化/接入工作，尚未产生可信科学 evidence。" if bootstrap.get("phase_records") and not data["trusted_evidence"] else ""
         no_progress = "今天没有可信科学进展；完成的工程动作不能等同于假设被支持。" if not data["trusted_evidence"] else ""
         lines = [f"# 每日研究日志 {data['date']}", "", no_progress, "", "## 今天做了什么"]
+        if onboarding:
+            lines.append(f"- {onboarding}")
+        if bootstrap.get("phase_records"):
+            lines.append(f"- bootstrap readiness：{bootstrap.get('readiness_level', 'unknown')}")
+            lines.extend(f"- bootstrap phase `{row.get('phase')}`: `{row.get('status')}`" for row in bootstrap.get("phase_records", [])[-8:])
         lines.append(f"- 活跃 hypothesis 数量：{data['active_hypothesis_count']}")
         lines.append(f"- 今日相关实验：{len(data['experiments'])}")
         lines.extend(["", "## 可信 evidence"])
@@ -1077,8 +1153,14 @@ def render_memo_markdown(data: dict[str, Any], *, zh: bool) -> str:
         lines.extend([f"- blocker: {row}" for row in data["blockers"]] or ["- blocker: 无"])
         lines.extend([f"- 下一步：{item}" for item in data["next_actions"]] or ["- 下一步：构建 memory pack 或创建 hypothesis"])
         return "\n".join(line for line in lines if line is not None) + "\n"
+    onboarding = "Today mainly produced onboarding or engineering progress; no trusted scientific evidence was produced." if bootstrap.get("phase_records") and not data["trusted_evidence"] else ""
     no_progress = "No trusted scientific progress was recorded today; completed jobs are not counted as hypothesis support." if not data["trusted_evidence"] else ""
     lines = [f"# Daily Research Memo {data['date']}", "", no_progress, "", "## Work Summary"]
+    if onboarding:
+        lines.append(f"- {onboarding}")
+    if bootstrap.get("phase_records"):
+        lines.append(f"- bootstrap readiness: {bootstrap.get('readiness_level', 'unknown')}")
+        lines.extend(f"- bootstrap phase `{row.get('phase')}`: `{row.get('status')}`" for row in bootstrap.get("phase_records", [])[-8:])
     lines.append(f"- Active hypotheses: {data['active_hypothesis_count']}")
     lines.append(f"- Experiments touched today: {len(data['experiments'])}")
     lines.extend(["", "## Trusted Evidence"])
@@ -1092,6 +1174,24 @@ def render_memo_markdown(data: dict[str, Any], *, zh: bool) -> str:
     lines.extend([f"- blocker: {row}" for row in data["blockers"]] or ["- blocker: none"])
     lines.extend([f"- next: {item}" for item in data["next_actions"]] or ["- next: build memory pack or create a hypothesis"])
     return "\n".join(line for line in lines if line is not None) + "\n"
+
+
+def bootstrap_memo_state(paths: VibePaths, date: str) -> dict[str, Any]:
+    state = read_json(paths.vibe / "bootstrap" / "state.json", {})
+    if not state:
+        return {}
+    records = [row for row in state.get("phase_records", []) if str(row.get("finished_at", "")).startswith(date)]
+    readiness = read_json(paths.vibe / "bootstrap" / "readiness.json", {})
+    return {
+        "session_id": state.get("session_id", ""),
+        "readiness_level": readiness.get("readiness_level", state.get("readiness_level", "")),
+        "phase_records": records,
+        "generated_artifacts": state.get("generated_artifacts", []),
+        "active_capabilities": readiness.get("active_capabilities", []),
+        "blocked_capabilities": readiness.get("blocked_capabilities", []),
+        "contract_test_summary": state.get("contract_test_summary", {}),
+        "next_actions": readiness.get("next_actions", []),
+    }
 
 
 def suggested_next_actions(paths: VibePaths) -> list[str]:

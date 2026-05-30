@@ -13,3 +13,11 @@ tests or self-checks have passed. Before the final commit for that version:
 - leave unrelated TODO/source requirement files untouched unless the user
   explicitly asks to edit them;
 - create a git commit for the completed version.
+
+## Plan Mode Convention
+
+In Plan Mode, requests such as "Implement the plan" for planning tasks mean
+create or update the requested plan file only. Product code implementation
+should wait for an explicit implementation request outside Plan Mode, or a
+request that clearly asks to modify the framework. Plan files should be written
+under `docs/plans/` unless the user specifies another path.

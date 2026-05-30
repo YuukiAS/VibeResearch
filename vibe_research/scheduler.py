@@ -17,7 +17,7 @@ from .dashboard import sync_dashboard
 from .io import append_jsonl, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text
 from .manifest import validate_manifest
 from .paths import VibePaths
-from .research_manager import collect_run_evidence_if_research_linked, reserve_budget
+from .research_manager import collect_run_evidence_if_research_linked, policy_completeness, reserve_budget
 from .timeline import record_event
 
 
@@ -108,6 +108,11 @@ def queue_run(paths: VibePaths, run_id: str) -> None:
         raise ValueError(f"Unknown run: {run_id}")
     if run.get("status") != "dryrun_passed":
         raise RuntimeError(f"Run {run_id} is not ready for queue; status={run.get('status')}")
+    completeness = policy_completeness(paths)
+    if any(item.startswith("missing budget") for item in completeness.get("issues", [])):
+        raise RuntimeError("Policy completeness blocked queue: missing budget policy")
+    if any(item.startswith("missing autonomy") for item in completeness.get("issues", [])):
+        raise RuntimeError("Policy completeness blocked queue: missing autonomy policy")
     metadata = run.get("research_metadata", {}) if isinstance(run.get("research_metadata"), dict) else {}
     if metadata.get("hypothesis_id") or metadata.get("experiment_id"):
         if not metadata.get("budget_reservation_id"):
