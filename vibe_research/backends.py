@@ -340,6 +340,9 @@ def fallback_completion_estimates(launch: dict[str, Any], config: dict[str, Any]
         if estimate is None:
             estimate = profile.get("estimated_start_plus_run_hours", profile.get("expected_start_plus_run_hours"))
             source = "partition_profile" if estimate is not None else "missing"
+        if estimate is None:
+            estimate = sbatch_test_only_completion_estimate(launch, config, partition)
+            source = "sbatch_test_only" if estimate is not None else source
         try:
             hours = float(estimate) if estimate is not None else None
         except (TypeError, ValueError):
@@ -349,9 +352,64 @@ def fallback_completion_estimates(launch: dict[str, Any], config: dict[str, Any]
     return rows
 
 
+def sbatch_test_only_completion_estimate(launch: dict[str, Any], config: dict[str, Any], partition: str) -> float | None:
+    script_path = Path(str(launch.get("sbatch_path") or ""))
+    if not script_path.exists():
+        return None
+    resource = launch.get("resource_request") or {}
+    qos = resource.get("qos") or config.get("execution", {}).get("slurm", {}).get("qos", "")
+    args = ["sbatch", "--test-only", f"--partition={partition}"]
+    if qos:
+        args.append(f"--qos={qos}")
+    gres = slurm_gres_for_partition(partition, launch, config)
+    if gres:
+        args.append(f"--gres={gres}")
+    args.append(str(script_path))
+    result = subprocess.run(args, text=True, capture_output=True, check=False, timeout=10)
+    if result.returncode != 0:
+        return None
+    start_text = parse_sbatch_test_start(result.stdout + "\n" + result.stderr)
+    return start_plus_run_hours(start_text, str(resource.get("time", ""))) if start_text else None
+
+
+def slurm_gres_for_partition(partition: str, launch: dict[str, Any], config: dict[str, Any]) -> str:
+    resource = launch.get("resource_request") or {}
+    gpu = int(resource.get("gpu", 0) or 0)
+    if not gpu:
+        return ""
+    for source in [
+        resource.get("gres_by_partition", {}),
+        resource.get("partition_gres", {}),
+        config.get("execution", {}).get("slurm", {}).get("gres_by_partition", {}),
+        config.get("execution", {}).get("slurm", {}).get("partition_gres", {}),
+    ]:
+        if isinstance(source, dict) and source.get(partition):
+            return str(source[partition]).format(gpu=gpu)
+    profiles = {
+        row.get("name"): row
+        for row in config.get("execution", {}).get("slurm", {}).get("partitions", [])
+        if isinstance(row, dict) and row.get("name")
+    }
+    profile_gres = profiles.get(partition, {}).get("gres")
+    if profile_gres:
+        return str(profile_gres).format(gpu=gpu)
+    known = {
+        "a100-gpu": "gpu:nvidia_a100-pcie-40gb:{gpu}",
+        "volta-gpu": "gpu:tesla_v100-sxm2-16gb:{gpu}",
+    }
+    return known.get(partition, "gpu:{gpu}").format(gpu=gpu)
+
+
+def parse_sbatch_test_start(text: str) -> str:
+    marker = " to start at "
+    if marker not in text:
+        return ""
+    return text.split(marker, 1)[1].split()[0]
+
+
 def wait_policy_hours(launch: dict[str, Any], config: dict[str, Any]) -> float:
     resource = launch.get("resource_request") or {}
-    raw = resource.get("max_pending_start_plus_run_hours") or config.get("execution", {}).get("slurm", {}).get("max_pending_start_plus_run_hours", 0)
+    raw = resource.get("max_pending_start_plus_run_hours") or config.get("execution", {}).get("slurm", {}).get("max_pending_start_plus_run_hours", 24)
     try:
         return float(raw or 0)
     except (TypeError, ValueError):
@@ -375,7 +433,9 @@ def parse_start_time(text: str) -> datetime | None:
         parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    if parsed.tzinfo:
+        return parsed
+    return parsed.astimezone()
 
 
 def walltime_hours(value: str) -> float:

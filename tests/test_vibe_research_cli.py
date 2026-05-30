@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import os
 import subprocess
@@ -26,7 +26,7 @@ from vibe_research.portal import GENERATED_NOTICE
 from vibe_research.promotion import compile_decision, ensure_executable_resource_plan, synthesize_cycle_decision
 from vibe_research.research_manager import default_candidates
 from vibe_research.scheduler import collect as collect_run
-from vibe_research.backends import SlurmBackend
+from vibe_research.backends import SlurmBackend, fallback_completion_estimates, start_plus_run_hours
 from vibe_research.slurm import choose_partition
 
 
@@ -199,7 +199,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.23" in show.output
+    assert "0.8.24" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1257,6 +1257,28 @@ def test_v089_slurm_fallback_estimates_use_sbatch_test_only(tmp_path: Path, monk
         ["a100-gpu"],
     )
     assert rows == [{"partition": "a100-gpu", "estimated_start_plus_run_hours": 6.0, "source": "sbatch_test_only"}]
+
+
+def test_v0824_slurm_wait_policy_defaults_and_naive_start_is_local(tmp_path: Path, monkeypatch):
+    future_local = (datetime.now().astimezone() + timedelta(hours=1)).replace(tzinfo=None, microsecond=0).isoformat()
+    total = start_plus_run_hours(future_local, "04:00:00")
+    assert total is not None
+    assert 4.9 <= total <= 5.1
+
+    def fake_run(args, **kwargs):
+        if args[:3] == ["scontrol", "show", "job"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"JobId=123 WorkDir={tmp_path}\n", stderr="")
+        if args[:2] == ["squeue", "-j"]:
+            return subprocess.CompletedProcess(args, 0, stdout="PENDING|Priority\n", stderr="")
+        if args[:2] == ["squeue", "--start"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"{future_local}\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    backend = SlurmBackend(VibePaths(tmp_path), {"execution": {"slurm": {}}})
+    poll = backend.poll({"job_id": "123", "partition": "preferred", "launch_workdir": str(tmp_path), "resource_request": {"time": "04:00:00"}})
+    assert poll.details["wait_policy"]["max_start_plus_run_hours"] == 24.0
+    assert poll.details["wait_policy"]["verdict"] == "within_policy"
 
 
 def test_v0810_daemon_auto_cycle_command_uses_online_real_submit_flags(tmp_path: Path, monkeypatch):

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.8.24 - 2026-05-30
+
+- Use a conservative default Slurm wait policy of 24 start-plus-run hours when
+  no run or config override is provided.
+- Parse naive Slurm start estimates in the local timezone instead of treating
+  them as UTC.
+- Probe fallback partitions with `sbatch --test-only` when static fallback
+  estimates are unavailable, and keep that evidence in wait verdict details.
+- Render scheduler wait verdicts from `wait_verdict` with a fallback to
+  `wait_policy.verdict`.
+
 ## 0.8.23 - 2026-05-30
 
 - Treat `monitored` as a terminal result for one `auto-cycle` iteration so a

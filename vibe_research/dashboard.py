@@ -97,7 +97,8 @@ def render_status(paths: VibePaths) -> str:
         for item in active["active"]:
             details = item.get("poll_details", {}) if isinstance(item.get("poll_details"), dict) else {}
             wait = details.get("wait_verdict", {}) if isinstance(details.get("wait_verdict"), dict) else {}
-            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('backend', '')}` | `{item.get('job_id', '')}` | `{item.get('status', '')}` | `{wait.get('verdict', '')}` | `{item.get('log_path', '')}` |")
+            policy = details.get("wait_policy", {}) if isinstance(details.get("wait_policy"), dict) else {}
+            lines.append(f"| `{item.get('run_id', '')}` | `{item.get('backend', '')}` | `{item.get('job_id', '')}` | `{item.get('status', '')}` | `{wait.get('verdict') or policy.get('verdict', '')}` | `{item.get('log_path', '')}` |")
     return "\n".join(lines) + "\n"
 
 
