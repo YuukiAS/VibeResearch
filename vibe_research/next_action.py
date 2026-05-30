@@ -24,6 +24,16 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
     queue = read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued", [])
     readiness = adapter_readiness(paths)
+    if state.get("project_brief_missing"):
+        return "add project goal/background with vibe init --goal ... --background ...", "project_brief_missing"
+    if any(row.get("status") == "new" for row in read_jsonl(paths.ideas / "registry.jsonl")):
+        return "vibe ideas triage", ""
+    if any(row.get("status") == "needs_literature_refresh" for row in read_jsonl(paths.ideas / "registry.jsonl")):
+        idea_id = next(row.get("idea_id", "<idea_id>") for row in read_jsonl(paths.ideas / "registry.jsonl") if row.get("status") == "needs_literature_refresh")
+        return f"vibe lit-refresh-idea {idea_id}", ""
+    if any(row.get("status") == "needs_deep_research" and not row.get("linked_deep_request_id") for row in read_jsonl(paths.ideas / "registry.jsonl")):
+        idea_id = next(row.get("idea_id", "<idea_id>") for row in read_jsonl(paths.ideas / "registry.jsonl") if row.get("status") == "needs_deep_research" and not row.get("linked_deep_request_id"))
+        return f"vibe deep-request-from-idea {idea_id}", ""
     if not readiness.get("ready_for_real_experiments"):
         profile = apply_project_adapter_profile(paths)
         if profile.get("applied"):
@@ -33,8 +43,6 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     if state.get("status") == "blocked_missing_adapter":
         clear_adapter_block_if_ready(paths)
         state = read_json(paths.state / "state.json", {})
-    if state.get("project_brief_missing"):
-        return "add project goal/background with vibe init --goal ... --background ...", "project_brief_missing"
     state_status = str(state.get("status", ""))
     next_action = str(state.get("next_action", ""))
     active_block = state_status.startswith("blocked_") or (bool(state.get("blocked_reason")) and next_action.startswith("vibe decision show"))
@@ -42,11 +50,6 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
         if state_status in RECOVERABLE_RESOURCE_BLOCKS and state.get("current_cycle_id"):
             return f"vibe generate-runs {state['current_cycle_id']}", ""
         return state.get("next_action") or "vibe decision show <target_id>", state.get("blocked_reason") or state.get("status", "blocked")
-    if any(row.get("status") == "new" for row in read_jsonl(paths.ideas / "registry.jsonl")):
-        return "vibe ideas triage", ""
-    if any(row.get("status") == "needs_deep_research" and not row.get("linked_deep_request_id") for row in read_jsonl(paths.ideas / "registry.jsonl")):
-        idea_id = next(row.get("idea_id", "<idea_id>") for row in read_jsonl(paths.ideas / "registry.jsonl") if row.get("status") == "needs_deep_research" and not row.get("linked_deep_request_id"))
-        return f"vibe deep-request-from-idea {idea_id}", ""
     if queue:
         return "vibe submit-queue", ""
     active_capacity_full = active and active_jobs_exhaust_capacity(paths, active)

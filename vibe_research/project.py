@@ -448,6 +448,12 @@ def cycle_revised_plan_block(paths: VibePaths, state: dict[str, Any]) -> str:
 def portfolio_plan_template(paths: VibePaths, cycle_id: str, mode: str) -> str:
     ideas = read_jsonl(paths.inbox / "triage.jsonl")[-20:]
     idea_lines = "\n".join(f"- {row['idea_id']}: {row['raw_text']}" for row in ideas) or "- none"
+    pool_rows = [
+        row
+        for row in read_jsonl(paths.ideas / "registry.jsonl")
+        if row.get("status") in {"active", "actionable_next_run", "queued_for_cycle", "needs_literature_refresh"}
+    ][-20:]
+    pool_lines = "\n".join(f"- {row.get('idea_id', '')} [{row.get('status', '')}]: {row.get('raw_text', '')}" for row in pool_rows) or "- none"
     return f"""# Portfolio Plan for {cycle_id}
 
 ## Stage
@@ -458,6 +464,9 @@ No trusted improvement has been recorded yet.
 
 ## User ideas and directives considered
 {idea_lines}
+
+## Idea pool candidates considered
+{pool_lines}
 
 ## Candidate directions
 - d001_baseline: establish or verify a trusted baseline.

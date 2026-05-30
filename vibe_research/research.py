@@ -7,10 +7,11 @@ import re
 
 from .decisions import BLOCK_DECISIONS, ensure_decision_after_revise
 from .ideas import create_idea as create_pool_idea
+from .ideas import get_idea, update_idea
 from .ideas import sync_plan_idea_updates
 from .io import append_jsonl, ensure_dir, read_json, read_jsonl, utc_now, write_json, write_text
 from .loop_guard import apply_loop_guard
-from .papers import add_paper
+from .papers import add_paper, paper_search
 from .paths import VibePaths
 from .promotion import compile_decision as compile_cycle_decision
 from .scheduler import promote_trusted_candidate
@@ -204,6 +205,48 @@ def literature_refresh(paths: VibePaths, run_id: str | None = None, cycle_id: st
         write_json(paths.cycles / (cycle_id or "cycle") / "literature_refresh.json", payload)
     record_event(paths, "literature_refreshed", query or "Recorded empty literature refresh", cycle_id=cycle_id or "", run_id=run_id or "", status="recorded", payload=payload)
     sync_dashboard(paths)
+
+
+def literature_refresh_idea(paths: VibePaths, idea_id: str, *, offline: bool = False, source: str = "openalex", limit: int = 5) -> dict[str, object]:
+    idea = get_idea(paths, idea_id)
+    query = idea.get("raw_text", "")[:500]
+    results = paper_search(paths, query, source=source, limit=limit, offline=offline, add_candidates=not offline)
+    non_error = [row for row in results if not row.get("error")]
+    source_evidence = [
+        " | ".join(str(part) for part in [row.get("title", ""), row.get("source_url", "") or row.get("pdf_url", "")] if part)
+        for row in non_error
+        if row.get("title") or row.get("source_url") or row.get("pdf_url")
+    ]
+    ensure_dir(paths.research / "idea_literature_refresh")
+    artifact = paths.research / "idea_literature_refresh" / f"{idea_id}.json"
+    payload: dict[str, object] = {
+        "idea_id": idea_id,
+        "created_at": utc_now(),
+        "query": query,
+        "source": source,
+        "offline": offline,
+        "results": results,
+        "non_error_count": len(non_error),
+        "source_evidence": source_evidence,
+    }
+    write_json(artifact, payload)
+    linked = list(idea.get("linked_evidence", []) or [])
+    linked.extend([str(artifact), ".vibe/research/sources.jsonl", *source_evidence])
+    status = "actionable_next_run" if non_error or "http" in query.lower() else "needs_deep_research"
+    next_action = "include in next portfolio plan" if status == "actionable_next_run" else f"vibe deep-request-from-idea {idea_id}"
+    updated = update_idea(
+        paths,
+        idea_id,
+        status=status,
+        linked_evidence=sorted(set(linked)),
+        current_evidence=f"literature refresh via {source}: {len(non_error)} usable results",
+        next_action=next_action,
+    )
+    payload["updated_status"] = updated.get("status", "")
+    write_json(artifact, payload)
+    record_event(paths, "idea_literature_refreshed", idea_id, status=status, payload=payload)
+    sync_dashboard(paths)
+    return payload
 
 
 def deep_request(paths: VibePaths, *, request_for: str, topic: str, blocking: bool = False) -> str:

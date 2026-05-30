@@ -9,7 +9,7 @@ from .next_action import compute_next_action
 from .papers import auto_method_search
 from .paths import VibePaths
 from .project import create_cycle, generate_runs, sync_resource_plan_from_portfolio
-from .research import reflect, reflect_cycle, revise_cycle, revise_plan
+from .research import literature_refresh_idea, reflect, reflect_cycle, revise_cycle, revise_plan
 from .scheduler import collect, monitor, queue_run, review_cycle, review_run, run_dryrun, submit_queue
 
 
@@ -67,6 +67,9 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
         if not offline:
             auto_method_search(paths, offline=offline)
         return "monitored"
+    if command == "lit-refresh-idea":
+        literature_refresh_idea(paths, target_id, offline=offline)
+        return f"literature-refreshed {target_id}"
     if command == "collect":
         collect(paths, target_id)
         return f"collected {target_id}"

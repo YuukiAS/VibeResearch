@@ -142,7 +142,10 @@ def run_codex(
     start = time.time()
 
     if offline:
-        last_message = offline_artifact(role, target_id)
+        if role == "portfolio_planner" and output.exists():
+            last_message = output.read_text()
+        else:
+            last_message = offline_artifact(role, target_id)
         stdout = ""
         stderr = ""
         returncode = 0

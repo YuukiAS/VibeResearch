@@ -200,7 +200,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.25" in show.output
+    assert "0.8.26" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1728,6 +1728,42 @@ def test_v0825_auto_method_search_writes_provenance_and_ideas(monkeypatch, tmp_p
     assert any("New Segmentation Method" in row["raw_text"] and row["source"] == "auto_method_search" for row in ideas)
     skipped = auto_method_search(VibePaths(tmp_path))
     assert skipped["status"] == "already_done"
+
+
+def test_v0826_lit_refresh_idea_makes_online_idea_actionable(monkeypatch, tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "CARE myocardium", "--background", "cardiac MRI", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    idea = auto_method_search(VibePaths(tmp_path), offline=True, force=True)
+    assert idea["status"] == "skipped_offline"
+    from vibe_research.ideas import create_idea
+
+    created = create_idea(
+        VibePaths(tmp_path),
+        "Evaluate online method candidate for a future experiment: New Segmentation Method (https://example.test/paper)",
+        source="auto_method_search",
+        status="needs_literature_refresh",
+    )
+    next_result = invoke("next", "--target", str(tmp_path))
+    assert next_result.exit_code == 0
+    assert f"vibe lit-refresh-idea {created['idea_id']}" in next_result.output
+
+    def fake_paper_search(paths, query, *, source="openalex", limit=5, offline=False, add_candidates=False):
+        assert "New Segmentation Method" in query
+        return [{"title": "New Segmentation Method", "source_url": "https://example.test/paper", "source": source}]
+
+    monkeypatch.setattr("vibe_research.research.paper_search", fake_paper_search)
+    refresh = invoke("lit-refresh-idea", created["idea_id"], "--target", str(tmp_path))
+    assert refresh.exit_code == 0
+    ideas = read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")
+    refreshed = next(row for row in ideas if row["idea_id"] == created["idea_id"])
+    assert refreshed["status"] == "actionable_next_run"
+    assert refreshed["linked_evidence"]
+
+    enable_toy_adapter(tmp_path)
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    plan = (tmp_path / ".vibe" / "cycles" / "c001" / "portfolio_plan.md").read_text()
+    assert "## Idea pool candidates considered" in plan
+    assert "New Segmentation Method" in plan
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

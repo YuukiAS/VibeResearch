@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.8.26 - 2026-05-30
+
+- Route `needs_literature_refresh` idea-pool entries through a new
+  `lit-refresh-idea` action so online method-search ideas can become
+  actionable follow-up run candidates.
+- Include actionable idea-pool entries in portfolio plan templates, making
+  online method-search outputs visible to subsequent cycle planning.
+- Preserve an existing generated portfolio plan during offline planner fallback
+  so the template's idea-pool context is not overwritten.
+- Preserve the initialized portfolio template in offline planning so local
+  plan-cycle checks still carry idea-pool context.
+
 ## 0.8.25 - 2026-05-30
 
 - Add a bounded `auto-method-search` path that derives a project-aware method

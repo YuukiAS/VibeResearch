@@ -65,7 +65,7 @@ from .portal import build_portal
 from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio, vendor_runtime
 from .promotion import compile_decision as compile_cycle_decision
 from .promotion import validate_resource_plan
-from .research import deep_request, ingest_deep_research, literature_refresh, reflect, reflect_cycle, revise_cycle, revise_plan
+from .research import deep_request, ingest_deep_research, literature_refresh, literature_refresh_idea, reflect, reflect_cycle, revise_cycle, revise_plan
 from .reports import generate_alignment_after_changes, generate_dogfood_reports, write_portal_docs
 from .research_manager import (
     add_evidence,
@@ -1536,6 +1536,19 @@ def lit_refresh_cycle_cmd(
 
     literature_refresh(paths(target), cycle_id=cycle_id, query=query)
     console.print("Cycle literature refresh recorded")
+
+
+@app.command("lit-refresh-idea")
+def lit_refresh_idea_cmd(
+    idea_id: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    offline: bool = typer.Option(False, "--offline"),
+    source: str = typer.Option("openalex", "--source"),
+    limit: int = typer.Option(5, "--limit"),
+) -> None:
+    """Run a bounded literature refresh for an idea-pool entry and mark it actionable."""
+
+    console.print_json(data=literature_refresh_idea(paths(target), idea_id, offline=offline, source=source, limit=limit))
 
 
 @app.command("deep-request")
