@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 import os
 import subprocess
@@ -18,6 +19,7 @@ from vibe_research.daemon import daemon_start
 from vibe_research.decisions import make_decision, write_decision
 from vibe_research.io import read_json, read_jsonl, read_yaml, write_json, write_yaml
 from vibe_research.loop_guard import apply_loop_guard
+from vibe_research.models import ProjectConfig
 from vibe_research.paths import VibePaths
 from vibe_research.portal import GENERATED_NOTICE
 from vibe_research.promotion import compile_decision, ensure_executable_resource_plan, synthesize_cycle_decision
@@ -196,7 +198,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.21" in show.output
+    assert "0.8.22" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1178,6 +1180,33 @@ def test_v087_slurm_poll_records_wait_evidence(tmp_path: Path, monkeypatch):
     assert poll.details["wait_policy"]["verdict"] == "exceeds_policy"
 
 
+def test_v087_slurm_poll_uses_default_wait_policy(tmp_path: Path, monkeypatch):
+    def fake_run(args, **kwargs):
+        if args[:2] == ["squeue", "-j"]:
+            return subprocess.CompletedProcess(args, 0, stdout="PENDING|Resources\n", stderr="")
+        if args[:2] == ["squeue", "--start"]:
+            return subprocess.CompletedProcess(args, 0, stdout="2099-01-01T00:00:00\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    backend = SlurmBackend(VibePaths(tmp_path), ProjectConfig().model_dump())
+    poll = backend.poll({"job_id": "123", "resource_request": {"time": "04:00:00"}})
+    assert poll.details["wait_policy"]["max_start_plus_run_hours"] == 24.0
+    assert poll.details["wait_policy"]["verdict"] == "exceeds_policy"
+
+
+def test_v087_slurm_naive_start_time_uses_local_timezone(monkeypatch):
+    import vibe_research.backends as backends
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 5, 30, 16, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr(backends, "datetime", FakeDateTime)
+    assert backends.start_plus_run_hours("2026-05-30T17:00:00", "04:00:00") == 5.0
+
+
 def test_v089_slurm_poll_records_fallback_wait_verdict(tmp_path: Path, monkeypatch):
     def fake_run(args, **kwargs):
         if args[:2] == ["squeue", "-j"]:
@@ -1516,6 +1545,44 @@ def test_v0821_active_jobs_only_monitor_when_capacity_is_full(tmp_path: Path):
     full = invoke("next", "--target", str(tmp_path))
     assert full.exit_code == 0
     assert "vibe monitor" in full.output
+
+
+def test_v0822_synthesized_decision_prefers_less_used_capability(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    paths = VibePaths(tmp_path)
+    caps = []
+    command = "python3 -c 'import json, pathlib; pathlib.Path(\".vibe/train_metrics.json\").write_text(json.dumps({\"primary\": 1.0}))'"
+    for cap_id in ["cap_a", "cap_b"]:
+        caps.append(
+            AdapterCapability(
+                id=cap_id,
+                version="test",
+                status="active",
+                task_type="train_smoke",
+                supported_decisions=["launch_gpu_gate"],
+                description=f"Training capability {cap_id}",
+                dryrun={"command": "python3 -c 'print(\"dry\")'"},
+                entrypoint={"type": "slurm", "command": command},
+                outputs={"expected_output_path": ".vibe/train_metrics.json", "metrics_file_path": ".vibe/train_metrics.json"},
+                metrics_schema=MetricsSchema(required=["primary"], types={"primary": "number"}, primary_metric="primary", version="test"),
+                artifact_rules=ArtifactRules(expected_outputs=[".vibe/train_metrics.json"], trusted_path_patterns=[".vibe/*.json"], version="test"),
+                resources=ResourcePolicy(automatic_submission_allowed=True, user_confirmation_required=False, allowed_backends=["slurm"], default={"gpu": 1, "cpus": 1, "mem_gb": 1, "time": "00:10:00"}),
+                trust_checks=["schema_valid_metrics", "expected_output_exists"],
+                contract_tests=[cap_id],
+                activation={"contract_status": "passed", "contract_test_result_id": "test"},
+            )
+        )
+        write_json(tmp_path / ".vibe" / "contract_tests" / f"{cap_id}.json", {"capability_id": cap_id, "status": "passed", "created_at": "test"})
+    write_adapter_manifest(paths, AdapterManifest(project_id=tmp_path.name, project_name=tmp_path.name, open_questions=[], capabilities=caps))
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    state_path = tmp_path / ".vibe" / "state" / "state.json"
+    state = read_json(state_path, {})
+    state.setdefault("runs", {})["r001_existing"] = {"adapter_metadata": {"capability_id": "cap_a"}, "status": "submitted"}
+    write_json(state_path, state)
+    ok, message = ensure_executable_resource_plan(paths, "c001")
+    assert ok, message
+    decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
+    assert decision["selected_direction"] == "cap_b"
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

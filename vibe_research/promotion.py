@@ -42,6 +42,17 @@ def select_executable_decision_for_capability(capability: Any) -> str:
     return ""
 
 
+def capability_run_counts(paths: VibePaths) -> dict[str, int]:
+    state = read_json(paths.state / "state.json", {})
+    counts: dict[str, int] = {}
+    for run in state.get("runs", {}).values():
+        metadata = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}
+        capability_id = metadata.get("capability_id")
+        if capability_id:
+            counts[capability_id] = counts.get(capability_id, 0) + 1
+    return counts
+
+
 def compile_decision(paths: VibePaths, cycle_id: str) -> tuple[bool, str]:
     try:
         decision = load_decision(paths, cycle_id)
@@ -145,7 +156,8 @@ def synthesize_cycle_decision(paths: VibePaths, cycle_id: str) -> ResearchDecisi
             confidence="blocked",
             provenance={"source": "deterministic_auto_compile"},
         )
-    capability = sorted(active_real, key=lambda cap: (int(cap.resources.default.get("gpu", 0) or 0), cap.id))[0]
+    run_counts = capability_run_counts(paths)
+    capability = sorted(active_real, key=lambda cap: (run_counts.get(cap.id, 0), int(cap.resources.default.get("gpu", 0) or 0), cap.id))[0]
     decision_type = select_executable_decision_for_capability(capability)
     baseline = capability_baseline_target(capability)
     return make_decision(

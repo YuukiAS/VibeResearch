@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.8.21"
+    vibe_version: str = "0.8.22"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -41,6 +41,7 @@ class ProjectConfig(BaseModel):
                 "fallback_partitions": ["gpu", "a100", "general_gpu"],
                 "account": "",
                 "qos": "",
+                "max_pending_start_plus_run_hours": 24,
                 "partitions": [
                     {"name": "gpu_short", "priority": 100, "max_time": "08:00:00", "gpu": "generic"},
                     {"name": "gpu", "priority": 80, "max_time": "24:00:00", "gpu": "generic"},
@@ -78,6 +79,7 @@ class ProjectConfig(BaseModel):
             "fallback_partitions": ["gpu", "a100", "general_gpu"],
             "account": "",
             "qos": "",
+            "max_pending_start_plus_run_hours": 24,
         }
     )
     leaderboard: dict[str, Any] = Field(

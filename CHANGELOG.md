@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.22 - 2026-05-30
+
+- Rank active real-experiment capabilities by prior generated/submitted run
+  count before resource demand and id when synthesizing cycle decisions.
+- This keeps deterministic behavior while rotating across unused active
+  capabilities instead of repeatedly selecting the first capability.
+
 ## 0.8.21 - 2026-05-30
 
 - Let `vibe next` continue planning when active jobs exist but scheduler job/GPU
