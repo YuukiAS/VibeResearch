@@ -18,6 +18,7 @@ from vibe_research.paths import VibePaths
 from vibe_research.portal import GENERATED_NOTICE
 from vibe_research.promotion import compile_decision
 from vibe_research.scheduler import collect as collect_run
+from vibe_research.slurm import choose_partition
 
 
 runner = CliRunner()
@@ -153,7 +154,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.5" in show.output
+    assert "0.8.6" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -994,6 +995,20 @@ def test_slurm_dry_backend_records_launch(tmp_path: Path):
     assert launch["backend"] == "slurm"
     assert "partition_reason" in launch
     assert (tmp_path / ".vibe" / "runs" / run_id / "artifacts" / f"{run_id}.sbatch").exists()
+
+
+def test_v086_strict_preferred_partition_overrides_sinfo_fallback(monkeypatch):
+    monkeypatch.setattr("vibe_research.slurm.probe_available_partitions", lambda: ({"a100-gpu"}, "sinfo"))
+    manifest = {
+        "resources": {
+            "preferred_partitions": ["lab-gpu"],
+            "fallback_partitions": ["a100-gpu"],
+            "strict_preferred_partition": True,
+        }
+    }
+    partition, reason = choose_partition(manifest, {"execution": {"slurm": {"default_partition": "general"}}})
+    assert partition == "lab-gpu"
+    assert reason == "strict_preferred_partition"
 
 
 def test_blocking_deep_research_blocks_next(tmp_path: Path):

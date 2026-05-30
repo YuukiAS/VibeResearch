@@ -66,6 +66,8 @@ def choose_partition(manifest: dict[str, Any], config: dict[str, Any]) -> tuple[
     execution_slurm = config.get("execution", {}).get("slurm", {})
     if not preferred:
         preferred = [execution_slurm.get("default_partition", "gpu_short")]
+    if resources.get("strict_preferred_partition") or resources.get("prefer_configured_partition"):
+        return preferred[0], "strict_preferred_partition"
     candidates = preferred + [p for p in fallback if p not in preferred]
     available, reason = probe_available_partitions()
     if available:

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.6 - 2026-05-30
+
+- Add a generic strict preferred Slurm partition policy through
+  `resources.strict_preferred_partition` or `resources.prefer_configured_partition`.
+- When strict preferred partition policy is set, select the first configured
+  preferred partition even if `sinfo` does not list it, and record
+  `strict_preferred_partition` as the selection reason.
+
 ## 0.8.5 - 2026-05-30
 
 - Scope `next` and `auto-next` run-level actions to the current cycle while it
