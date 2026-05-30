@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.8.15 - 2026-05-30
+
+- Select synthesized cycle decision types from the chosen active capability's
+  supported executable decisions instead of assuming `collect_more_metrics`.
+- Prefer training and long-run capabilities through `launch_gpu_gate`,
+  evaluation and metric capabilities through `collect_more_metrics`, and
+  baseline comparison through `promote_to_baseline_compare` when a baseline
+  target is declared.
+- Make default research portfolio candidates use the selected capability's
+  supported executable decision type.
+
 ## 0.8.14 - 2026-05-30
 
 - Add repo-declared adapter profiles (`.viberesearch/profile.yaml`,

@@ -57,6 +57,15 @@ DIRS = [
     "prompts",
 ]
 
+RECOVERABLE_RESOURCE_BLOCKS = {
+    "blocked_missing_resource_plan",
+    "blocked_missing_capability",
+    "blocked_missing_script",
+    "blocked_missing_metrics_schema",
+    "blocked_contract_test_failed",
+    "blocked_resource_policy",
+}
+
 
 def init_project(
     target: str | Path = ".",
@@ -548,7 +557,7 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
         state = read_json(paths.state / "state.json", default_state())
     cycle_state = state.get("cycles", {}).get(cycle, {})
     if cycle_state.get("review_verdict") in {"BLOCK_PORTFOLIO", "REVISE_PORTFOLIO"} or cycle_state.get("status") == "blocked":
-        if cycle_state.get("status") == "blocked" and state.get("status") == "blocked_missing_resource_plan":
+        if cycle_state.get("status") == "blocked" and state.get("status") in RECOVERABLE_RESOURCE_BLOCKS:
             ok, _ = ensure_executable_resource_plan(paths, cycle)
             state = read_json(paths.state / "state.json", default_state())
             cycle_state = state.get("cycles", {}).get(cycle, {})

@@ -12,6 +12,36 @@ from .real_experiments import REAL_EXPERIMENT_TASKS
 from .timeline import record_event
 
 
+PREFERRED_DECISIONS_BY_TASK = {
+    "evaluation_smoke": ["collect_more_metrics"],
+    "metrics_export": ["collect_more_metrics"],
+    "baseline_compare": ["promote_to_baseline_compare", "collect_more_metrics"],
+    "train_smoke": ["launch_gpu_gate"],
+    "train_gate": ["launch_gpu_gate"],
+    "long_run_submit": ["launch_gpu_gate"],
+}
+
+
+def capability_baseline_target(capability: Any) -> str:
+    rules = getattr(capability, "artifact_rules", None)
+    outputs = getattr(capability, "outputs", {}) or {}
+    return str(getattr(rules, "baseline_target_provenance", "") or outputs.get("baseline_comparison_target", ""))
+
+
+def select_executable_decision_for_capability(capability: Any) -> str:
+    supported = [decision for decision in getattr(capability, "supported_decisions", []) if decision in EXECUTABLE_DECISIONS]
+    if not supported:
+        return ""
+    preferred = PREFERRED_DECISIONS_BY_TASK.get(getattr(capability, "task_type", ""), [])
+    for decision in preferred + supported:
+        if decision not in supported:
+            continue
+        if decision == "promote_to_baseline_compare" and not capability_baseline_target(capability):
+            continue
+        return decision
+    return ""
+
+
 def compile_decision(paths: VibePaths, cycle_id: str) -> tuple[bool, str]:
     try:
         decision = load_decision(paths, cycle_id)
@@ -97,24 +127,31 @@ def synthesize_cycle_decision(paths: VibePaths, cycle_id: str) -> ResearchDecisi
     from .adapter_onboarding import write_real_experiment_gap_report
 
     manifest = load_adapter_manifest(paths)
-    active_real = [cap for cap in manifest.capabilities if cap.status == "active" and cap.task_type in REAL_EXPERIMENT_TASKS]
+    active_real = [
+        cap
+        for cap in manifest.capabilities
+        if cap.status == "active"
+        and cap.task_type in REAL_EXPERIMENT_TASKS
+        and select_executable_decision_for_capability(cap)
+    ]
     if not active_real:
         write_real_experiment_gap_report(paths)
         return make_decision(
             paths,
             cycle_id,
             "blocked_missing_capability",
-            rationale="No active real-experiment capability can compile this cycle; complete adapter_real_experiment_gaps.md",
+            rationale="No active real-experiment capability has an executable supported decision; complete adapter_real_experiment_gaps.md",
             blocking_questions=["complete adapter_real_experiment_gaps.md"],
             confidence="blocked",
             provenance={"source": "deterministic_auto_compile"},
         )
     capability = sorted(active_real, key=lambda cap: (int(cap.resources.default.get("gpu", 0) or 0), cap.id))[0]
-    baseline = capability.artifact_rules.baseline_target_provenance or capability.outputs.get("baseline_comparison_target", "")
+    decision_type = select_executable_decision_for_capability(capability)
+    baseline = capability_baseline_target(capability)
     return make_decision(
         paths,
         cycle_id,
-        "collect_more_metrics",
+        decision_type,
         rationale="deterministic cycle decision synthesized from an active real-experiment adapter capability",
         selected_direction=capability.id,
         required_action=capability.description or f"run {capability.id}",

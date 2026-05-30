@@ -13,6 +13,7 @@ from .adapter_onboarding import adapter_readiness
 from .adapter_schema import load_adapter_manifest
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text, write_yaml
 from .paths import VibePaths
+from .promotion import select_executable_decision_for_capability
 from .timeline import record_event
 
 
@@ -999,16 +1000,26 @@ def portfolio_plan(paths: VibePaths, candidates: list[dict[str, Any]] | None = N
 
 def default_candidates(paths: VibePaths) -> list[dict[str, Any]]:
     hypotheses = [row for row in load_hypotheses(paths).values() if row.get("status") in {"active", "needs_analysis"}]
-    caps = sorted(active_capability_ids(paths))
+    manifest = load_adapter_manifest(paths)
+    caps = sorted(
+        [
+            cap
+            for cap in manifest.capabilities
+            if cap.status == "active" and select_executable_decision_for_capability(cap)
+        ],
+        key=lambda cap: (int(cap.resources.default.get("gpu", 0) or 0), cap.id),
+    )
     if not hypotheses or not caps:
         return []
+    capability = caps[0]
+    decision_type = select_executable_decision_for_capability(capability)
     return [
         {
             "hypothesis_id": hypotheses[0]["hypothesis_id"],
             "design_summary": hypotheses[0].get("next_testable_change") or hypotheses[0].get("title", "next bounded experiment"),
             "stage": hypotheses[0].get("current_stage", "smoke"),
-            "capability_id": caps[0],
-            "decision_type": "collect_more_metrics",
+            "capability_id": capability.id,
+            "decision_type": decision_type,
             "expected_evidence": {"kind": "schema_valid_metrics"},
             "resource_units": {"gpu_hours": 0.0, "cpu_hours": 0.1},
             "rationale": "default bounded diagnostic candidate",

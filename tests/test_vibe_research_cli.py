@@ -20,7 +20,8 @@ from vibe_research.io import read_json, read_jsonl, read_yaml, write_json, write
 from vibe_research.loop_guard import apply_loop_guard
 from vibe_research.paths import VibePaths
 from vibe_research.portal import GENERATED_NOTICE
-from vibe_research.promotion import compile_decision
+from vibe_research.promotion import compile_decision, ensure_executable_resource_plan
+from vibe_research.research_manager import default_candidates
 from vibe_research.scheduler import collect as collect_run
 from vibe_research.backends import SlurmBackend
 from vibe_research.slurm import choose_partition
@@ -62,6 +63,42 @@ def enable_toy_adapter(root: Path) -> None:
     )
     write_adapter_manifest(paths, manifest)
     write_json(root / ".vibe" / "contract_tests" / "toy-metrics-export.json", {"capability_id": "toy-metrics-export", "status": "passed", "created_at": "test"})
+
+
+def enable_train_smoke_adapter(root: Path) -> None:
+    (root / ".vibe" / "config.local.yaml").write_text("adapter:\n  kind: config\n")
+    paths = VibePaths(root)
+    manifest = AdapterManifest(
+        project_id=root.name,
+        project_name=root.name,
+        open_questions=[],
+        capabilities=[
+            AdapterCapability(
+                id="train-smoke",
+                version="test",
+                status="active",
+                task_type="train_smoke",
+                supported_decisions=["launch_gpu_gate"],
+                description="Test-only Slurm-backed train smoke capability.",
+                dryrun={"command": "python3 -c 'print(\"dry\")'"},
+                entrypoint={"type": "slurm", "command": "python3 -c 'import json, pathlib; pathlib.Path(\".vibe/train_metrics.json\").write_text(json.dumps({\"primary\": 1.0, \"classification\": \"pass\"}))'"},
+                outputs={"expected_output_path": ".vibe/train_metrics.json", "metrics_file_path": ".vibe/train_metrics.json"},
+                metrics_schema=MetricsSchema(required=["primary", "classification"], types={"primary": "number", "classification": "string"}, primary_metric="primary", version="test"),
+                artifact_rules=ArtifactRules(expected_outputs=[".vibe/train_metrics.json"], trusted_path_patterns=[".vibe/*.json"], version="test"),
+                resources=ResourcePolicy(
+                    automatic_submission_allowed=True,
+                    user_confirmation_required=False,
+                    allowed_backends=["slurm"],
+                    default={"gpu": 1, "cpus": 1, "mem_gb": 1, "time": "00:10:00"},
+                ),
+                trust_checks=["schema_valid_metrics", "expected_output_exists"],
+                contract_tests=["train-smoke"],
+                activation={"contract_status": "passed", "contract_test_result_id": "test", "command_template_hash": "test", "metrics_schema_hash": "test", "artifact_rule_hash": "test"},
+            )
+        ],
+    )
+    write_adapter_manifest(paths, manifest)
+    write_json(root / ".vibe" / "contract_tests" / "train-smoke.json", {"capability_id": "train-smoke", "status": "passed", "created_at": "test"})
 
 
 def compile_toy_cycle(root: Path, cycle_id: str = "c001") -> None:
@@ -159,7 +196,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.14" in show.output
+    assert "0.8.15" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1002,6 +1039,31 @@ def test_slurm_dry_backend_records_launch(tmp_path: Path):
     assert (tmp_path / ".vibe" / "runs" / run_id / "artifacts" / f"{run_id}.sbatch").exists()
 
 
+def test_synthesized_cycle_decision_uses_supported_train_decision(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("decision", "write-block", "c001", "--reason", "old mismatch", "--decision-type", "blocked_missing_capability", "--target", str(tmp_path)).exit_code == 0
+
+    ok, message = ensure_executable_resource_plan(VibePaths(tmp_path), "c001")
+    assert ok, message
+
+    decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
+    assert decision["decision_type"] == "launch_gpu_gate"
+    assert decision["selected_direction"] == "train-smoke"
+    plan = read_yaml(tmp_path / ".vibe" / "cycles" / "c001" / "resource_plan.yaml", {})
+    run = plan["runs"]["train-smoke"]
+    assert run["run_kind"] == "real_experiment"
+    assert run["adapter_metadata"]["capability_id"] == "train-smoke"
+
+    assert invoke("decision", "write-block", "c001", "--reason", "old mismatch", "--decision-type", "blocked_missing_capability", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    run_id = sorted(state["runs"])[0]
+    assert state["runs"][run_id]["adapter_metadata"]["capability_id"] == "train-smoke"
+
+
 def test_v086_strict_preferred_partition_overrides_sinfo_fallback(monkeypatch):
     monkeypatch.setattr("vibe_research.slurm.probe_available_partitions", lambda: ({"a100-gpu"}, "sinfo"))
     manifest = {
@@ -1244,6 +1306,73 @@ def test_v0814_adapter_profile_recovers_blocked_adapter_without_basename_match(t
     result = invoke("next", "--target", str(tmp_path))
     assert result.exit_code == 0
     assert "vibe plan-cycle" in result.output
+
+
+def test_v0815_synthesized_decision_uses_training_capability_decision(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    paths = VibePaths(tmp_path)
+    command = "sh -c 'mkdir -p .vibe/train_metrics && printf \"{\\\"primary\\\": 1.0}\\n\" > .vibe/train_metrics/train.json'"
+    cap = AdapterCapability(
+        id="train_smoke_cap",
+        version="test",
+        status="active",
+        task_type="train_smoke",
+        supported_decisions=["launch_gpu_gate"],
+        description="Generic training smoke capability.",
+        dryrun={"command": command},
+        entrypoint={"type": "local", "command": command},
+        outputs={"expected_output_path": ".vibe/train_metrics/train.json", "metrics_file_path": ".vibe/train_metrics/train.json"},
+        metrics_schema=MetricsSchema(required=["primary"], types={"primary": "number"}, primary_metric="primary", version="test"),
+        artifact_rules=ArtifactRules(expected_outputs=[".vibe/train_metrics/train.json"], trusted_path_patterns=[".vibe/train_metrics/*.json"], version="test"),
+        resources=ResourcePolicy(
+            automatic_submission_allowed=True,
+            user_confirmation_required=False,
+            allowed_backends=["slurm"],
+            default={"gpu": 1, "cpus": 2, "mem_gb": 4, "time": "00:10:00", "preferred_partitions": ["gpu_short"]},
+        ),
+        trust_checks=["schema_valid_metrics", "expected_output_exists"],
+        contract_tests=["train_smoke_cap"],
+        activation={"contract_status": "passed", "contract_test_result_id": "test"},
+    )
+    write_adapter_manifest(paths, AdapterManifest(project_id=tmp_path.name, project_name=tmp_path.name, open_questions=[], capabilities=[cap]))
+    write_json(tmp_path / ".vibe" / "contract_tests" / "train_smoke_cap.json", {"capability_id": "train_smoke_cap", "status": "passed", "created_at": "test"})
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
+    decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
+    assert decision["decision_type"] == "launch_gpu_gate"
+    plan = read_yaml(tmp_path / ".vibe" / "cycles" / "c001" / "resource_plan.yaml", {})
+    assert sorted(plan["runs"]) == ["train_smoke_cap"]
+    assert plan["runs"]["train_smoke_cap"]["adapter_metadata"]["task_type"] == "train_smoke"
+
+
+def test_v0815_default_candidates_use_capability_supported_decision(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    paths = VibePaths(tmp_path)
+    cap = AdapterCapability(
+        id="train_smoke_cap",
+        version="test",
+        status="active",
+        task_type="train_smoke",
+        supported_decisions=["launch_gpu_gate"],
+        description="Generic training smoke capability.",
+        dryrun={"command": "python -c 'print(1)'"},
+        entrypoint={"type": "local", "command": "python -c 'print(1)'"},
+        outputs={"expected_output_path": ".vibe/train_metrics/train.json", "metrics_file_path": ".vibe/train_metrics/train.json"},
+        metrics_schema=MetricsSchema(required=["primary"], types={"primary": "number"}, primary_metric="primary", version="test"),
+        artifact_rules=ArtifactRules(expected_outputs=[".vibe/train_metrics/train.json"], trusted_path_patterns=[".vibe/train_metrics/*.json"], version="test"),
+        resources=ResourcePolicy(automatic_submission_allowed=True, user_confirmation_required=False, allowed_backends=["slurm"], default={"gpu": 1, "cpus": 2, "mem_gb": 4, "time": "00:10:00"}),
+        trust_checks=["schema_valid_metrics", "expected_output_exists"],
+        contract_tests=["train_smoke_cap"],
+        activation={"contract_status": "passed", "contract_test_result_id": "test"},
+    )
+    write_adapter_manifest(paths, AdapterManifest(project_id=tmp_path.name, project_name=tmp_path.name, open_questions=[], capabilities=[cap]))
+    assert invoke("research", "init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--autonomy-level", "bounded_continuous", "--force").exit_code == 0
+    assert invoke("hypothesis", "create", "train smoke candidate", "--stage", "smoke", "--target", str(tmp_path)).exit_code == 0
+    candidates = default_candidates(paths)
+    assert candidates
+    assert candidates[0]["capability_id"] == "train_smoke_cap"
+    assert candidates[0]["decision_type"] == "launch_gpu_gate"
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):
