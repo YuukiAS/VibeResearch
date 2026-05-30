@@ -177,12 +177,13 @@ def submit_queue(paths: VibePaths, *, dry: bool = False, backend_name: str | Non
     budget = read_yaml(paths.scheduler / "budget.yaml", {}) or config.get("scheduler", {})
     max_parallel = int(budget.get("max_parallel_jobs", 3))
     max_gpu = int(budget.get("max_parallel_gpu_jobs", budget.get("max_gpu_jobs", 2)))
-    backend = get_backend(paths, backend_name)
     submitted: list[str] = []
     remaining = []
     for item in sorted(queue.get("queued", []), key=lambda row: row.get("priority", 100)):
         run_id = item["run_id"]
         run = state.get("runs", {}).get(run_id, {})
+        run_backend_name = backend_name or (run.get("entrypoint", {}) if isinstance(run.get("entrypoint"), dict) else {}).get("type")
+        backend = get_backend(paths, run_backend_name)
         cycle = state.get("cycles", {}).get(run.get("cycle_id", ""), {})
         if cycle.get("status") == "blocked" or cycle.get("review_verdict") in {"BLOCK_PORTFOLIO", "REVISE_PORTFOLIO"}:
             item["status"] = "portfolio_blocked"

@@ -138,7 +138,7 @@ def resource_plan_from_task(cycle_id: str, decision: Any, task: dict[str, Any]) 
                 "expected_learning": task.get("expected_learning") or task.get("hypothesis") or key,
                 "cost": task.get("cost", "low"),
                 "dryrun": {"command": task.get("dryrun_command", ""), "max_minutes": int(task.get("dryrun_max_minutes", 5))},
-                "entrypoint": {"type": "local", "command": task.get("entrypoint_command", "")},
+                "entrypoint": {"type": task.get("entrypoint_type", "local"), "command": task.get("entrypoint_command", "")},
                 "resources": task.get("resources", {}),
                 "outputs": {"expected_output_path": task.get("expected_output_path", "")},
                 "evaluation": {
@@ -266,6 +266,7 @@ def task_from_capability(manifest: Any, capability: AdapterCapability, decision:
         "hypothesis": capability.description or getattr(decision, "required_action", "") or capability.id,
         "expected_learning": capability.description or capability.id,
         "dryrun_command": capability.dryrun.get("command", ""),
+        "entrypoint_type": capability.entrypoint.get("type", "local"),
         "entrypoint_command": capability.entrypoint.get("command", ""),
         "expected_output_path": expected_output,
         "metrics_file_path": metrics_file,

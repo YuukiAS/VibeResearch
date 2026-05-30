@@ -47,6 +47,11 @@ def protected_diff_paths(diff_text: str) -> list[str]:
     return [path for path in changed if any(path == prefix or path.startswith(prefix + "/") for prefix in protected_prefixes)]
 
 
+def adapter_run_requires_no_patch(run: dict) -> bool:
+    adapter_metadata = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}
+    return bool(adapter_metadata.get("capability_id")) and run.get("run_kind") == "real_experiment"
+
+
 def create_branch(paths: VibePaths, run_id: str) -> str:
     paths.require_initialized()
     state = read_json(paths.state / "state.json", {})
@@ -54,6 +59,16 @@ def create_branch(paths: VibePaths, run_id: str) -> str:
     if not run:
         raise ValueError(f"Unknown run: {run_id}")
     branch = run["branch"]
+    if adapter_run_requires_no_patch(run):
+        run["status"] = "patched"
+        (paths.runs / run_id / "branch.txt").write_text(f"{branch}\nbranch_skipped=adapter_backed_run\n")
+        write_text(paths.runs / run_id / "patch.diff", "")
+        record_event(paths, "branch_skipped", f"Skipped branch for adapter-backed run {run_id}", run_id=run_id, status="patched")
+        state["runs"][run_id] = run
+        state["next_action"] = f"vibe dryrun {run_id}"
+        state["updated_at"] = utc_now()
+        write_json(paths.state / "state.json", state)
+        return branch
     if not git_available(paths.root):
         run["status"] = "branch_recorded_no_git"
         (paths.runs / run_id / "branch.txt").write_text(branch + "\n")

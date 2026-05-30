@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.8.16 - 2026-05-30
+
+- Preserve adapter capability `entrypoint.type` when compiling resource plans
+  and generating runs, so Slurm-backed capabilities stay Slurm-backed instead
+  of silently becoming local runs.
+- Carry entrypoint type through multi-run compiled plans.
+- Select the submission backend from each run's generated `entrypoint.type`
+  when the operator did not pass an explicit backend override.
+- Treat adapter-backed real-experiment runs as already executable after branch
+  recording, so the workflow can proceed directly to dry-run without requiring
+  a repo code patch for wrapper-driven experiments.
+
 ## 0.8.15 - 2026-05-30
 
 - Select synthesized cycle decision types from the chosen active capability's

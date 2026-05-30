@@ -196,7 +196,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.15" in show.output
+    assert "0.8.16" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1054,6 +1054,7 @@ def test_synthesized_cycle_decision_uses_supported_train_decision(tmp_path: Path
     assert decision["selected_direction"] == "train-smoke"
     plan = read_yaml(tmp_path / ".vibe" / "cycles" / "c001" / "resource_plan.yaml", {})
     run = plan["runs"]["train-smoke"]
+    assert run["entrypoint"]["type"] == "slurm"
     assert run["run_kind"] == "real_experiment"
     assert run["adapter_metadata"]["capability_id"] == "train-smoke"
 
@@ -1062,6 +1063,24 @@ def test_synthesized_cycle_decision_uses_supported_train_decision(tmp_path: Path
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     run_id = sorted(state["runs"])[0]
     assert state["runs"][run_id]["adapter_metadata"]["capability_id"] == "train-smoke"
+    assert state["runs"][run_id]["entrypoint"]["type"] == "slurm"
+
+    assert subprocess.run(["git", "init"], cwd=tmp_path, text=True, capture_output=True, check=False).returncode == 0
+    assert subprocess.run(["git", "add", "."], cwd=tmp_path, text=True, capture_output=True, check=False).returncode == 0
+    assert subprocess.run(["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "init"], cwd=tmp_path, text=True, capture_output=True, check=False).returncode == 0
+    (tmp_path / "dirty.txt").write_text("dirty\n")
+    assert invoke("branch", run_id, "--target", str(tmp_path)).exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert state["runs"][run_id]["status"] == "patched"
+    assert state["next_action"] == f"vibe dryrun {run_id}"
+
+    assert invoke("dryrun", run_id, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("queue", run_id, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("submit-queue", "--target", str(tmp_path), "--dry").exit_code == 0
+    launch = read_json(tmp_path / ".vibe" / "runs" / run_id / "launch.json", {})
+    assert launch["backend"] == "slurm"
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert state["runs"][run_id]["backend"] == "slurm"
 
 
 def test_v086_strict_preferred_partition_overrides_sinfo_fallback(monkeypatch):
