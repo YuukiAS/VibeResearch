@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.8.26"
+    vibe_version: str = "0.8.27"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -70,6 +70,8 @@ class ProjectConfig(BaseModel):
             "max_walltime_hours_per_cycle": 48,
             "max_failed_runs_before_pause": 3,
             "queue_policy": "priority_then_resource_fit",
+            "prequeue_when_capacity_full": True,
+            "max_prequeued_runs_when_full": 1,
         }
     )
     slurm: dict[str, Any] = Field(
@@ -250,6 +252,8 @@ def default_budget() -> dict[str, Any]:
         "max_walltime_hours_per_cycle": 48,
         "max_failed_runs_before_pause": 3,
         "queue_policy": "priority_then_resource_fit",
+        "prequeue_when_capacity_full": True,
+        "max_prequeued_runs_when_full": 1,
         "partition_priority": {},
         "fallback_partitions": ["gpu", "a100", "general_gpu"],
         "cancel_rules": [],

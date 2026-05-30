@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.27 - 2026-05-30
+
+- Allow bounded prequeue planning while active jobs exhaust scheduler capacity,
+  so the next real experiment can be planned, dry-run, and internally queued
+  without submitting over budget.
+- Return `vibe monitor` for queued jobs while capacity is still full, then
+  resume `vibe submit-queue` once capacity frees.
+
 ## 0.8.26 - 2026-05-30
 
 - Route `needs_literature_refresh` idea-pool entries through a new

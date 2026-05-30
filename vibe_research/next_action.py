@@ -50,10 +50,12 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
         if state_status in RECOVERABLE_RESOURCE_BLOCKS and state.get("current_cycle_id"):
             return f"vibe generate-runs {state['current_cycle_id']}", ""
         return state.get("next_action") or "vibe decision show <target_id>", state.get("blocked_reason") or state.get("status", "blocked")
-    if queue:
-        return "vibe submit-queue", ""
     active_capacity_full = active and active_jobs_exhaust_capacity(paths, active)
-    if active_capacity_full:
+    if queue:
+        if active_capacity_full:
+            return "vibe monitor", ""
+        return "vibe submit-queue", ""
+    if active_capacity_full and not allow_prequeue_planning(paths, state):
         return "vibe monitor", ""
     for request in read_jsonl(paths.research / "deep_requests" / "registry.jsonl"):
         if request.get("blocking") and request.get("status") != "ingested":
@@ -130,3 +132,27 @@ def active_jobs_exhaust_capacity(paths: VibePaths, active: list[dict]) -> bool:
     if len(active) >= max_parallel:
         return True
     return active_gpu_count(active) >= max_gpu
+
+
+def allow_prequeue_planning(paths: VibePaths, state: dict) -> bool:
+    """Allow bounded non-submitting prep while active jobs fill capacity."""
+
+    config = load_config(paths)
+    scheduler = config.get("scheduler", {}) if isinstance(config.get("scheduler"), dict) else {}
+    budget = read_yaml(paths.scheduler / "budget.yaml", {}) or {}
+    scheduler = {**scheduler, **budget}
+    if scheduler.get("prequeue_when_capacity_full", True) is False:
+        return False
+    max_prequeued = int(scheduler.get("max_prequeued_runs_when_full", 1))
+    if max_prequeued <= 0:
+        return False
+    prep_statuses = {"generated", "reviewed", "branched", "branch_recorded_no_git", "patched", "dryrun_passed"}
+    waiting_count = sum(1 for run in state.get("runs", {}).values() if run.get("status") in prep_statuses)
+    if waiting_count:
+        return waiting_count <= max_prequeued
+    cycle_id = state.get("current_cycle_id", "")
+    cycle_status = state.get("cycles", {}).get(cycle_id, {}).get("status", "") if cycle_id else ""
+    if cycle_status in {"planned", "reviewed"}:
+        return True
+    terminal = {"revised", "merged", "abandoned", "cancelled"}
+    return not cycle_id or cycle_status in terminal
