@@ -25,6 +25,16 @@ dist/
 *.egg-info/
 *.egg
 
+# Local planning/source TODO material used during development.
+# These are intentionally not part of the installable framework surface.
+docs/plans/
+docs/todos/
+prompts/
+
+# Local agent/session configuration
+.agents/
+.codex/
+
 # VibeResearch local-only state and generated heavy artifacts
 .vibe/config.local.yaml
 .vibe/config.detected.yaml

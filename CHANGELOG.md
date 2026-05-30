@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Ignore local planning/TODO/prompt workspaces and remove concrete planning
+  notes from the versioned framework surface so cloned checkouts contain only
+  runnable package, docs, and tests.
+
 ## 0.7.1 - 2026-05-30
 
 - Add adapter manifest schema, lifecycle CLI, adapter questions, lint/doctor reports, contract tests, activation provenance, and maturity/readiness gating.
