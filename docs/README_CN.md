@@ -276,6 +276,9 @@ v0.8.1 把 adapter onboarding 和 research manager 串成可恢复的项目部�
 下游项目写死进 VibeResearch 主框架，而是生成草案、验证草案、只激活通过 contract test
 的 capability，并输出 readiness report，说明当前能安全执行什么、什么被阻塞、最小下一步是什么。
 
+详细接入、dogfood、legacy archive 和 readiness gate 说明见
+[Bootstrap 指南](bootstrap/README_CN.md)。
+
 ```bash
 vibe bootstrap init --goal "..." --background "..."
 vibe bootstrap run
