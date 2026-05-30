@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.7 - 2026-05-30
+
+- Preserve `vibe monitor` as the next action while scheduler active jobs exist
+  so cycle compilation cannot overwrite active-job control state with stale
+  run-generation actions.
+- Render status with active scheduler jobs as the authoritative next action.
+- Record Slurm pending wait evidence from `squeue --start`, requested walltime,
+  and optional start-plus-run wait policy verdicts during polling.
+
 ## 0.8.6 - 2026-05-30
 
 - Add a generic strict preferred Slurm partition policy through

@@ -20,13 +20,14 @@ def render_status(paths: VibePaths) -> str:
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []})
     completed = read_jsonl(paths.scheduler / "completed_jobs.jsonl")
     cycle_id = state.get("current_cycle_id") or "none"
+    next_action = "vibe monitor" if active.get("active") else state.get("next_action", "vibe next")
     lines = [
         "# Vibe Status",
         "",
         f"Current cycle: `{cycle_id}`",
         f"Portfolio mode: `{state.get('portfolio_mode', 'exploration')}`",
         f"Status: `{state.get('status', 'unknown')}`",
-        f"Next action: `{state.get('next_action', 'vibe next')}`",
+        f"Next action: `{next_action}`",
     ]
     if state.get("blocked_reason"):
         lines.append(f"Blocked: {state['blocked_reason']}")

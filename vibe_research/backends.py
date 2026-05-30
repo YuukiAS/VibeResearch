@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -171,7 +172,9 @@ class SlurmBackend(ExecutionBackend):
         sq = subprocess.run(["squeue", "-j", job_id, "-h", "-o", "%T|%R"], text=True, capture_output=True, check=False)
         if sq.returncode == 0 and sq.stdout.strip():
             state, _, reason = sq.stdout.strip().partition("|")
-            return PollResult(state.lower(), False, {"squeue_state": state, "reason": reason})
+            details = {"squeue_state": state, "reason": reason}
+            details.update(slurm_wait_evidence(job_id, launch, self.config))
+            return PollResult(state.lower(), False, details)
         sacct = subprocess.run(["sacct", "-j", job_id, "-n", "-P", "-o", "State,ExitCode"], text=True, capture_output=True, check=False)
         details = {"sacct_stdout": sacct.stdout, "sacct_stderr": sacct.stderr}
         status = "finished"
@@ -206,6 +209,67 @@ def parse_sbatch_job_id(stdout: str) -> str:
         if token.isdigit():
             return token
     return stdout.strip().splitlines()[-1].strip() if stdout.strip() else ""
+
+
+def slurm_wait_evidence(job_id: str, launch: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "squeue_start_stdout": "",
+        "squeue_start_stderr": "",
+        "requested_walltime": str((launch.get("resource_request") or {}).get("time", "")),
+    }
+    start = subprocess.run(["squeue", "--start", "-j", job_id, "-h", "-o", "%S"], text=True, capture_output=True, check=False)
+    evidence["squeue_start_stdout"] = start.stdout.strip()
+    evidence["squeue_start_stderr"] = start.stderr.strip()
+    max_hours = wait_policy_hours(launch, config)
+    if max_hours:
+        total_hours = start_plus_run_hours(evidence["squeue_start_stdout"], evidence["requested_walltime"])
+        evidence["wait_policy"] = {
+            "max_start_plus_run_hours": max_hours,
+            "estimated_start_plus_run_hours": total_hours,
+            "verdict": "unknown" if total_hours is None else "within_policy" if total_hours <= max_hours else "exceeds_policy",
+        }
+    return evidence
+
+
+def wait_policy_hours(launch: dict[str, Any], config: dict[str, Any]) -> float:
+    resource = launch.get("resource_request") or {}
+    raw = resource.get("max_pending_start_plus_run_hours") or config.get("execution", {}).get("slurm", {}).get("max_pending_start_plus_run_hours", 0)
+    try:
+        return float(raw or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def start_plus_run_hours(start_text: str, walltime: str) -> float | None:
+    start_dt = parse_start_time(start_text)
+    if not start_dt:
+        return None
+    now = datetime.now(start_dt.tzinfo or timezone.utc)
+    wait_hours = max(0.0, (start_dt - now).total_seconds() / 3600.0)
+    return wait_hours + walltime_hours(walltime)
+
+
+def parse_start_time(text: str) -> datetime | None:
+    value = text.strip().splitlines()[0].strip() if text.strip() else ""
+    if not value or value.upper() in {"N/A", "UNKNOWN"}:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def walltime_hours(value: str) -> float:
+    try:
+        parts = [int(part) for part in value.split(":")]
+    except ValueError:
+        return 0.0
+    if len(parts) == 3:
+        return parts[0] + parts[1] / 60.0 + parts[2] / 3600.0
+    if len(parts) == 2:
+        return parts[0] / 60.0 + parts[1] / 3600.0
+    return float(parts[0]) if parts else 0.0
 
 
 def read_optional_text(path: Path) -> str:

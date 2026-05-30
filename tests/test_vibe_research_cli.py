@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import os
+import subprocess
 
 from typer.testing import CliRunner
 
@@ -18,6 +19,7 @@ from vibe_research.paths import VibePaths
 from vibe_research.portal import GENERATED_NOTICE
 from vibe_research.promotion import compile_decision
 from vibe_research.scheduler import collect as collect_run
+from vibe_research.backends import SlurmBackend
 from vibe_research.slurm import choose_partition
 
 
@@ -154,7 +156,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.6" in show.output
+    assert "0.8.7" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1009,6 +1011,38 @@ def test_v086_strict_preferred_partition_overrides_sinfo_fallback(monkeypatch):
     partition, reason = choose_partition(manifest, {"execution": {"slurm": {"default_partition": "general"}}})
     assert partition == "lab-gpu"
     assert reason == "strict_preferred_partition"
+
+
+def test_v087_compile_preserves_active_job_next_action(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    write_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {"active": [{"run_id": "r999_active", "status": "running", "backend": "slurm"}]})
+    assert invoke("decision", "write", "c001", "--type", "collect_more_metrics", "--action", "collect metrics", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("compile-decision", "c001", "--target", str(tmp_path)).exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert state["status"] == "jobs_active"
+    assert state["next_action"] == "vibe monitor"
+    assert "Next action: `vibe monitor`" in invoke("status", "--target", str(tmp_path)).output
+
+
+def test_v087_slurm_poll_records_wait_evidence(tmp_path: Path, monkeypatch):
+    def fake_run(args, **kwargs):
+        if args[:2] == ["squeue", "-j"]:
+            return subprocess.CompletedProcess(args, 0, stdout="PENDING|Resources\n", stderr="")
+        if args[:2] == ["squeue", "--start"]:
+            return subprocess.CompletedProcess(args, 0, stdout="2099-01-01T00:00:00\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    backend = SlurmBackend(VibePaths(tmp_path), {"execution": {"slurm": {"max_pending_start_plus_run_hours": 24}}})
+    poll = backend.poll({"job_id": "123", "resource_request": {"time": "04:00:00"}})
+    assert poll.status == "pending"
+    assert poll.finished is False
+    assert poll.details["squeue_start_stdout"] == "2099-01-01T00:00:00"
+    assert poll.details["requested_walltime"] == "04:00:00"
+    assert poll.details["wait_policy"]["verdict"] == "exceeds_policy"
 
 
 def test_blocking_deep_research_blocks_next(tmp_path: Path):

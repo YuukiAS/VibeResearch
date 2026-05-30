@@ -51,6 +51,12 @@ def compile_decision(paths: VibePaths, cycle_id: str) -> tuple[bool, str]:
     state = read_json(paths.state / "state.json", {})
     state.setdefault("cycles", {}).setdefault(cycle_id, {})["compiled_decision_id"] = decision.decision_id
     state["blocked_reason"] = ""
+    active_jobs = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
+    if active_jobs:
+        state["status"] = "jobs_active"
+        state["next_action"] = "vibe monitor"
+    else:
+        state["next_action"] = f"vibe generate-runs {cycle_id}"
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
     record_event(paths, "resource_plan_compiled", f"Compiled {cycle_id} using {adapter.kind} adapter", cycle_id=cycle_id, status="compiled", payload={"decision_id": decision.decision_id})
