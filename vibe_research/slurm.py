@@ -28,8 +28,8 @@ def render_sbatch(
     selected_partition = partition or partitions[0]
     gpu = int(resources.get("gpu", 0) or 0)
     gres = f"gpu:{gpu}" if gpu else ""
-    account = slurm.get("account", "")
-    qos = slurm.get("qos", "")
+    account = resources.get("account") or slurm.get("account", "")
+    qos = resources.get("qos") or slurm.get("qos", "")
     return "\n".join(
         [line for line in [
             "#!/usr/bin/env bash",

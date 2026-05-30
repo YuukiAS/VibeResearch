@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.20 - 2026-05-30
+
+- Prefer run-level Slurm `resources.account` and `resources.qos` over global
+  Slurm defaults when rendering sbatch scripts.
+- Start tmux daemon panes with `-c <target_root>` so pane cwd, recorded target,
+  and command target all prove the same checkout binding.
+- Preserve framework importability inside daemon tmux shells by exporting the
+  framework root through `PYTHONPATH` in the daemon command and recording it in
+  daemon state.
+
 ## 0.8.19 - 2026-05-30
 
 - Add explicit regression coverage for branchless adapter-backed real

@@ -92,19 +92,21 @@ def daemon_start(
     log_path = paths.dashboard / "daemon.log"
     target = shlex.quote(str(paths.root))
     python = shlex.quote(sys.executable)
+    framework_root = Path(__file__).resolve().parent.parent
+    pythonpath = f"PYTHONPATH={shlex.quote(str(framework_root))}:$PYTHONPATH"
     if mode == "monitor":
-        loop_command = f"{python} -m vibe_research.cli monitor --target {target} --loop --interval {interval}" + (" --auto-next" if auto_next else "")
+        loop_command = f"{pythonpath} {python} -m vibe_research.cli monitor --target {target} --loop --interval {interval}" + (" --auto-next" if auto_next else "")
     else:
         loop_command = (
             "while true; do "
-            f"{python} -m vibe_research.cli auto-cycle --target {target} --max-steps {max_steps}"
+            f"{pythonpath} {python} -m vibe_research.cli auto-cycle --target {target} --max-steps {max_steps}"
             + (" --offline" if offline else "")
             + (" --dry-submit" if dry_submit else " --real-submit")
-            + f"; {python} -m vibe_research.cli status --target {target}; sleep {interval}; done"
+            + f"; {pythonpath} {python} -m vibe_research.cli status --target {target}; sleep {interval}; done"
         )
     command = f"cd {target} && {loop_command} >> {shlex.quote(str(log_path))} 2>&1"
     shell = "/usr/bin/bash" if Path("/usr/bin/bash").exists() else "sh"
-    result = subprocess.run(["tmux", "new-session", "-d", "-s", status["session"], shell, "-lc", command], text=True, capture_output=True, check=False)
+    result = subprocess.run(["tmux", "new-session", "-d", "-s", status["session"], "-c", str(paths.root.resolve()), shell, "-lc", command], text=True, capture_output=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip())
     write_json(
@@ -120,6 +122,7 @@ def daemon_start(
             "dry_submit": dry_submit,
             "max_steps": max_steps,
             "interpreter": sys.executable,
+            "framework_root": str(framework_root),
             "shell": shell,
         },
     )

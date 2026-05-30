@@ -196,7 +196,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.19" in show.output
+    assert "0.8.20" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1275,8 +1275,11 @@ def test_v0812_daemon_launches_command_through_explicit_shell(tmp_path: Path, mo
     assert launch_args[-3] in {"/usr/bin/bash", "sh"}
     assert launch_args[-2] == "-lc"
     assert "auto-cycle" in launch_args[-1]
+    assert "PYTHONPATH=" in launch_args[-1]
+    assert str(Path(__file__).resolve().parents[1]) in launch_args[-1]
     daemon = read_json(tmp_path / ".vibe" / "state" / "daemon.json", {})
     assert daemon["shell"] == launch_args[-3]
+    assert daemon["framework_root"] == str(Path(__file__).resolve().parents[1])
 
 
 def test_v0813_daemon_rejects_existing_session_bound_to_other_target(tmp_path: Path, monkeypatch):
@@ -1483,6 +1486,7 @@ def test_v0818_submit_queue_uses_run_entrypoint_backend_when_not_overridden(tmp_
     state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     assert launch["backend"] == "slurm"
     assert state["runs"][run_id]["backend"] == "slurm"
+    assert "#SBATCH --qos=gpu_access" in Path(launch["sbatch_path"]).read_text()
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):
@@ -1550,6 +1554,20 @@ def test_auto_cycle_reaches_first_submission(tmp_path: Path):
     assert "reviewed c001" in result.output
     assert "generated r001_toy_audit" in result.output
     assert "submitted r001_toy_audit" in result.output
+
+
+def test_auto_cycle_stops_after_monitor_step(tmp_path: Path, monkeypatch):
+    from vibe_research import automation
+
+    calls = {"count": 0}
+
+    def fake_auto_next(paths, *, offline=False, dry_submit=True):
+        calls["count"] += 1
+        return "monitored"
+
+    monkeypatch.setattr(automation, "auto_next", fake_auto_next)
+    assert automation.auto_cycle(VibePaths(tmp_path), max_steps=30) == ["monitored"]
+    assert calls["count"] == 1
 
 
 def test_codex_runner_uses_fake_codex_and_writes_artifact(tmp_path: Path, monkeypatch):
