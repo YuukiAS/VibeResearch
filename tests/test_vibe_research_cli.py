@@ -18,6 +18,7 @@ from vibe_research.cli import app
 from vibe_research.config import detect_config
 from vibe_research.daemon import daemon_start
 from vibe_research.decisions import make_decision, write_decision
+from vibe_research.ideas import create_idea
 from vibe_research.io import read_json, read_jsonl, read_yaml, write_json, write_yaml
 from vibe_research.loop_guard import apply_loop_guard
 from vibe_research.models import ProjectConfig
@@ -200,7 +201,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.27" in show.output
+    assert "0.8.28" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1912,6 +1913,35 @@ def test_codex_runner_uses_fake_codex_and_writes_artifact(tmp_path: Path, monkey
     assert result.ok
     assert "Portfolio Plan" in (tmp_path / ".vibe" / "cycles" / "c001" / "portfolio_plan.md").read_text()
     assert not validate_artifact(VibePaths(tmp_path), "portfolio_planner", "c001")
+
+
+def test_codex_runner_preserves_existing_plan_on_empty_response(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    create_idea(VibePaths(tmp_path), "online method candidate", status="actionable_next_run")
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    plan_path = tmp_path / ".vibe" / "cycles" / "c001" / "portfolio_plan.md"
+    original = plan_path.read_text()
+    assert "## Idea pool candidates considered" in original
+    assert "online method candidate" in original
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "args=sys.argv\n"
+        "out=pathlib.Path(args[args.index('--output-last-message')+1])\n"
+        "out.write_text('')\n"
+    )
+    fake_codex.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH','')}")
+
+    result = run_codex(VibePaths(tmp_path), "portfolio_planner", "c001")
+    assert result.ok
+    assert plan_path.read_text() == original
+    assert result.last_message == original
 
 
 def test_todo_cli_commands_exist():

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.28 - 2026-05-30
+
+- Preserve existing deterministic artifacts when an online Codex call returns
+  an empty final message, preventing zero-byte portfolio plans from erasing
+  idea-pool context.
+
 ## 0.8.27 - 2026-05-30
 
 - Allow bounded prequeue planning while active jobs exhaust scheduler capacity,

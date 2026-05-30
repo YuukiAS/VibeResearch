@@ -182,6 +182,10 @@ def run_codex(
     write_text(stdout_path, stdout)
     write_text(stderr_path, stderr)
     if role != "codex_patch":
+        artifact_body = nonempty_artifact_body(role, target_id, output, last_message)
+        if artifact_body != last_message:
+            last_message = artifact_body
+            write_text(last_message_path, last_message)
         write_text(output, last_message)
     else:
         diff = git_diff(paths.root)
@@ -204,6 +208,18 @@ def run_codex(
         handle.write(json.dumps(record, sort_keys=True) + "\n")
     record_event(paths, "codex_artifact_generated", f"{role} -> {output.name}", cycle_id=target_id if target_id.startswith("c") else "", run_id=target_id if target_id.startswith("r") else "", status="ok" if returncode == 0 else "failed", payload=record)
     return CodexCallResult(call_id, role, target_id, output, returncode, call_dir, last_message, stdout, stderr)
+
+
+def nonempty_artifact_body(role: str, target_id: str, output: Path, last_message: str) -> str:
+    """Prevent empty Codex responses from erasing deterministic artifacts."""
+
+    if last_message.strip():
+        return last_message
+    if output.exists():
+        existing = output.read_text()
+        if existing.strip():
+            return existing
+    return offline_artifact(role, target_id)
 
 
 def codex_sandbox_for(role: str, config: dict[str, Any]) -> str:
