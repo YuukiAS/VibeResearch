@@ -158,6 +158,29 @@ def resource_plan_from_task(cycle_id: str, decision: Any, task: dict[str, Any]) 
     }
 
 
+def resource_plan_from_tasks(cycle_id: str, decision: Any, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    merged = {
+        "cycle_id": cycle_id,
+        "mode": "compiled",
+        "decision_id": getattr(decision, "decision_id", ""),
+        "research_metadata": {
+            "hypothesis_id": getattr(decision, "hypothesis_id", ""),
+            "experiment_id": getattr(decision, "experiment_id", ""),
+            "decision_id": getattr(decision, "decision_id", ""),
+            "policy_eval_id": getattr(decision, "policy_eval_id", ""),
+            "budget_reservation_id": getattr(decision, "budget_reservation_id", ""),
+            "stage": getattr(decision, "stage", ""),
+        },
+        "runs": {},
+        "cancel_rules": [],
+    }
+    for task in tasks:
+        plan = resource_plan_from_task(cycle_id, decision, task)
+        merged["runs"].update(plan.get("runs", {}))
+        merged["cancel_rules"].extend(plan.get("cancel_rules", []))
+    return merged
+
+
 def compile_from_active_capabilities(paths: VibePaths, cycle_id: str, decision: Any, manifest: Any) -> CompileResult:
     matches = [
         cap
@@ -166,6 +189,19 @@ def compile_from_active_capabilities(paths: VibePaths, cycle_id: str, decision: 
     ]
     if not matches:
         return CompileResult(False, block_reason=f"No active adapter capability supports {getattr(decision, 'decision_type', '')}", block_type="blocked_missing_capability")
+    selected = getattr(decision, "selected_direction", "")
+    if not selected and len(matches) > 1:
+        tasks = []
+        for capability in sorted(matches, key=lambda cap: (int(cap.resources.default.get("gpu", 0) or 0), cap.id)):
+            missing = capability_block_reason(paths, capability, decision)
+            if missing:
+                return CompileResult(False, block_reason=missing[1], block_type=missing[0])
+            tasks.append(task_from_capability(manifest, capability, decision))
+        plan = resource_plan_from_tasks(cycle_id, decision, tasks)
+        errors = validate_compiled_plan(plan)
+        if errors:
+            return CompileResult(False, block_reason="; ".join(errors), block_type="blocked_missing_resource_plan")
+        return CompileResult(True, plan=plan)
     capability = choose_capability(matches, decision)
     missing = capability_block_reason(paths, capability, decision)
     if missing:

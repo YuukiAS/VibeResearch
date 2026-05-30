@@ -671,7 +671,7 @@ def apply_bootstrap_answers(paths: VibePaths) -> None:
         write_yaml(paths.vibe / "adapter_questions.yaml", {"questions": [q.model_dump() for q in manifest.open_questions]})
 
 
-def run_dogfood(paths: VibePaths, *, profile: str = "0.8.7-happy-path", external_repo: Path | None = None, brief_file: Path | None = None, output_report: Path | None = None, dry_run: bool = False) -> dict[str, Any]:
+def run_dogfood(paths: VibePaths, *, profile: str = "0.8.8-happy-path", external_repo: Path | None = None, brief_file: Path | None = None, output_report: Path | None = None, dry_run: bool = False) -> dict[str, Any]:
     repo = external_repo.expanduser().resolve() if external_repo else create_local_dogfood_profile(paths.root, profile)
     report_path = output_report or (bootstrap_dir(paths) / "dogfood_report.json")
     issues: list[dict[str, Any]] = []

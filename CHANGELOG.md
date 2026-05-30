@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.8 - 2026-05-30
+
+- Compile one run per matching active adapter capability when multiple
+  capabilities support the same executable decision and the decision does not
+  explicitly select a single direction.
+- Preserve single-capability compilation when `selected_direction` names a
+  specific capability or task.
+
 ## 0.8.7 - 2026-05-30
 
 - Preserve `vibe monitor` as the next action while scheduler active jobs exist

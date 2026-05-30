@@ -156,7 +156,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.7" in show.output
+    assert "0.8.8" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1043,6 +1043,52 @@ def test_v087_slurm_poll_records_wait_evidence(tmp_path: Path, monkeypatch):
     assert poll.details["squeue_start_stdout"] == "2099-01-01T00:00:00"
     assert poll.details["requested_walltime"] == "04:00:00"
     assert poll.details["wait_policy"]["verdict"] == "exceeds_policy"
+
+
+def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    (tmp_path / ".vibe" / "config.local.yaml").write_text("adapter:\n  kind: config\n")
+    script_dir = tmp_path / ".vibe" / "scripts"
+    script_dir.mkdir(exist_ok=True)
+    for cap_id in ["cap_a", "cap_b"]:
+        (script_dir / f"{cap_id}.py").write_text(
+            "import argparse, json, pathlib\n"
+            "p=argparse.ArgumentParser(); p.add_argument('--out'); p.add_argument('--dryrun', action='store_true'); p.add_argument('--smoke', action='store_true'); a=p.parse_args()\n"
+            "out=pathlib.Path(a.out); out.parent.mkdir(parents=True, exist_ok=True); out.write_text(json.dumps({'primary': 1.0})+'\\n')\n"
+        )
+    caps = []
+    for cap_id in ["cap_a", "cap_b"]:
+        out = f".vibe/bootstrap_metrics/{cap_id}.json"
+        command = f"python .vibe/scripts/{cap_id}.py --out {out}"
+        caps.append(
+            AdapterCapability(
+                id=cap_id,
+                status="active",
+                task_type="metrics_export",
+                supported_decisions=["collect_more_metrics"],
+                description=f"Generic candidate {cap_id}",
+                dryrun={"command": command + " --dryrun"},
+                entrypoint={"type": "local", "command": command + " --smoke"},
+                outputs={"expected_output_path": out, "metrics_file_path": out, "baseline_comparison_target": "baseline_proxy"},
+                metrics_schema=MetricsSchema(required=["primary"], types={"primary": "number"}, primary_metric="primary", version="test"),
+                artifact_rules=ArtifactRules(expected_outputs=[out], trusted_path_patterns=[".vibe/bootstrap_metrics/*.json"], baseline_target_provenance="baseline_proxy", version="test"),
+                resources=ResourcePolicy(automatic_submission_allowed=False, user_confirmation_required=False, allowed_backends=["local"], default={"gpu": 0, "cpus": 1, "mem_gb": 1, "time": "00:05:00"}),
+                trust_checks=["schema_valid_metrics", "expected_output_exists"],
+                contract_tests=[cap_id],
+                activation={"contract_status": "passed", "contract_test_result_id": "test", "command_template_hash": "test", "metrics_schema_hash": "test", "artifact_rule_hash": "test"},
+            )
+        )
+        write_json(tmp_path / ".vibe" / "contract_tests" / f"{cap_id}.json", {"capability_id": cap_id, "status": "passed", "created_at": "test"})
+    write_adapter_manifest(VibePaths(tmp_path), AdapterManifest(project_id=tmp_path.name, project_name=tmp_path.name, open_questions=[], capabilities=caps))
+
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("decision", "write", "c001", "--type", "collect_more_metrics", "--action", "compare active candidates", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("compile-decision", "c001", "--target", str(tmp_path)).exit_code == 0
+    plan = read_yaml(tmp_path / ".vibe" / "cycles" / "c001" / "resource_plan.yaml", {})
+    assert sorted(plan["runs"]) == ["cap_a", "cap_b"]
+    assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "2").exit_code == 0
+    assert len(read_json(tmp_path / ".vibe" / "state" / "state.json", {})["runs"]) == 2
 
 
 def test_blocking_deep_research_blocks_next(tmp_path: Path):
