@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.8.24"
+    vibe_version: str = "0.8.25"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -145,6 +145,9 @@ class ProjectConfig(BaseModel):
             "manager_enabled": True,
             "memo_language": "zh-CN",
             "autonomy_level": "analysis_only",
+            "auto_method_search_enabled": True,
+            "auto_method_search_sources": ["semantic_scholar", "openalex", "arxiv"],
+            "auto_method_search_limit": 5,
         }
     )
     codex: dict[str, Any] = Field(

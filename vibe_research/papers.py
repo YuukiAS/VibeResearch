@@ -12,7 +12,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .io import append_jsonl, ensure_dir, read_jsonl, slugify, utc_now, write_json, write_text
+from .config import load_config
+from .io import append_jsonl, ensure_dir, read_json, read_jsonl, slugify, utc_now, write_json, write_text
 from .paths import VibePaths
 from .timeline import record_event
 
@@ -45,6 +46,8 @@ CREATE TABLE IF NOT EXISTS papers (
   notes TEXT
 );
 """
+
+DEFAULT_AUTO_METHOD_SEARCH_SOURCES = ["semantic_scholar", "openalex", "arxiv"]
 
 
 def db_path(paths: VibePaths) -> Path:
@@ -89,6 +92,85 @@ def paper_search(paths: VibePaths, query: str, *, source: str = "arxiv", limit: 
                 add_paper(paths, {**row, "status": "candidate", "notes": f"candidate from {source} query: {query}"})
     record_event(paths, "paper_found", f"{len(results)} papers for {query}", status="searched", payload={"source": source, "query": query})
     return results
+
+
+def auto_method_search(paths: VibePaths, *, offline: bool = False, force: bool = False) -> dict[str, Any]:
+    """Run one bounded project-aware online method search and seed follow-up ideas."""
+
+    ensure_dir(paths.research)
+    marker_path = paths.research / "auto_method_search.json"
+    existing = read_json(marker_path, {})
+    if existing and not force:
+        return {**existing, "status": "already_done"}
+    if offline:
+        result = {"status": "skipped_offline", "created_at": utc_now()}
+        write_json(marker_path, result)
+        return result
+    config = load_config(paths)
+    research = config.get("research", {}) if isinstance(config.get("research"), dict) else {}
+    if research.get("auto_method_search_enabled", True) is False:
+        result = {"status": "disabled", "created_at": utc_now()}
+        write_json(marker_path, result)
+        return result
+    query = derive_method_search_query(paths)
+    sources = research.get("auto_method_search_sources") or DEFAULT_AUTO_METHOD_SEARCH_SOURCES
+    limit = int(research.get("auto_method_search_limit", min(int(research.get("max_search_results", 10) or 10), 5)))
+    all_results: list[dict[str, Any]] = []
+    for source in sources:
+        all_results.extend(paper_search(paths, query, source=str(source), limit=limit, offline=False, add_candidates=True))
+    ideas = create_method_search_ideas(paths, all_results)
+    errors = [row for row in all_results if row.get("error")]
+    result = {
+        "status": "searched_with_errors" if errors and not ideas else "searched",
+        "created_at": utc_now(),
+        "query": query,
+        "sources": sources,
+        "limit": limit,
+        "result_count": len(all_results),
+        "error_count": len(errors),
+        "idea_ids": [row.get("idea_id", "") for row in ideas],
+    }
+    append_jsonl(paths.research / "sources.jsonl", {"created_at": result["created_at"], "source": "auto_method_search", "query": query, "results": all_results, "idea_ids": result["idea_ids"]})
+    write_json(marker_path, result)
+    record_event(paths, "auto_method_search", f"{len(all_results)} results for {query}", status=result["status"], payload=result)
+    return result
+
+
+def derive_method_search_query(paths: VibePaths) -> str:
+    brief = ""
+    for path in [paths.project / "brief.md", paths.research / "research_brief.md"]:
+        if path.exists():
+            brief += "\n" + path.read_text(errors="ignore")[:4000]
+    state = read_json(paths.state / "state.json", {})
+    directions = " ".join(sorted({str(run.get("direction_id", "")) for run in state.get("runs", {}).values() if isinstance(run, dict)}))
+    context = f"{paths.root.name} {brief} {directions}".lower()
+    if "care" in context or "myocard" in context or "cardiac" in context:
+        return "cardiac MRI myocardium segmentation missing modality robust MedNeXt nnU-Net topology loss"
+    tokens = [paths.root.name.replace("_", " "), "new method", "benchmark", "repository"]
+    return " ".join(token for token in tokens if token).strip()
+
+
+def create_method_search_ideas(paths: VibePaths, results: list[dict[str, Any]], *, max_ideas: int = 3) -> list[dict[str, Any]]:
+    from .ideas import create_idea
+
+    ideas: list[dict[str, Any]] = []
+    seen_titles: set[str] = set()
+    for row in results:
+        title = str(row.get("title", "")).strip()
+        if not title or row.get("error") or title.lower() in seen_titles:
+            continue
+        seen_titles.add(title.lower())
+        source_url = row.get("source_url", "")
+        source = row.get("source", "")
+        text = f"Evaluate online method candidate for a future experiment: {title}"
+        if source_url:
+            text += f" ({source_url})"
+        if source:
+            text += f" [source: {source}]"
+        ideas.append(create_idea(paths, text[:500], source="auto_method_search", status="needs_literature_refresh", priority="medium", confidence="low"))
+        if len(ideas) >= max_ideas:
+            break
+    return ideas
 
 
 def search_arxiv(query: str, *, limit: int) -> list[dict[str, Any]]:

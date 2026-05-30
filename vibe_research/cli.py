@@ -59,7 +59,7 @@ from .io import read_json, read_jsonl, read_yaml
 from .manifest import validate_manifest
 from .meeting import export_meeting_report
 from .next_action import compute_next_action
-from .papers import add_paper, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
+from .papers import add_paper, auto_method_search, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
 from .portal import build_portal
 from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio, vendor_runtime
@@ -1642,6 +1642,17 @@ def paper_search_cmd(
     results = paper_search(paths(target), query, source=source, limit=limit, offline=offline, add_candidates=add_candidates)
     for row in results:
         console.print(row)
+
+
+@app.command("auto-method-search")
+def auto_method_search_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    offline: bool = typer.Option(False, "--offline"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Run the bounded project-aware online method search used by auto-cycle."""
+
+    console.print_json(data=auto_method_search(paths(target), offline=offline, force=force))
 
 
 @app.command("paper-add")

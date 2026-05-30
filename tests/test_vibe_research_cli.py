@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from vibe_research.artifacts import validate_artifact
 from vibe_research.adapter_schema import AdapterCapability, AdapterManifest, ArtifactRules, MetricsSchema, ResourcePolicy, load_adapter_manifest, write_adapter_manifest
-from vibe_research.automation import auto_cycle
+from vibe_research.automation import auto_cycle, auto_next
 from vibe_research.codex_adapter import run_codex
 from vibe_research.cli import app
 from vibe_research.config import detect_config
@@ -22,6 +22,7 @@ from vibe_research.io import read_json, read_jsonl, read_yaml, write_json, write
 from vibe_research.loop_guard import apply_loop_guard
 from vibe_research.models import ProjectConfig
 from vibe_research.paths import VibePaths
+from vibe_research.papers import auto_method_search
 from vibe_research.portal import GENERATED_NOTICE
 from vibe_research.promotion import compile_decision, ensure_executable_resource_plan, synthesize_cycle_decision
 from vibe_research.research_manager import default_candidates
@@ -199,7 +200,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.24" in show.output
+    assert "0.8.25" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1023,6 +1024,47 @@ def test_expanded_operator_commands(tmp_path: Path):
     assert invoke("daemon", "status", "--target", str(tmp_path)).exit_code == 0
 
 
+def test_auto_method_search_creates_candidate_ideas(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "CARE myocardium", "--background", "cardiac MRI", "--no-root-portal").exit_code == 0
+
+    def fake_search(paths, query, *, source="arxiv", limit=10, offline=False, add_candidates=False):
+        assert "cardiac MRI myocardium" in query
+        assert offline is False
+        return [{"title": "Robust cardiac segmentation method", "source_url": "https://example.test/paper", "source": source}]
+
+    monkeypatch.setattr("vibe_research.papers.paper_search", fake_search)
+    result = auto_method_search(VibePaths(tmp_path))
+    assert result["status"] == "searched"
+    assert result["idea_ids"]
+    ideas = read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")
+    assert ideas[0]["source"] == "auto_method_search"
+    assert ideas[0]["status"] == "needs_literature_refresh"
+    assert "Robust cardiac segmentation method" in ideas[0]["raw_text"]
+
+    again = auto_method_search(VibePaths(tmp_path))
+    assert again["status"] == "already_done"
+    assert len(read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")) == 1
+
+
+def test_auto_next_monitor_triggers_online_method_search(tmp_path: Path, monkeypatch):
+    from vibe_research import automation
+
+    calls = {"search": 0}
+    monkeypatch.setattr(automation, "compute_next_action", lambda paths: ("vibe monitor", ""))
+    monkeypatch.setattr(automation, "monitor", lambda paths: None)
+
+    def fake_search(paths, *, offline=False, force=False):
+        calls["search"] += 1
+        assert offline is False
+        return {"status": "searched"}
+
+    monkeypatch.setattr(automation, "auto_method_search", fake_search)
+    assert automation.auto_next(VibePaths(tmp_path), offline=False) == "monitored"
+    assert calls["search"] == 1
+    assert automation.auto_next(VibePaths(tmp_path), offline=True) == "monitored"
+    assert calls["search"] == 1
+
+
 def test_slurm_dry_backend_records_launch(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
     enable_toy_adapter(tmp_path)
@@ -1644,6 +1686,48 @@ def test_v0823_auto_cycle_stops_after_single_monitor(monkeypatch, tmp_path: Path
     monkeypatch.setattr("vibe_research.automation.auto_next", fake_auto_next)
     assert auto_cycle(VibePaths(tmp_path), max_steps=10) == ["monitored"]
     assert calls["count"] == 1
+
+
+def test_v0825_online_monitor_triggers_method_search_once(monkeypatch, tmp_path: Path):
+    calls = {"monitor": 0, "search": 0}
+
+    def fake_next_action(paths):
+        return "vibe monitor", ""
+
+    def fake_monitor(paths):
+        calls["monitor"] += 1
+
+    def fake_search(paths, offline=False):
+        calls["search"] += 1
+        return {"status": "searched"}
+
+    monkeypatch.setattr("vibe_research.automation.compute_next_action", fake_next_action)
+    monkeypatch.setattr("vibe_research.automation.monitor", fake_monitor)
+    monkeypatch.setattr("vibe_research.automation.auto_method_search", fake_search)
+    assert auto_next(VibePaths(tmp_path), offline=False) == "monitored"
+    assert calls == {"monitor": 1, "search": 1}
+    assert auto_next(VibePaths(tmp_path), offline=True) == "monitored"
+    assert calls == {"monitor": 2, "search": 1}
+
+
+def test_v0825_auto_method_search_writes_provenance_and_ideas(monkeypatch, tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "improve segmentation", "--background", "medical imaging", "--no-root-portal").exit_code == 0
+
+    def fake_paper_search(paths, query, *, source="arxiv", limit=10, offline=False, add_candidates=False):
+        return [{"title": "New Segmentation Method", "source_url": "https://example.test/paper", "source": source, "year": "2026"}]
+
+    monkeypatch.setattr("vibe_research.papers.paper_search", fake_paper_search)
+    result = auto_method_search(VibePaths(tmp_path))
+    assert result["status"] == "searched"
+    assert result["idea_ids"]
+    marker = read_json(tmp_path / ".vibe" / "research" / "auto_method_search.json", {})
+    assert marker["query"]
+    sources = read_jsonl(tmp_path / ".vibe" / "research" / "sources.jsonl")
+    assert any(row.get("source") == "auto_method_search" for row in sources)
+    ideas = read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")
+    assert any("New Segmentation Method" in row["raw_text"] and row["source"] == "auto_method_search" for row in ideas)
+    skipped = auto_method_search(VibePaths(tmp_path))
+    assert skipped["status"] == "already_done"
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

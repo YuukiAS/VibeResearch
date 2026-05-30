@@ -6,6 +6,7 @@ from .codex_adapter import run_codex
 from .git_ops import create_branch
 from .io import read_json, write_json
 from .next_action import compute_next_action
+from .papers import auto_method_search
 from .paths import VibePaths
 from .project import create_cycle, generate_runs, sync_resource_plan_from_portfolio
 from .research import reflect, reflect_cycle, revise_cycle, revise_plan
@@ -63,6 +64,8 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
         return f"submitted {','.join(submitted)}"
     if command == "monitor":
         monitor(paths)
+        if not offline:
+            auto_method_search(paths, offline=offline)
         return "monitored"
     if command == "collect":
         collect(paths, target_id)

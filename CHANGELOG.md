@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.25 - 2026-05-30
+
+- Add a bounded `auto-method-search` path that derives a project-aware method
+  query, records source provenance, stores paper candidates, and seeds idea-pool
+  entries from online results.
+- Let online `auto-cycle` monitor passes trigger that search once while jobs are
+  pending, while preserving offline mode as no-network.
+- Query Semantic Scholar, OpenAlex, and arXiv by default so a single source
+  failure does not suppress method-candidate discovery.
+
 ## 0.8.24 - 2026-05-30
 
 - Use a conservative default Slurm wait policy of 24 start-plus-run hours when
