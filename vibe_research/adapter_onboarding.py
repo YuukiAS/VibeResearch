@@ -28,6 +28,7 @@ from .adapters import is_placeholder_command
 from .discovery import discover_files, relative_files
 from .io import append_jsonl, ensure_dir, read_json, read_yaml, utc_now, write_json, write_text, write_yaml
 from .paths import VibePaths
+from .real_experiments import EVALUATION_TASKS, INSTRUMENTATION_TASKS, LONG_RUN_TASKS, REAL_EXPERIMENT_TASKS, TRAINING_TASKS
 from .script_bootstrap import bootstrap_script_plan, wrapper_inventory
 from .timeline import record_event
 
@@ -274,12 +275,15 @@ def adapter_lint(paths: VibePaths) -> dict[str, Any]:
 
 def adapter_doctor(paths: VibePaths) -> dict[str, Any]:
     readiness = adapter_readiness(paths)
+    write_real_experiment_gap_report(paths, readiness)
     lines = [
         "# Adapter Doctor",
         "",
         f"Maturity level: `{readiness['maturity_level']}`",
         f"Adapter revision: `{readiness.get('adapter_revision', '')}`",
-        f"Ready for experiment planning: `{readiness['ready_for_experiments']}`",
+        f"Ready for instrumentation: `{readiness['ready_for_instrumentation']}`",
+        f"Ready for real experiments: `{readiness['ready_for_real_experiments']}`",
+        f"Ready for Slurm-backed real experiments: `{readiness['ready_for_slurm_real_experiments']}`",
         "",
         "## Active Capabilities",
         "",
@@ -289,6 +293,8 @@ def adapter_doctor(paths: VibePaths) -> dict[str, Any]:
     lines.extend(f"- `{cap}`" for cap in readiness["draft_capabilities"]) if readiness["draft_capabilities"] else lines.append("- none")
     lines.extend(["", "## Blocked Capabilities", ""])
     lines.extend(f"- `{cap}`" for cap in readiness["blocked_capabilities"]) if readiness["blocked_capabilities"] else lines.append("- none")
+    lines.extend(["", "## Blocked Real Experiment Capabilities", ""])
+    lines.extend(f"- `{cap}`" for cap in readiness["blocked_real_experiment_capabilities"]) if readiness["blocked_real_experiment_capabilities"] else lines.append("- none")
     lines.extend(["", "## Missing Scripts", ""])
     lines.extend(f"- {item}" for item in readiness["missing_scripts"]) if readiness["missing_scripts"] else lines.append("- none")
     lines.extend(["", "## Missing Metrics Schemas", ""])
@@ -322,8 +328,11 @@ def adapter_readiness(paths: VibePaths) -> dict[str, Any]:
             if result.get("capability_id"):
                 contract_by_cap[str(result["capability_id"])] = result
     active = [cap.id for cap in manifest.capabilities if cap.status == "active"]
+    active_by_task = {cap.task_type: cap.id for cap in manifest.capabilities if cap.status == "active"}
+    active_backends = sorted({backend for cap in manifest.capabilities if cap.status == "active" for backend in cap.resources.allowed_backends})
     draft = [cap.id for cap in manifest.capabilities if cap.status in {"candidate", "draft"}]
     blocked = [cap.id for cap in manifest.capabilities if cap.status.startswith("blocked_")]
+    blocked_real = [cap.id for cap in manifest.capabilities if cap.status.startswith("blocked_") and cap.task_type in REAL_EXPERIMENT_TASKS]
     missing_scripts = []
     missing_metrics = []
     draft_missing_metrics = []
@@ -344,15 +353,21 @@ def adapter_readiness(paths: VibePaths) -> dict[str, Any]:
                 contract_failures.append(cap.id)
     missing_answers = [q.model_dump() for q in manifest.open_questions if q.severity == "blocker" and not q.confirmed]
     maturity = derive_maturity(manifest)
-    ready = (
-        maturity in {"instrumentation_bootstrap", "evaluation_ready", "training_ready", "baseline_compare_ready", "long_run_ready"}
-        and bool(active)
+    readiness_base = (
+        bool(active)
         and lint.get("ok", False)
         and not missing_answers
         and not missing_scripts
         and not missing_metrics
         and not contract_failures
     )
+    active_tasks = set(active_by_task)
+    ready_for_instrumentation = readiness_base and bool(active_tasks & INSTRUMENTATION_TASKS)
+    ready_for_evaluation = readiness_base and bool(active_tasks & EVALUATION_TASKS)
+    ready_for_training = readiness_base and bool(active_tasks & TRAINING_TASKS)
+    ready_for_long_run = readiness_base and bool(active_tasks & LONG_RUN_TASKS)
+    ready_for_real = readiness_base and bool(active_tasks & REAL_EXPERIMENT_TASKS)
+    ready_for_slurm_real = ready_for_real and "slurm" in active_backends
     blockers = []
     if not active:
         blockers.append("activate at least one instrumentation capability")
@@ -362,13 +377,24 @@ def adapter_readiness(paths: VibePaths) -> dict[str, Any]:
     if not active:
         blockers.extend(f"define metrics schema for draft capability {item}" for item in draft_missing_metrics[:3])
     blockers.extend(f"rerun contract test for {item}" for item in contract_failures[:5])
+    if ready_for_instrumentation and not ready_for_real:
+        blockers.append("complete real-experiment adapter onboarding: activate evaluation, metrics, baseline, training, or long-run capability")
     return {
         "adapter_revision": manifest.adapter_revision,
         "maturity_level": maturity,
-        "ready_for_experiments": ready,
+        "ready_for_experiments": ready_for_real,
+        "ready_for_instrumentation": ready_for_instrumentation,
+        "ready_for_evaluation": ready_for_evaluation,
+        "ready_for_training": ready_for_training,
+        "ready_for_long_run": ready_for_long_run,
+        "ready_for_real_experiments": ready_for_real,
+        "ready_for_slurm_real_experiments": ready_for_slurm_real,
         "active_capabilities": active,
+        "active_capabilities_by_task": active_by_task,
+        "active_backends": active_backends,
         "draft_capabilities": draft,
         "blocked_capabilities": blocked,
+        "blocked_real_experiment_capabilities": blocked_real,
         "missing_scripts": missing_scripts,
         "missing_metrics_schemas": missing_metrics,
         "draft_missing_metrics_schemas": draft_missing_metrics,
@@ -380,6 +406,68 @@ def adapter_readiness(paths: VibePaths) -> dict[str, Any]:
         "next_blockers": blockers,
         "updated_at": utc_now(),
     }
+
+
+def write_real_experiment_gap_report(paths: VibePaths, readiness: dict[str, Any] | None = None) -> dict[str, Any]:
+    readiness = readiness or adapter_readiness(paths)
+    manifest = load_adapter_manifest(paths)
+    real_caps = [cap for cap in manifest.capabilities if cap.task_type in REAL_EXPERIMENT_TASKS]
+    gaps = []
+    if not readiness.get("ready_for_real_experiments"):
+        gaps.extend(
+            [
+                "activate at least one real-experiment capability, such as evaluation_smoke, metrics_export, baseline_compare, train_smoke, train_gate, or long_run_submit",
+                "define a metrics JSON contract and expected artifact paths for the selected capability",
+                "define a baseline or proxy comparison source for result interpretation",
+                "define an execution backend policy, including allowed local, Slurm, or project-specific backends",
+                "define result collection logic that produces schema-valid metrics",
+                "record project-specific safety rules in policy or adapter fields before enabling automatic submission",
+            ]
+        )
+    if not readiness.get("ready_for_slurm_real_experiments"):
+        gaps.append("if Slurm execution is required, add slurm to the selected capability resource policy allowed_backends and validate submit/monitor/collect commands")
+    report = {
+        "created_at": utc_now(),
+        "ready_for_instrumentation": readiness.get("ready_for_instrumentation", False),
+        "ready_for_real_experiments": readiness.get("ready_for_real_experiments", False),
+        "ready_for_slurm_real_experiments": readiness.get("ready_for_slurm_real_experiments", False),
+        "active_capabilities_by_task": readiness.get("active_capabilities_by_task", {}),
+        "blocked_real_experiment_capabilities": readiness.get("blocked_real_experiment_capabilities", []),
+        "real_experiment_capabilities": [
+            {"id": cap.id, "task_type": cap.task_type, "status": cap.status, "allowed_backends": cap.resources.allowed_backends}
+            for cap in real_caps
+        ],
+        "gaps": gaps,
+    }
+    write_json(paths.vibe / "adapter_real_experiment_gaps.json", report)
+    write_text(paths.vibe / "adapter_real_experiment_gaps.md", render_real_experiment_gap_report(report))
+    return report
+
+
+def render_real_experiment_gap_report(report: dict[str, Any]) -> str:
+    lines = [
+        "# Real Experiment Adapter Gaps",
+        "",
+        "This report is project-generic. It describes which adapter contracts are missing before VibeResearch can count backend-submitted method/evaluation runs as real experiments.",
+        "",
+        f"Ready for instrumentation: `{report['ready_for_instrumentation']}`",
+        f"Ready for real experiments: `{report['ready_for_real_experiments']}`",
+        f"Ready for Slurm-backed real experiments: `{report['ready_for_slurm_real_experiments']}`",
+        "",
+        "## Real Experiment Capabilities",
+        "",
+    ]
+    if report.get("real_experiment_capabilities"):
+        for cap in report["real_experiment_capabilities"]:
+            lines.append(f"- `{cap['id']}` task=`{cap['task_type']}` status=`{cap['status']}` backends=`{', '.join(cap.get('allowed_backends', [])) or 'none'}`")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Required Adapter Work", ""])
+    if report.get("gaps"):
+        lines.extend(f"- {gap}" for gap in report["gaps"])
+    else:
+        lines.append("- none")
+    return "\n".join(lines) + "\n"
 
 
 def run_contract_test(paths: VibePaths, capability_id: str) -> dict[str, Any]:
@@ -516,7 +604,7 @@ def set_adapter_block(paths: VibePaths, reason: str) -> None:
 
 def clear_adapter_block_if_ready(paths: VibePaths) -> None:
     readiness = adapter_readiness(paths)
-    if not readiness["ready_for_experiments"]:
+    if not readiness["ready_for_real_experiments"]:
         return
     state = read_json(paths.state / "state.json", {})
     if state.get("status") == "blocked_missing_adapter":
@@ -535,7 +623,7 @@ def bootstrap_adapter_on_init(paths: VibePaths, *, minimal: bool) -> None:
         bootstrap_script_plan(paths)
         adapter_lint(paths)
         adapter_doctor(paths)
-        set_adapter_block(paths, "adapter/script bootstrap is incomplete; run vibe adapter doctor and activate instrumentation capability")
+        set_adapter_block(paths, "adapter/script bootstrap is incomplete; run vibe adapter doctor and activate instrumentation first, then complete real-experiment adapter gaps")
 
 
 def script_bootstrap(paths: VibePaths, *, generate: bool = True, script_dir: str = ".vibe/scripts") -> Path:

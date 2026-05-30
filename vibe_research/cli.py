@@ -23,6 +23,7 @@ from .adapter_onboarding import (
     adapter_questions,
     run_contract_test,
     script_bootstrap,
+    write_real_experiment_gap_report,
 )
 from .artifacts import validate_artifact, validate_hard_rules
 from .audit import current_alignment_audit
@@ -52,7 +53,7 @@ from .git_ops import abandon_run, create_branch, git_available, git_current_bran
 from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
-from .io import read_json, read_yaml
+from .io import read_json, read_jsonl, read_yaml
 from .manifest import validate_manifest
 from .meeting import export_meeting_report
 from .next_action import compute_next_action
@@ -85,6 +86,7 @@ from .research_manager import (
     reserve_budget,
     research_init,
 )
+from .real_experiments import summarize_real_experiment_progress
 from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
 from .scheduler import queue_run, review_cycle, review_run, run_dryrun, submit_queue
@@ -253,6 +255,17 @@ def adapter_doctor_cmd(target: Path = typer.Option(Path("."), "--target", "-t"))
     console.print_json(data=result)
 
 
+@adapter_app.command("real-gaps")
+def adapter_real_gaps_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Write and print missing contracts for backend-submitted real experiments."""
+
+    p = paths(target)
+    readiness = adapter_doctor(p)
+    report = write_real_experiment_gap_report(p, readiness)
+    sync_dashboard(p)
+    console.print_json(data=report)
+
+
 @adapter_app.command("contract-test")
 def adapter_contract_test_cmd(capability_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
     """Run lightweight contract tests for one capability."""
@@ -384,7 +397,7 @@ def bootstrap_import_legacy_cmd(archive_manifest: Path, target: Path = typer.Opt
 @bootstrap_app.command("dogfood")
 def bootstrap_dogfood_cmd(
     target: Path = typer.Option(Path("."), "--target", "-t"),
-    profile: str = typer.Option("0.8.2-happy-path", "--profile"),
+    profile: str = typer.Option("0.8.3-happy-path", "--profile"),
     external_repo: Optional[Path] = typer.Option(None, "--external-repo"),
     brief_file: Optional[Path] = typer.Option(None, "--brief-file"),
     output_report: Optional[Path] = typer.Option(None, "--output-report"),
@@ -400,7 +413,7 @@ def bootstrap_dogfood_cmd(
 
 
 @bootstrap_app.command("sandbox")
-def bootstrap_sandbox_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), profile: str = typer.Option("0.8.2-happy-path", "--profile")) -> None:
+def bootstrap_sandbox_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), profile: str = typer.Option("0.8.3-happy-path", "--profile")) -> None:
     """Create one ignored local `.vibe_dogfood/` profile without running bootstrap."""
 
     path = create_local_dogfood_profile(paths(target).root, profile)
@@ -598,6 +611,13 @@ def experiment_show_cmd(experiment_id: str, target: Path = typer.Option(Path("."
     if not row:
         raise typer.BadParameter(f"Unknown experiment: {experiment_id}")
     console.print_json(data=row)
+
+
+@experiment_app.command("real-progress")
+def experiment_real_progress_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Print backend-submitted real-experiment progress accounting."""
+
+    console.print_json(data=summarize_real_experiment_progress(paths(target), write=True))
 
 
 @memory_app.command("build")
@@ -1283,6 +1303,10 @@ def scheduler_status(target: Path = typer.Option(Path("."), "--target", "-t")) -
     p = paths(target)
     queue = read_json(p.scheduler / "queue.json", {"queued": []}).get("queued", [])
     active = read_json(p.scheduler / "active_jobs.json", {"active": []}).get("active", [])
+    completed = read_jsonl(p.scheduler / "completed_jobs.jsonl")
+    daemon = daemon_status(p)
+    console.print(f"Daemon running: {daemon.get('running', False)} session={daemon.get('session', '')}")
+    console.print(f"Queued={len(queue)} Active={len(active)} Completed={len(completed)} Next collect={', '.join(daemon.get('next_collection_runs', [])) or 'none'}")
     table = Table(title="Scheduler")
     table.add_column("Kind")
     table.add_column("Run")

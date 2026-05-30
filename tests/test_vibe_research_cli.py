@@ -153,7 +153,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.2" in show.output
+    assert "0.8.3" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -312,7 +312,7 @@ def test_v081_bootstrap_dogfood_happy_path_and_readiness_exports(tmp_path: Path)
     assert ".vibe_dogfood/" in (tmp_path / ".gitignore").read_text()
     profile = tmp_path / ".vibe_dogfood" / "0.8.1-happy-path"
     readiness = read_json(profile / ".vibe" / "bootstrap" / "readiness.json", {})
-    assert readiness["readiness_level"] == "active"
+    assert readiness["readiness_level"] == "real_experiment_ready"
     assert "evaluation_smoke" in readiness["active_capabilities"]
     assert (profile / ".vibe" / "script_readiness.json").exists()
     assert (profile / ".vibe" / "bootstrap" / "readiness_report.md").exists()
@@ -454,6 +454,69 @@ def test_v082_low_risk_instrumentation_activates_without_schema_edits(tmp_path: 
     assert by_id["train_smoke"].status == "blocked_missing_script"
     assert by_id["train_gate"].status == "blocked_missing_script"
     assert by_id["long_run_submit"].status == "blocked_missing_user_answer"
+
+
+def test_v083_instrumentation_readiness_does_not_unlock_real_experiments(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    manifest = load_adapter_manifest(VibePaths(tmp_path))
+    for question in manifest.open_questions:
+        assert invoke("adapter", "ask", "--target", str(tmp_path), "--id", question.id, "--answer", "confirmed for test", "--confirm").exit_code == 0
+    for capability_id in ["environment_probe", "data_probe", "baseline_inventory"]:
+        assert invoke("adapter", "contract-test", capability_id, "--target", str(tmp_path)).exit_code == 0
+        assert invoke("adapter", "activate", capability_id, "--target", str(tmp_path), "--confirm", "instrumentation only").exit_code == 0
+
+    doctor = invoke("adapter", "doctor", "--target", str(tmp_path))
+    assert doctor.exit_code == 0
+    readiness = read_json(tmp_path / ".vibe" / "adapter_readiness.json", {})
+    assert readiness["ready_for_instrumentation"] is True
+    assert readiness["ready_for_real_experiments"] is False
+    assert readiness["ready_for_experiments"] is False
+    assert (tmp_path / ".vibe" / "adapter_real_experiment_gaps.md").exists()
+
+    planned = invoke("plan-cycle", "--offline", "--target", str(tmp_path))
+    assert planned.exit_code == 1
+    assert "real-experiment adapter readiness is incomplete" in planned.output
+
+
+def test_v083_real_experiment_progress_counts_only_backend_submitted_interpretable_runs(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke(
+        "decision",
+        "write",
+        "c001",
+        "--type",
+        "collect_more_metrics",
+        "--action",
+        "collect schema-valid metrics",
+        "--direction",
+        "toy-metrics-export",
+        "--baseline",
+        "trusted_baseline_proxy",
+        "--target",
+        str(tmp_path),
+    ).exit_code == 0
+    assert invoke("compile-decision", "c001", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
+    run_id = sorted(read_json(tmp_path / ".vibe" / "state" / "state.json", {})["runs"])[0]
+    assert invoke("review", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("branch", run_id, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("patch", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("dryrun", run_id, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("queue", run_id, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("submit-queue", "--target", str(tmp_path), "--dry").exit_code == 0
+    write_json(tmp_path / ".vibe" / "toy_metrics.json", {"primary": 0.7})
+    assert invoke("collect", run_id, "--target", str(tmp_path), "--metric", "0.7").exit_code == 0
+
+    progress_cmd = invoke("experiment", "real-progress", "--target", str(tmp_path))
+    assert progress_cmd.exit_code == 0
+    progress = json.loads(progress_cmd.output)
+    assert progress["observed_count"] == 1
+    assert progress["countable_runs"][0]["run_id"] == run_id
+    assert progress["countable_runs"][0]["run_kind"] == "real_experiment"
+    assert read_json(tmp_path / ".vibe" / "research" / "real_experiment_progress.json", {})["observed_count"] == 1
 
 
 def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):

@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.8.2"
+    vibe_version: str = "0.8.3"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -192,6 +192,7 @@ class RunManifest(BaseModel):
     hypothesis: str
     change_summary: str = ""
     expected_learning: str = ""
+    run_kind: str = "unknown"
     status: str = "generated"
     entrypoint: dict[str, Any] = Field(default_factory=lambda: {"type": "local", "command": ""})
     dryrun: dict[str, Any] = Field(default_factory=lambda: {"command": "", "max_minutes": 20})

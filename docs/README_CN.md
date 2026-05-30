@@ -191,6 +191,13 @@ vibe adapter activate metrics_export --confirm "reviewed by project owner"
 
 `.vibe/scripts/` 中生成的封装脚本默认是草案，不能直接视为可信。通常应先建立评估或指标导出能力，再考虑训练自动化；GPU 和长任务能力必须有明确的资源策略。
 
+Instrumentation readiness 和真实实验 readiness 是两件事。环境探针、数据探针和 baseline inventory 可以验证项目表面，但不代表已经可以推进方法或评估实验。真实实验前需要补齐评估命令、指标格式、baseline/proxy、后端策略、collector 和项目安全规则：
+
+```bash
+vibe adapter real-gaps
+vibe experiment real-progress
+```
+
 ## 有边界的研究管理
 
 研究管理层用来记录假设、实验、证据、决策、预算和每日记录。它帮助项目持续迭代研究想法，同时保留每个结论背后的证据链。

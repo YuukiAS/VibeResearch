@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.8.3 - 2026-05-30
+
+- Separate instrumentation readiness from real-experiment readiness so probe
+  capabilities no longer unlock experiment planning by themselves.
+- Add real-experiment adapter gap reports that list missing generic evaluator,
+  metric contract, baseline/proxy, backend policy, collector, and project
+  safety-policy work.
+- Add generic real-experiment progress accounting under `.vibe/research/`,
+  including countable backend-submitted runs, non-counting failures, and repair
+  queue records.
+- Add CLI surfaces for `vibe adapter real-gaps` and
+  `vibe experiment real-progress`.
+- Show daemon, scheduler, active jobs, completed jobs, and next collection
+  state more explicitly in scheduler status.
+
 ## 0.8.2 - 2026-05-30
 
 - Rewrite the English and Chinese README files with a cleaner project

@@ -10,6 +10,7 @@ from .io import read_json, read_jsonl, write_json, write_text
 from .paths import VibePaths
 from .portal import build_portal, write_portal_text
 from .research_manager import budget_status, load_hypotheses, research_readiness
+from .real_experiments import summarize_real_experiment_progress
 from .timeline import sync_timeline_files
 
 
@@ -37,7 +38,9 @@ def render_status(paths: VibePaths) -> str:
             "",
             f"Maturity: `{readiness.get('maturity_level', 'missing')}`",
             f"Adapter revision: `{readiness.get('adapter_revision', '')}`",
-            f"Ready for experiments: `{readiness.get('ready_for_experiments', False)}`",
+            f"Ready for instrumentation: `{readiness.get('ready_for_instrumentation', False)}`",
+            f"Ready for real experiments: `{readiness.get('ready_for_real_experiments', False)}`",
+            f"Ready for Slurm-backed real experiments: `{readiness.get('ready_for_slurm_real_experiments', False)}`",
             "",
             "| Active | Draft/Candidate | Blocked | Missing Answers |",
             "|---|---|---|---|",
@@ -48,6 +51,7 @@ def render_status(paths: VibePaths) -> str:
         ]
     )
     research = research_readiness(paths)
+    real_progress = summarize_real_experiment_progress(paths, write=True)
     budget = budget_status(paths)
     hypotheses = load_hypotheses(paths)
     lines.extend(
@@ -58,6 +62,7 @@ def render_status(paths: VibePaths) -> str:
             f"Ready for bounded autonomy: `{research.get('ready_for_bounded_autonomy', False)}`",
             f"Active hypotheses: `{len([row for row in hypotheses.values() if row.get('status') in {'active', 'needs_analysis'}])}`",
             f"Budget remaining today: `{budget.get('remaining_daily_gpu_hours', 0)}` GPU-hours, `{budget.get('remaining_daily_jobs', 0)}` jobs",
+            f"Real experiment progress: `{real_progress.get('observed_count', 0)}` / `{real_progress.get('target_count', 3)}`",
         ]
     )
     lines.extend(["", "## Runs", ""])
@@ -109,7 +114,7 @@ def render_todo(paths: VibePaths) -> str:
     if state.get("blocked_reason"):
         lines.append(f"- [ ] {state['blocked_reason']}")
     readiness = adapter_readiness(paths)
-    if not readiness.get("ready_for_experiments"):
+    if not readiness.get("ready_for_real_experiments"):
         for blocker in readiness.get("next_blockers", [])[:8]:
             lines.append(f"- [ ] adapter: {blocker}")
     research = research_readiness(paths)

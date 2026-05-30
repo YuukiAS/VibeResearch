@@ -17,6 +17,7 @@ from .dashboard import sync_dashboard
 from .io import append_jsonl, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text
 from .manifest import validate_manifest
 from .paths import VibePaths
+from .real_experiments import classify_run, record_repair_issue, summarize_real_experiment_progress
 from .research_manager import collect_run_evidence_if_research_linked, policy_completeness, reserve_budget
 from .timeline import record_event
 
@@ -260,6 +261,8 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
             state["runs"][job["run_id"]] = run
             record_event(paths, "job_finished", f"{job['run_id']} status={poll.status}", cycle_id=job.get("cycle_id", ""), run_id=job["run_id"], status=poll.status, payload=poll.details)
             if poll.status in {"failed", "timeout", "cancelled"}:
+                if classify_run(paths, job["run_id"], run)["run_kind"] == "real_experiment":
+                    record_repair_issue(paths, job["run_id"], run, f"non_counting_execution_failure:{poll.status}", poll.details)
                 apply_failure_rules(paths, state, job["run_id"], run)
         else:
             still_active.append(job)
@@ -271,6 +274,7 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
     state["next_action"] = "vibe collect <run_id>" if not still_active else "vibe monitor"
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
+    summarize_real_experiment_progress(paths, write=True)
     sync_dashboard(paths)
 
 
@@ -402,6 +406,10 @@ def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted:
     if schema_errors:
         record_event(paths, "metrics_schema_failed", "; ".join(schema_errors[:3]), cycle_id=run.get("cycle_id", ""), run_id=run_id, status=trust_status)
     record_event(paths, event, f"Collected primary={value}; trust={trust_status}; schema={schema_status}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status=trust_status)
+    classification = classify_run(paths, run_id, run)
+    if classification["run_kind"] == "real_experiment" and not classification["counts_toward_real_experiment_cycle"]:
+        record_repair_issue(paths, run_id, run, classification["classification"], {"trust_status": trust_status, "schema_status": schema_status})
+    summarize_real_experiment_progress(paths, write=True)
     if trusted_now:
         record_event(paths, "leaderboard_updated", f"Updated leaderboard with {run_id}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status="updated")
     sync_dashboard(paths)

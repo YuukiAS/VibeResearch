@@ -422,13 +422,13 @@ def build_readiness(paths: VibePaths) -> dict[str, Any]:
     scripts = script_readiness_matrix(paths, write=True)
     state = load_bootstrap_state(paths)
     active = adapter.get("active_capabilities", [])
-    readiness_level = "active" if active and completeness.get("safe_for_low_risk_execution") else "blocked" if state.get("blocked_phases") else "draft"
+    readiness_level = "real_experiment_ready" if adapter.get("ready_for_real_experiments") and completeness.get("safe_for_low_risk_execution") else "instrumentation_ready" if adapter.get("ready_for_instrumentation") and completeness.get("safe_for_low_risk_execution") else "blocked" if state.get("blocked_phases") else "draft"
     allowed = {
-        "smoke": bool(active) and completeness.get("safe_for_low_risk_execution", False),
-        "evaluation": bool(active) and completeness.get("safe_for_low_risk_execution", False),
-        "training_gate": bool(active) and completeness.get("complete", False),
-        "long_run": bool(active) and completeness.get("complete", False),
-        "bounded_continuous": bool(active) and completeness.get("complete", False) and research_readiness(paths).get("ready_for_bounded_autonomy", False),
+        "instrumentation": adapter.get("ready_for_instrumentation", False) and completeness.get("safe_for_low_risk_execution", False),
+        "evaluation": adapter.get("ready_for_evaluation", False) and completeness.get("safe_for_low_risk_execution", False),
+        "training_gate": adapter.get("ready_for_training", False) and completeness.get("complete", False),
+        "long_run": adapter.get("ready_for_long_run", False) and completeness.get("complete", False),
+        "bounded_continuous": adapter.get("ready_for_real_experiments", False) and completeness.get("complete", False) and research_readiness(paths).get("ready_for_bounded_autonomy", False),
     }
     next_actions = []
     if adapter.get("next_blockers"):
@@ -671,7 +671,7 @@ def apply_bootstrap_answers(paths: VibePaths) -> None:
         write_yaml(paths.vibe / "adapter_questions.yaml", {"questions": [q.model_dump() for q in manifest.open_questions]})
 
 
-def run_dogfood(paths: VibePaths, *, profile: str = "0.8.2-happy-path", external_repo: Path | None = None, brief_file: Path | None = None, output_report: Path | None = None, dry_run: bool = False) -> dict[str, Any]:
+def run_dogfood(paths: VibePaths, *, profile: str = "0.8.3-happy-path", external_repo: Path | None = None, brief_file: Path | None = None, output_report: Path | None = None, dry_run: bool = False) -> dict[str, Any]:
     repo = external_repo.expanduser().resolve() if external_repo else create_local_dogfood_profile(paths.root, profile)
     report_path = output_report or (bootstrap_dir(paths) / "dogfood_report.json")
     issues: list[dict[str, Any]] = []

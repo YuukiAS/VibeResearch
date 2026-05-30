@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_config
-from .io import read_json, utc_now, write_json
+from .io import read_json, read_jsonl, utc_now, write_json
 from .paths import VibePaths
 
 
@@ -21,10 +21,16 @@ def daemon_session(paths: VibePaths) -> str:
 
 def daemon_status(paths: VibePaths) -> dict[str, Any]:
     session = daemon_session(paths)
+    queue = read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued", [])
+    active = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
+    completed = read_jsonl(paths.scheduler / "completed_jobs.jsonl")
+    state = read_json(paths.state / "state.json", {})
+    next_collect = [run_id for run_id, run in state.get("runs", {}).items() if run.get("status") in {"finished", "submitted_dry"}]
+    base = {"session": session, "queued_jobs": len(queue), "active_jobs": len(active), "completed_jobs": len(completed), "next_collection_runs": next_collect}
     if not shutil.which("tmux"):
-        return {"available": False, "running": False, "session": session, "reason": "tmux not found"}
+        return {**base, "available": False, "running": False, "reason": "tmux not found"}
     result = subprocess.run(["tmux", "has-session", "-t", session], text=True, capture_output=True, check=False)
-    return {"available": True, "running": result.returncode == 0, "session": session}
+    return {**base, "available": True, "running": result.returncode == 0}
 
 
 def daemon_start(paths: VibePaths, *, interval: int | None = None, auto_next: bool = True) -> dict[str, Any]:
@@ -56,4 +62,3 @@ def daemon_stop(paths: VibePaths) -> dict[str, Any]:
         status["stop_returncode"] = result.returncode
         status["stderr"] = result.stderr
     return status
-

@@ -117,7 +117,9 @@ def render_dashboard_html(data: dict[str, Any]) -> str:
         for key, value in [
             ("maturity", readiness.get("maturity_level", "missing")),
             ("revision", readiness.get("adapter_revision", "")),
-            ("ready", readiness.get("ready_for_experiments", False)),
+            ("ready for instrumentation", readiness.get("ready_for_instrumentation", False)),
+            ("ready for real experiments", readiness.get("ready_for_real_experiments", False)),
+            ("ready for slurm real experiments", readiness.get("ready_for_slurm_real_experiments", False)),
             ("active", ", ".join(readiness.get("active_capabilities", [])) or "none"),
             ("draft", ", ".join(readiness.get("draft_capabilities", [])) or "none"),
             ("blocked", ", ".join(readiness.get("blocked_capabilities", [])) or "none"),

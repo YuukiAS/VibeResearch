@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .adapter_onboarding import adapter_readiness, bootstrap_adapter_on_init, clear_adapter_block_if_ready, set_adapter_block
+from .adapter_onboarding import adapter_readiness, bootstrap_adapter_on_init, clear_adapter_block_if_ready, set_adapter_block, write_real_experiment_gap_report
 from .dashboard import sync_dashboard
 from .config import write_config_schema
 from .decisions import write_block_decision
@@ -390,8 +390,9 @@ def create_cycle(paths: VibePaths, *, mode: str | None = None) -> str:
     paths.require_initialized()
     state = read_json(paths.state / "state.json", default_state())
     readiness = adapter_readiness(paths)
-    if not readiness.get("ready_for_experiments"):
-        reason = "adapter readiness is incomplete; run vibe adapter doctor and activate instrumentation capability"
+    if not readiness.get("ready_for_real_experiments"):
+        write_real_experiment_gap_report(paths, readiness)
+        reason = "real-experiment adapter readiness is incomplete; run vibe adapter doctor and complete .vibe/adapter_real_experiment_gaps.md"
         set_adapter_block(paths, reason)
         raise RuntimeError(reason)
     clear_adapter_block_if_ready(paths)
@@ -585,6 +586,7 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
                         "resources": spec.get("resources", {}),
                         "outputs": spec.get("outputs", {}),
                         "evaluation": spec.get("evaluation", {}),
+                        "run_kind": spec.get("run_kind", ""),
                         "success_criteria": spec.get("success_criteria", {}),
                         "adapter_metadata": spec.get("adapter_metadata", {}),
                         "research_metadata": spec.get("research_metadata", resource_plan.get("research_metadata", {})),
@@ -615,6 +617,7 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
             hypothesis=hypothesis,
             change_summary="Generated from compiled adapter resource plan.",
             expected_learning=spec["expected_learning"],
+            run_kind=spec["run_kind"] or "unknown",
             dryrun=spec["dryrun"],
             entrypoint=spec["entrypoint"],
             resources=spec["resources"],

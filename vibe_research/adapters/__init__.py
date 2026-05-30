@@ -9,6 +9,7 @@ from ..adapter_schema import AdapterCapability, hash_dict, load_adapter_manifest
 from ..config import load_config
 from ..io import read_json, read_yaml
 from ..paths import VibePaths
+from ..real_experiments import run_kind_from_task
 
 
 PLACEHOLDER_TOKENS = [
@@ -92,6 +93,9 @@ class ToyAdapter(BaseAdapter):
             "metrics_schema": {"primary": "number"},
             "resources": {"gpu": 0, "cpus": 1, "mem_gb": 1, "time": "00:05:00", "preferred_partitions": ["debug"], "fallback_partitions": []},
             "trust_rules": {"require_metrics_schema": True, "allow_manual_metric": False},
+            "baseline_comparison_target": getattr(decision, "baseline_comparison_target", ""),
+            "run_kind": "real_experiment",
+            "adapter_metadata": {"capability_id": "toy-metrics-export", "task_type": "metrics_export", "allowed_backends": ["local"]},
         }
         plan = resource_plan_from_task(cycle_id, decision, task)
         return CompileResult(True, plan=plan)
@@ -143,6 +147,7 @@ def resource_plan_from_task(cycle_id: str, decision: Any, task: dict[str, Any]) 
                     "trust_rules": task.get("trust_rules", {}),
                     "baseline_comparison_target": getattr(decision, "baseline_comparison_target", "") or task.get("baseline_comparison_target", ""),
                 },
+                "run_kind": task.get("run_kind", ""),
                 "adapter_metadata": task.get("adapter_metadata", {}),
                 "research_metadata": research_metadata,
                 "depends_on": list(task.get("depends_on", [])),
@@ -208,7 +213,9 @@ def task_from_capability(manifest: Any, capability: AdapterCapability, decision:
     metadata = {
         "adapter_revision": manifest.adapter_revision,
         "capability_id": capability.id,
+        "task_type": capability.task_type,
         "capability_version": capability.version,
+        "allowed_backends": capability.resources.allowed_backends,
         "command_template_hash": capability.activation.get("command_template_hash") or hash_dict(capability.entrypoint),
         "metrics_schema_version": capability.metrics_schema.version,
         "metrics_schema_hash": capability.activation.get("metrics_schema_hash") or hash_dict(capability.metrics_schema.model_dump()),
@@ -230,6 +237,7 @@ def task_from_capability(manifest: Any, capability: AdapterCapability, decision:
         "resources": capability.resources.default,
         "trust_rules": {"checks": capability.trust_checks, "require_metrics_schema": True, "allow_manual_metric": False},
         "baseline_comparison_target": getattr(decision, "baseline_comparison_target", ""),
+        "run_kind": run_kind_from_task(capability.task_type),
         "adapter_metadata": metadata,
     }
 

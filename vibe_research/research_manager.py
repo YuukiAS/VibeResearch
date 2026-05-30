@@ -332,12 +332,12 @@ def research_readiness(paths: VibePaths) -> dict[str, Any]:
             missing.append(str(path.relative_to(paths.vibe)))
     open_questions = [row for row in read_jsonl(research_paths(paths)["questions"]) if row.get("status", "open") == "open"]
     adapter = adapter_readiness(paths)
-    ready = not missing and not open_questions and adapter.get("ready_for_experiments", False)
+    ready = not missing and not open_questions and adapter.get("ready_for_real_experiments", False)
     return {
         "ready_for_bounded_autonomy": ready,
         "missing_files": missing,
         "open_questions": open_questions,
-        "adapter_ready": adapter.get("ready_for_experiments", False),
+        "adapter_ready": adapter.get("ready_for_real_experiments", False),
         "adapter_maturity": adapter.get("maturity_level", "missing"),
     }
 

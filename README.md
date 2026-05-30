@@ -224,6 +224,16 @@ Generated wrappers in `.vibe/scripts/` are draft and untrusted until reviewed or
 replaced by the downstream project. A safe onboarding sequence usually activates
 evaluation or metrics export before any training or long-running job capability.
 
+Instrumentation readiness is separate from real-experiment readiness. Probe
+capabilities such as environment, data, and baseline inventory can verify the
+project surface, but they do not count as method or evaluation experiments.
+Use the real-experiment gap report to finish the project-specific contracts:
+
+```bash
+vibe adapter real-gaps
+vibe experiment real-progress
+```
+
 ## Bounded Research Management
 
 The research manager tracks hypotheses, experiments, evidence, decisions,
