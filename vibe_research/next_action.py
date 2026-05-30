@@ -45,7 +45,8 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
         cycle_run_ids = [run_id for run_id, run in state.get("runs", {}).items() if run.get("cycle_id") == cycle_id]
         if cycle.get("status") == "reviewed" and not cycle_run_ids:
             return f"vibe generate-runs {cycle_id}", ""
-    for run_id, run in sorted(state.get("runs", {}).items()):
+    scoped_runs = next_action_run_scope(state, cycle_id)
+    for run_id, run in scoped_runs:
         run_dir = paths.runs / run_id
         status = run.get("status", "")
         if not has_text(run_dir / "review.md"):
@@ -82,3 +83,14 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
 
 def has_text(path) -> bool:
     return path.exists() and bool(path.read_text().strip())
+
+
+def next_action_run_scope(state: dict, cycle_id: str) -> list[tuple[str, dict]]:
+    runs = sorted(state.get("runs", {}).items())
+    if not cycle_id:
+        return runs
+    current = [(run_id, run) for run_id, run in runs if run.get("cycle_id") == cycle_id]
+    terminal = {"revised", "merged", "abandoned", "cancelled"}
+    if any(run.get("status") not in terminal for _, run in current):
+        return current
+    return runs

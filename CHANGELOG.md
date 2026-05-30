@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.5 - 2026-05-30
+
+- Scope `next` and `auto-next` run-level actions to the current cycle while it
+  has non-terminal runs, so historical bootstrap or instrumentation runs cannot
+  preempt the active experiment cycle.
+- Preserve historical run inspection after the current cycle is terminal.
+
 ## 0.8.4 - 2026-05-30
 
 - Add deterministic cycle-decision synthesis and resource-plan auto-compile

@@ -153,7 +153,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.4" in show.output
+    assert "0.8.5" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -539,6 +539,26 @@ def test_v084_generate_runs_auto_compiles_and_recovers_resource_plan_block(tmp_p
     assert decision["decision_type"] == "collect_more_metrics"
     assert plan["decision_id"] == decision["decision_id"]
     assert read_json(tmp_path / ".vibe" / "state" / "state.json", {})["runs"]
+
+
+def test_v085_next_action_prioritizes_current_cycle_runs(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"]["r001_toy_audit"]["status"] = "collected"
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c002", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("generate-runs", "c002", "--target", str(tmp_path), "--count", "1").exit_code == 0
+
+    next_action = invoke("next", "--target", str(tmp_path))
+    assert next_action.exit_code == 0
+    assert "vibe review r002_toy_audit" in next_action.output
+    assert "r001_toy_audit" not in next_action.output
 
 
 def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
