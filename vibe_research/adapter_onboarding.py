@@ -25,6 +25,7 @@ from .adapter_schema import (
     write_adapter_manifest,
 )
 from .adapters import is_placeholder_command
+from .discovery import discover_files, relative_files
 from .io import append_jsonl, ensure_dir, read_json, read_yaml, utc_now, write_json, write_text, write_yaml
 from .paths import VibePaths
 from .script_bootstrap import bootstrap_script_plan, wrapper_inventory
@@ -119,18 +120,20 @@ def default_questions() -> list[AdapterQuestion]:
 def default_draft_capabilities(script_dir: str = ".vibe/scripts") -> list[AdapterCapability]:
     caps = []
     for task in ["environment_probe", "data_probe", "baseline_inventory", "evaluation_smoke", "metrics_export"]:
+        low_risk = task in {"environment_probe", "data_probe", "baseline_inventory"}
         cap = AdapterCapability(
             id=task,
             version="draft",
-            status="draft" if task in {"environment_probe", "data_probe", "baseline_inventory"} else "blocked_missing_metrics_schema",
+            status="draft" if low_risk else "blocked_missing_metrics_schema",
             task_type=task,
             supported_decisions=["collect_more_metrics"] if task in {"evaluation_smoke", "metrics_export"} else [],
             description=f"Draft {task} wrapper generated for adapter onboarding.",
             dryrun={"command": f"python {script_dir}/{task}.py --dryrun"},
             entrypoint={"type": "local", "command": f"python {script_dir}/{task}.py --smoke"},
-            outputs={"expected_output_path": f".vibe/bootstrap_metrics/{task}.json"},
-            artifact_rules=ArtifactRules(expected_outputs=[f".vibe/bootstrap_metrics/{task}.json"], required_files=[]),
-            resources=ResourcePolicy(automatic_submission_allowed=False),
+            outputs={"expected_output_path": f".vibe/bootstrap_metrics/{task}.json", "metrics_file_path": f".vibe/bootstrap_metrics/{task}.json"},
+            metrics_schema=MetricsSchema(required=["primary"], types={"primary": "number"}, primary_metric="primary", version="bootstrap-draft") if low_risk else MetricsSchema(),
+            artifact_rules=ArtifactRules(expected_outputs=[f".vibe/bootstrap_metrics/{task}.json"], trusted_path_patterns=[".vibe/bootstrap_metrics/*.json"], required_files=[], version="bootstrap-draft" if low_risk else "draft"),
+            resources=ResourcePolicy(automatic_submission_allowed=False, user_confirmation_required=not low_risk),
             trust_checks=["schema_valid_metrics", "expected_output_exists"],
             contract_tests=[task],
             provenance={"source": "adapter bootstrap", "script_dir": script_dir, "created_at": utc_now()},
@@ -152,15 +155,21 @@ def default_draft_capabilities(script_dir: str = ".vibe/scripts") -> list[Adapte
 
 
 def adapter_discover(paths: VibePaths) -> dict[str, Any]:
+    warnings: list[str] = []
+    scripts = find_extensions_with_warnings(paths.root, [".py", ".sh"], max_count=100, warnings=warnings)
+    configs = find_extensions_with_warnings(paths.root, [".yaml", ".yml", ".json", ".toml"], max_count=80, warnings=warnings)
+    notebooks = find_extensions_with_warnings(paths.root, [".ipynb"], max_count=30, warnings=warnings)
+    slurm = find_globs_with_warnings(paths.root, ["*.sbatch", "*.slurm"], warnings=warnings)
+    metrics = find_globs_with_warnings(paths.root, ["*metrics*.json", "*metric*.json", "*leaderboard*.json"], warnings=warnings)
     candidates = {
         "readmes": find_by_names(paths.root, ["README.md", "README.rst", "README.txt"]),
         "docs": find_dirs(paths.root, ["docs", "doc"]),
-        "scripts": find_extensions(paths.root, [".py", ".sh"], max_count=100),
-        "configs": find_extensions(paths.root, [".yaml", ".yml", ".json", ".toml"], max_count=80),
+        "scripts": scripts,
+        "configs": configs,
         "tests": find_dirs(paths.root, ["tests", "test"]),
-        "slurm": find_globs(paths.root, ["*.sbatch", "*.slurm"]),
-        "notebooks": find_extensions(paths.root, [".ipynb"], max_count=30),
-        "metrics_files": find_globs(paths.root, ["*metrics*.json", "*metric*.json", "*leaderboard*.json"]),
+        "slurm": slurm,
+        "notebooks": notebooks,
+        "metrics_files": metrics,
         "requirements": find_by_names(paths.root, ["requirements.txt", "environment.yml", "pyproject.toml", "setup.py"]),
     }
     risks = []
@@ -168,7 +177,7 @@ def adapter_discover(paths: VibePaths) -> dict[str, Any]:
         risks.append("No candidate metrics files found; metrics schema must be supplied.")
     if not candidates["scripts"]:
         risks.append("No candidate scripts found; wrapper bootstrap remains draft.")
-    report = {"created_at": utc_now(), "candidates": candidates, "unresolved_risks": risks}
+    report = {"created_at": utc_now(), "candidates": candidates, "unresolved_risks": risks, "discovery_warnings": sorted(set(warnings))}
     write_json(paths.vibe / "discovery_report.json", report)
     lines = ["# Adapter Discovery Report", ""]
     for key, values in candidates.items():
@@ -179,6 +188,8 @@ def adapter_discover(paths: VibePaths) -> dict[str, Any]:
         lines.append("")
     lines.extend(["## Unresolved Risks", ""])
     lines.extend(f"- {risk}" for risk in risks) if risks else lines.append("- none")
+    lines.extend(["", "## Discovery Warnings", ""])
+    lines.extend(f"- {warning}" for warning in sorted(set(warnings))) if warnings else lines.append("- none")
     write_text(paths.vibe / "discovery_report.md", "\n".join(lines) + "\n")
     append_jsonl(paths.vibe / "adapter_history.jsonl", {"event": "adapter_discovered", "created_at": utc_now(), "risk_count": len(risks)})
     record_event(paths, "adapter_discovered", f"Discovery risks={len(risks)}", status="recorded", payload=report)
@@ -199,24 +210,23 @@ def find_dirs(root: Path, names: list[str]) -> list[str]:
 
 
 def find_extensions(root: Path, suffixes: list[str], *, max_count: int) -> list[str]:
-    out = []
-    for path in sorted(root.rglob("*")):
-        if ".vibe" in path.parts or ".git" in path.parts or not path.is_file():
-            continue
-        if path.suffix in suffixes:
-            out.append(str(path.relative_to(root)))
-        if len(out) >= max_count:
-            break
-    return out
+    return find_extensions_with_warnings(root, suffixes, max_count=max_count, warnings=[])
+
+
+def find_extensions_with_warnings(root: Path, suffixes: list[str], *, max_count: int, warnings: list[str]) -> list[str]:
+    result = discover_files(root, patterns=["*" + suffix for suffix in suffixes], max_files=max_count)
+    warnings.extend(result.warnings)
+    return relative_files(result.files, root)
 
 
 def find_globs(root: Path, patterns: list[str]) -> list[str]:
-    out = []
-    for pattern in patterns:
-        for path in sorted(root.rglob(pattern)):
-            if ".vibe" not in path.parts and ".git" not in path.parts and path.is_file():
-                out.append(str(path.relative_to(root)))
-    return out[:80]
+    return find_globs_with_warnings(root, patterns, warnings=[])
+
+
+def find_globs_with_warnings(root: Path, patterns: list[str], *, warnings: list[str]) -> list[str]:
+    result = discover_files(root, patterns=patterns, max_files=80)
+    warnings.extend(result.warnings)
+    return relative_files(result.files, root)
 
 
 def adapter_draft(paths: VibePaths) -> AdapterManifest:

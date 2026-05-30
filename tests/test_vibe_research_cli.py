@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import os
 
@@ -152,7 +153,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.0" in show.output
+    assert "0.8.2" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -376,6 +377,83 @@ def test_v081_policy_gate_archive_import_and_external_dogfood(tmp_path: Path):
     dogfood = read_json(out, {})
     assert dogfood["dry_run"] is True
     assert dogfood["issue_classes"]
+
+
+def test_v082_discovery_prunes_heavy_dirs_and_reports_limits(tmp_path: Path):
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "eval.py").write_text("print('eval')\n")
+    (repo / "scripts" / "extra_a.py").write_text("print('a')\n")
+    (repo / "scripts" / "extra_b.py").write_text("print('b')\n")
+    for name in ["data", "results", "models", "external_supervisors", ".vibe_legacy_20260530"]:
+        folder = repo / name
+        folder.mkdir(parents=True)
+        (folder / "hidden_eval.py").write_text("print('heavy')\n")
+        (folder / "hidden_metrics.json").write_text('{"primary": 0.0}\n')
+    assert invoke("init", "--target", str(repo), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+
+    config = read_yaml(repo / ".vibe" / "config.yaml", {})
+    config["discovery"] = {"max_files": 2, "max_dirs": 200, "skip_dirs": ["custom_ignored"]}
+    write_yaml(repo / ".vibe" / "config.yaml", config)
+    assert invoke("adapter", "discover", "--target", str(repo)).exit_code == 0
+    report = read_json(repo / ".vibe" / "discovery_report.json", {})
+
+    scripts = report["candidates"]["scripts"]
+    all_candidate_paths = "\n".join(path for values in report["candidates"].values() for path in values)
+    assert "scripts/eval.py" in scripts
+    for ignored in ["data/", "results/", "models/", "external_supervisors/", ".vibe_legacy_20260530/"]:
+        assert ignored not in all_candidate_paths
+    assert report["discovery_warnings"]
+
+    out = repo / "dogfood.json"
+    assert invoke("bootstrap", "dogfood", "--target", str(repo), "--external-repo", str(repo), "--dry-run", "--output-report", str(out)).exit_code == 0
+    context = read_json(out, {})["readiness"]["context"]
+    assert "scripts/eval.py" in context["candidate_scripts"]
+    assert all("data/" not in path and "results/" not in path for path in context["candidate_scripts"])
+
+
+def test_v082_resume_clears_stale_question_block_after_answers(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    assert invoke("bootstrap", "init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--force").exit_code == 0
+    assert invoke("bootstrap", "run", "--target", str(tmp_path)).exit_code == 0
+
+    blocked_state = read_json(tmp_path / ".vibe" / "bootstrap" / "state.json", {})
+    assert "questions" in blocked_state.get("blocked_phases", [])
+
+    manifest = load_adapter_manifest(VibePaths(tmp_path))
+    for question in manifest.open_questions:
+        result = invoke("adapter", "ask", "--target", str(tmp_path), "--id", question.id, "--answer", "confirmed for test", "--confirm")
+        assert result.exit_code == 0
+    assert invoke("bootstrap", "resume", "--target", str(tmp_path)).exit_code == 0
+
+    resumed = read_json(tmp_path / ".vibe" / "bootstrap" / "state.json", {})
+    assert "questions" in resumed.get("completed_phases", [])
+    assert "questions" not in resumed.get("blocked_phases", [])
+    status = invoke("bootstrap", "status", "--target", str(tmp_path))
+    assert status.exit_code == 0
+    status_data = json.loads(status.output)
+    assert status_data["readiness"]["required_questions"] == []
+
+
+def test_v082_low_risk_instrumentation_activates_without_schema_edits(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    manifest = load_adapter_manifest(VibePaths(tmp_path))
+    for question in manifest.open_questions:
+        result = invoke("adapter", "ask", "--target", str(tmp_path), "--id", question.id, "--answer", "confirmed for test", "--confirm")
+        assert result.exit_code == 0
+
+    for capability_id in ["environment_probe", "data_probe", "baseline_inventory"]:
+        assert invoke("adapter", "contract-test", capability_id, "--target", str(tmp_path)).exit_code == 0
+        assert invoke("adapter", "activate", capability_id, "--target", str(tmp_path), "--confirm", "low-risk bootstrap contract").exit_code == 0
+
+    manifest = load_adapter_manifest(VibePaths(tmp_path))
+    by_id = {cap.id: cap for cap in manifest.capabilities}
+    assert {cap_id for cap_id, cap in by_id.items() if cap.status == "active"} >= {"environment_probe", "data_probe", "baseline_inventory"}
+    assert by_id["evaluation_smoke"].status == "blocked_missing_metrics_schema"
+    assert by_id["metrics_export"].status == "blocked_missing_metrics_schema"
+    assert by_id["train_smoke"].status == "blocked_missing_script"
+    assert by_id["train_gate"].status == "blocked_missing_script"
+    assert by_id["long_run_submit"].status == "blocked_missing_user_answer"
 
 
 def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):

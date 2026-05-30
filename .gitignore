@@ -37,6 +37,7 @@ prompts/
 .codex/
 
 # VibeResearch local-only state and generated heavy artifacts
+.vibe/
 .vibe_dogfood/
 .vibe/config.local.yaml
 .vibe/config.detected.yaml

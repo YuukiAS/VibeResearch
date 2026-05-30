@@ -384,7 +384,7 @@ def bootstrap_import_legacy_cmd(archive_manifest: Path, target: Path = typer.Opt
 @bootstrap_app.command("dogfood")
 def bootstrap_dogfood_cmd(
     target: Path = typer.Option(Path("."), "--target", "-t"),
-    profile: str = typer.Option("0.8.1-happy-path", "--profile"),
+    profile: str = typer.Option("0.8.2-happy-path", "--profile"),
     external_repo: Optional[Path] = typer.Option(None, "--external-repo"),
     brief_file: Optional[Path] = typer.Option(None, "--brief-file"),
     output_report: Optional[Path] = typer.Option(None, "--output-report"),
@@ -400,7 +400,7 @@ def bootstrap_dogfood_cmd(
 
 
 @bootstrap_app.command("sandbox")
-def bootstrap_sandbox_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), profile: str = typer.Option("0.8.1-happy-path", "--profile")) -> None:
+def bootstrap_sandbox_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), profile: str = typer.Option("0.8.2-happy-path", "--profile")) -> None:
     """Create one ignored local `.vibe_dogfood/` profile without running bootstrap."""
 
     path = create_local_dogfood_profile(paths(target).root, profile)

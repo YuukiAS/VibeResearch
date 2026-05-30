@@ -1,8 +1,8 @@
 <h1 align="center">VibeResearch</h1>
-<h3 align="center">面向 Codex、Slurm、Idea Pool、Dashboard 和组会汇报的 repo-local 研究编排框架</h3>
+<h3 align="center">面向长期研究流程的仓库级控制层</h3>
 
 <p align="center">
-  <strong>把长期研究状态集中保存在目标仓库的 <code>.vibe/</code> 目录中，让规划、执行、监控、复盘和汇报形成闭环。</strong>
+  <strong>VibeResearch 将项目上下文、执行状态、证据链和报告集中保存在目标仓库的 <code>.vibe/</code> 目录中。</strong>
 </p>
 
 <p align="center">
@@ -11,45 +11,56 @@
 </p>
 
 <p align="center">
-  <a href="#快速开始"><img src="https://img.shields.io/badge/-快速开始-blue?style=for-the-badge" alt="快速开始"/></a>
-  <a href="#dashboard-和报告"><img src="https://img.shields.io/badge/-Dashboard-orange?style=for-the-badge" alt="Dashboard"/></a>
-  <a href="#slurm-和-scheduler"><img src="https://img.shields.io/badge/-Slurm-green?style=for-the-badge" alt="Slurm"/></a>
-</p>
-
-<p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python"/>
-  <img src="https://img.shields.io/badge/Codex_CLI-compatible-green.svg" alt="Codex CLI"/>
   <img src="https://img.shields.io/badge/state-.vibe%2F-informational.svg" alt=".vibe state"/>
-  <img src="https://img.shields.io/badge/default-read--only_dashboard-lightgrey.svg" alt="Read-only dashboard"/>
+  <img src="https://img.shields.io/badge/dashboard-read--only-lightgrey.svg" alt="Read-only dashboard"/>
 </p>
 
 ---
 
-## 这是什么
+## 项目概览
 
-VibeResearch 是一个 repo-specific 的持续研究编排框架。它会在目标仓库中创建 `.vibe/` 控制层，并把权威研究状态集中保存在这里：项目 brief、配置、cycle、run、scheduler 队列、paper DB、wiki、idea pool、deep research request、dashboard、report 和 artifact。
+VibeResearch 是一个本地优先的研究流程管理框架，面向已经存在的代码仓库。它会在目标仓库中创建 `.vibe/` 工作区，并把项目背景、想法、计划、运行记录、调度状态、实验依据、看板和每日日志保存在这里。
 
-Codex 可以负责编写 plan、review、patch、reflection、revised plan、wiki update 和 deep research request；确定性的 Python 代码负责 dry-run、排队、Slurm 提交、监控、结果收集、provenance、dashboard 和组会材料导出。
+它的核心设计是把“判断”和“执行”分开。研究者或代码助手可以提出计划、假设、审阅意见和分析结论；VibeResearch 负责记录状态、校验接口、调度任务、跟踪来源、收集指标，并在信息不足或风险过高时阻止自动执行。
 
-## 快速开始
+适合的场景包括：
 
-先从本仓库安装 CLI：
+- 持续多轮推进一个研究项目，并保留每轮决策依据；
+- 将项目自己的训练、评估或推理脚本接入统一的编排层；
+- 在本地或 Slurm 集群上运行实验，同时保留预算和就绪检查；
+- 归档旧失败状态，把它作为历史经验，而不是直接当成可信证据；
+- 生成状态看板、每日记录和组会材料。
+
+## 安装
+
+从 GitHub 克隆并安装：
 
 ```bash
-cd /path/to/VibeResearch
+git clone https://github.com/YuukiAS/VibeResearch.git
+cd VibeResearch
 python -m pip install -e .
 ```
 
-然后进入你的目标研究仓库：
+确认命令可用：
 
 ```bash
-cd /path/to/your/research-repo
-vibe init \
-  --goal "在固定协议下提升 robust validation 表现" \
-  --background "项目背景、数据、指标、算力约束和当前 baseline"
+vibe --help
+vibe bootstrap --help
 ```
 
-检查状态和下一步：
+## 快速开始
+
+进入目标研究仓库并初始化：
+
+```bash
+cd /path/to/research-repo
+vibe init \
+  --goal "在固定评估协议下提升验证表现" \
+  --background "项目背景、数据、指标、算力限制和当前基线"
+```
+
+查看当前状态：
 
 ```bash
 vibe config validate
@@ -57,136 +68,110 @@ vibe status
 vibe next
 ```
 
-如果不希望目标仓库根目录生成 `RUN.md` / `VIBE_*.md` 镜像文件：
+如果不希望在目标仓库根目录生成状态镜像文件，可以使用：
 
 ```bash
 vibe init --no-root-portal --goal "..." --background "..."
 ```
 
-## 让 Codex 代你完成接入
+## 让 Codex 代为接入
 
-如果你希望后续 clone 仓库后直接对 Codex 说“安装这套框架并一步步完成初始化”，不要自己照
-README 手动执行，可以把
-[`docs/bootstrap/CODEX_ONBOARDING_PROMPT_CN.md`](bootstrap/CODEX_ONBOARDING_PROMPT_CN.md)
-里的提示交给 Codex。它会负责从 GitHub clone/install、询问目标 repo、项目目标/背景、
-budget/autonomy/metrics 等 blocker，把你的回答写入目标 repo 的 `.vibe/` 文件，并运行
-`vibe bootstrap resume`。
+如果希望把安装和初始化交给 Codex，而不是手动照 README 执行命令，可以把下面文件中的提示交给 Codex：
 
-## 跑一个本地 Mock Cycle
-
-v0.7.1 默认会在 adapter readiness 未满足时阻止 placeholder 实验。要跑内置本地
-smoke workflow，可以直接执行：
-
-```bash
-vibe dogfood
+```text
+docs/bootstrap/CODEX_ONBOARDING_PROMPT_CN.md
 ```
 
-测试和本地开发也可以使用内置 generic `toy` adapter，让结构化 decision 编译成真实
-resource plan：
+这份提示会要求 Codex 从 GitHub 克隆 VibeResearch、安装框架、询问目标仓库和项目目标/背景、运行初始化流程、整理阻塞问题、把你的回答写入目标仓库的 `.vibe/` 文件，并继续执行 `bootstrap resume`，直到最小安全能力就绪或明确阻塞。
 
-```yaml
-# .vibe/config.local.yaml
-adapter:
-  kind: toy
-```
+## 状态目录
 
-```bash
-vibe idea "先跑一个便宜的 baseline diagnostic，再考虑昂贵训练"
-vibe ideas triage
-vibe plan-cycle --offline
-vibe review-cycle c001 --offline
-vibe decision write c001 --type launch_gpu_gate --action "run toy adapter task" --direction d001_toy
-vibe compile-decision c001
-vibe generate-runs c001 --count 1
-vibe review r001_toy_audit --offline
-vibe patch r001_toy_audit --offline
-vibe dryrun r001_toy_audit
-vibe queue r001_toy_audit
-vibe submit-queue --dry
-vibe monitor
-vibe collect r001_toy_audit --metric 0.1
-vibe reflect r001_toy_audit --offline
-vibe decision write r001_toy_audit --type collect_more_metrics --action "collect schema-valid metrics"
-vibe revise-plan r001_toy_audit --offline
-vibe reflect-cycle c001 --offline
-vibe decision write c001 --type launch_gpu_gate --action "compile next toy adapter task" --direction d001_toy
-vibe revise-cycle c001 --offline
-```
-
-## 会创建哪些文件
+VibeResearch 的持久状态都在 `.vibe/` 下：
 
 ```text
 .vibe/
-  project/brief.md
-  config.yaml
-  config.schema.json
-  config.local.yaml
-  adapter.yaml
-  adapter_questions.yaml
-  research_brief.md
-  discovery_report.md
-  script_bootstrap_plan.md
-  scripts/
-  contract_tests/
-  run_contracts/
-  adapter_history.jsonl
-  policies/
-  state/
-  cycles/
-  runs/
-  scheduler/
-  ideas/
-  research/
-    events.jsonl
-    hypotheses.json
-    experiments.json
-    evidence.json
-    decisions.jsonl
-    budget_ledger.jsonl
-  memos/
-  dashboard/
-  site/
-  reports/
-  portal/
+  project/                 项目 brief 和初始化上下文
+  config.yaml              框架配置
+  adapter.yaml             项目能力声明
+  adapter_questions.yaml   激活前需要回答的问题
+  script_bootstrap_plan.md 脚本接入计划
+  scripts/                 项目自己维护的封装脚本
+  contract_tests/          能力接口测试结果
+  policies/                预算、阶段门控和自治策略
+  state/                   控制状态
+  cycles/                  cycle 级计划和决策
+  runs/                    运行清单和来源记录
+  scheduler/               队列和预算状态
+  ideas/                   想法池
+  research/                假设、实验、证据和决策
+  memos/                   每日记录
+  dashboard/               看板数据导出
+  site/                    静态看板
+  reports/                 组会和开发报告
+  portal/                  根目录镜像文件的来源
 ```
 
-根目录中的 `RUN.md`、`VIBE_STATUS.md`、`VIBE_TODO.md`、`VIBE_TIMELINE.md`、`VIBE_LEADERBOARD.md` 只是生成镜像，不是权威状态。权威状态始终在 `.vibe/` 下。删除根目录镜像后可以随时重建：
+根目录的 `RUN.md`、`VIBE_STATUS.md`、`VIBE_TODO.md`、`VIBE_TIMELINE.md`、`VIBE_LEADERBOARD.md` 只是生成出来的镜像文件，不是权威状态。权威状态始终在 `.vibe/` 下。
+
+重新生成根目录镜像：
 
 ```bash
 vibe portal build
 ```
 
-默认不会修改根目录已有的 `AGENTS.md`。只有显式传参时才会安装 snippet：
+默认不会修改根目录已有的 `AGENTS.md`。只有显式要求时才会安装片段：
 
 ```bash
 vibe init --install-agents-snippet --goal "..." --background "..."
 ```
 
-## 核心工作流
+## 初始化与就绪检查
 
-1. 初始化项目上下文：`vibe init --goal ... --background ...`
-2. 先完成 adapter readiness：`vibe adapter doctor`
-3. 捕获想法：`vibe idea "..."`，`vibe ideas triage`
-4. 制定 portfolio：`vibe plan-cycle`
-5. 审核 portfolio：`vibe review-cycle c001`
-6. 写入或获得结构化 cycle decision：`.vibe/cycles/c001/cycle_decision.json`
-7. 通过项目 adapter 编译：`vibe compile-decision c001`
-8. 只从已编译 resource plan 生成 runs：`vibe generate-runs c001`
-9. 审核并 patch 每个 run：`vibe review`，`vibe patch`
-10. dry-run 并入队：`vibe dryrun`，`vibe queue`
-11. 提交并监控：`vibe submit-queue`，`vibe monitor`
-12. 收集 schema-valid 指标：`vibe collect --metrics-file ...`
-13. 复盘并修订计划：`vibe reflect`，`vibe revise-plan`，`vibe revise-cycle`
-14. 构建 dashboard 和组会材料：`vibe dashboard build`，`vibe export-meeting`
+Bootstrap 是把已有项目接入 VibeResearch 的初始化流程。它会读取项目文件，生成 adapter 草案和脚本接入计划，写入策略文件，记录未回答的问题，运行校验，并且只激活通过接口测试的能力。
 
-## Adapter Onboarding / 接入流程
+```bash
+vibe bootstrap init --goal "..." --background "..." --memo-language zh-CN
+vibe bootstrap run
+vibe bootstrap status
+vibe bootstrap doctor
+```
 
-v0.7.1 把 project adapter 变成明确的 capability contract。adapter 描述
-VibeResearch 允许做什么；execution scripts 是下游 repo 自己维护的薄 wrapper，
-负责真正调用项目的 train/eval/infer/submission 逻辑。VibeResearch 主框架不保存任何
-项目特定训练、评估或提交逻辑。
+如果 bootstrap 因信息不足而停止，先回答或修改 `.vibe/` 下生成的文件，然后继续：
 
-普通 `vibe init` 会创建 partial adapter 和脚本 bootstrap surface：
+```bash
+vibe bootstrap resume
+```
+
+主要输出：
+
+```text
+.vibe/bootstrap/state.json
+.vibe/bootstrap/sessions/<session_id>.json
+.vibe/bootstrap/readiness_report.md
+.vibe/bootstrap/readiness.json
+.vibe/script_readiness.json
+.vibe/dashboard/readiness_export.json
+```
+
+就绪检查采用保守策略：缺预算策略时不能提交队列；缺自治策略时不能自动执行；缺阶段门控时不能晋升；缺受保护指标时不能自动进入更高阶段。
+
+Bootstrap 和 adapter 发现流程使用有上限的文件遍历器。`.git/`、`.vibe/`、`.vibe_dogfood/`、`data/`、`results/`、`models/`、`logs/`、`envs/`、`external_supervisors/` 等运行期或重目录会在进入前跳过，避免初始化时扫进大量中间产物。项目可以在 `.vibe/config.yaml` 中调整：
+
+```yaml
+discovery:
+  skip_dirs: [scratch, downloads]
+  max_files: 200
+  max_dirs: 1000
+  max_seconds: 5
+```
+
+更完整的接入、本地试运行、旧状态归档和就绪门控说明见 [Bootstrap 指南](bootstrap/README_CN.md)。
+
+## Adapter 接入
+
+Adapter 是项目自己的能力声明，用来说明 VibeResearch 可以做什么。真正的训练、评估、推理和提交逻辑仍然属于下游项目，由 `.vibe/scripts/` 中的薄封装脚本调用。VibeResearch 主框架不保存项目特定执行逻辑。
+
+常用命令：
 
 ```bash
 vibe adapter discover
@@ -197,64 +182,18 @@ vibe adapter lint
 vibe adapter doctor
 ```
 
-planner 只会选择 `active` capability。`candidate`、`draft`、
-`blocked_missing_script`、`blocked_missing_metrics_schema` 和
-`blocked_missing_user_answer` 只会显示在 dashboard 中，不会被自动执行。
-capability 只有通过 contract test 后才能激活：
+只有 `active` 能力可以被选中执行。`draft`、`candidate` 或阻塞状态的能力只会出现在报告中，不会自动运行。能力必须先通过接口测试才能激活：
 
 ```bash
 vibe adapter contract-test metrics_export
 vibe adapter activate metrics_export --confirm "reviewed by project owner"
 ```
 
-`.vibe/scripts/` 里生成的 wrapper 默认是 draft/untrusted，带 provenance header，
-需要下游 repo 审查或替换后才能激活。应先建立 evaluation 或 metrics-export 能力，
-再建立 training automation；GPU 和 long-run capability 必须有明确 resource policy。
+`.vibe/scripts/` 中生成的封装脚本默认是草案，不能直接视为可信。通常应先建立评估或指标导出能力，再考虑训练自动化；GPU 和长任务能力必须有明确的资源策略。
 
-dashboard 和 Markdown 镜像会显示 adapter maturity、active/draft/blocked capability、
-缺失脚本、缺失 metrics schema、未回答问题、lint 状态、contract-test 状态、adapter
-revision，以及 run metadata 中使用的 adapter/capability 信息。
+## 有边界的研究管理
 
-从 v0.7.0 迁移时：
-
-```bash
-vibe adapter init
-vibe adapter discover
-vibe adapter draft
-vibe adapter doctor
-```
-
-把已有真实 `task:` 命令迁移为包含 `dryrun`、`entrypoint`、`metrics_schema`、
-`artifact_rules`、`resources`、`trust_checks` 和 `contract_tests` 的 capability。
-placeholder command 会继续被阻塞，旧 leaderboard 的 trusted/untrusted provenance 不会被静默覆盖。
-
-## Bounded Autonomous Research Manager / 有边界自治科研管理
-
-v0.8.0 在 v0.7.1 adapter gate 之上增加长期科研管理层。agent 可以提出
-hypothesis、experiment design、analysis decision，以及 promote/stop/downscope
-等科研判断；框架负责记忆、policy、预算预约、可信 evidence 验收、可追溯 metadata，
-以及在缺 capability、缺预算、缺可信 evidence 或超出 autonomy level 时阻塞自动执行。
-
-```mermaid
-flowchart TD
-  A[README / AGENTS / research brief] --> B[research init]
-  B --> C[policy files]
-  B --> D[hypothesis registry]
-  E[active adapter capabilities] --> F[portfolio plan]
-  C --> F
-  D --> F
-  F --> G[budget reservation]
-  G --> H[experiment registry]
-  H --> I[compiled resource plan / backend run]
-  I --> J[trusted or untrusted evidence]
-  J --> K[research decision]
-  K --> L[memory pack]
-  L --> F
-  K --> M[daily memo]
-  H --> N[dashboard research exports]
-```
-
-常用命令：
+研究管理层用来记录假设、实验、证据、决策、预算和每日记录。它帮助项目持续迭代研究想法，同时保留每个结论背后的证据链。
 
 ```bash
 vibe research init --goal "..." --background "..." --memo-language zh-CN
@@ -269,123 +208,22 @@ vibe memo daily --language zh-CN
 vibe dashboard export-research
 ```
 
-项目特定内容仍然属于下游 repo：adapter capability 和 execution script 在
-`.vibe/adapter.yaml` 与 `.vibe/scripts/`；通用预算、stage gate、autonomy policy
-在 `.vibe/policies/`；研究 registry 在 `.vibe/research/`；每日日志在
-`.vibe/memos/`；后续可视化数据导出到 `.vibe/dashboard/`。
+晋升需要可信且符合指标格式的证据，并且受保护指标不能出现不可接受的回退。停止假设需要可信负证据或明确的用户决定。同构重复实验、未知成本、缺脚本、缺指标格式和缺 `active` 能力都会在执行前被阻止。
 
-promotion 必须有 trusted 且 schema-valid 的 evidence，并且 protected metric 不能
-不可接受地回退，除非 policy 允许显式 override。stop 需要 trusted negative evidence
-或明确的用户决定。portfolio scheduler 会阻塞缺 active capability、缺脚本、缺 metrics
-schema、unknown cost、超预算、超自治等级，以及没有新变量或 failure analysis 的同构重复实验。
+## 从决策到执行
 
-## Bootstrap Orchestrator / 接入编排与 Dogfood
-
-v0.8.1 把 adapter onboarding 和 research manager 串成可恢复的项目部署流程。它不会把
-下游项目写死进 VibeResearch 主框架，而是生成草案、验证草案、只激活通过 contract test
-的 capability，并输出 readiness report，说明当前能安全执行什么、什么被阻塞、最小下一步是什么。
-
-详细接入、dogfood、legacy archive 和 readiness gate 说明见
-[Bootstrap 指南](bootstrap/README_CN.md)。
-
-```bash
-vibe bootstrap init --goal "..." --background "..."
-vibe bootstrap run
-vibe bootstrap status
-vibe bootstrap resume
-vibe bootstrap doctor
-```
-
-bootstrap 会写入 `.vibe/bootstrap/state.json`、
-`.vibe/bootstrap/sessions/<session>.json`、`.vibe/bootstrap/readiness_report.md`
-和 `.vibe/bootstrap/readiness.json`。阶段包括 `intake`、`discovery`、`draft`、
-`questions`、`validation`、`activation` 和 `report`。每个阶段都会记录输入 hash、
-输出、warning、blocker、retry、下一步、生成文件和 provenance。resume 会保留用户改过的
-adapter、script、question 和 policy 文件，必要时写 merge warning，不会静默覆盖。
-
-本地 dogfood sandbox 默认被 git 忽略：
-
-```bash
-vibe bootstrap dogfood --profile 0.8.1-happy-path
-vibe bootstrap dogfood --profile 0.8.1-missing-metrics
-vibe bootstrap dogfood --profile 0.8.1-policy-conflict
-vibe bootstrap dogfood --profile 0.8.1-placeholder-script
-```
-
-外部 repo dogfood 应只把项目特异内容留在外部 repo 或 report 里，不写进主框架：
-
-```bash
-vibe bootstrap dogfood --external-repo /path/to/repo --brief-file /path/to/problem.md --dry-run --output-report /tmp/dogfood.json
-vibe bootstrap archive --source /path/to/repo --note "legacy automation before fresh bootstrap"
-vibe bootstrap import-legacy .vibe/archives/<id>/manifest.json
-```
-
-旧结果导入后默认是 `imported_unverified` 历史上下文。只有当前 adapter revision、
-capability id、metrics schema、artifact rules 和 provenance 都能验证时，旧结果才可能成为
-trusted evidence。policy completeness gate 会阻止不安全自动化：缺 budget 不能 queue，
-缺 autonomy 不能自动执行，缺 stage gate 不能 promotion，缺 protected metrics 不能自动进入更高阶段。
-
-## Decision-To-Execution Safety
-
-v0.7.0 增加了从文字计划到可执行实验的三层结构化桥接：
-
-```mermaid
-flowchart TD
-  subgraph Brain["Agent Research Brain"]
-    A[portfolio_plan.md]
-    B[reflect.md / cycle_reflect.md]
-    C[revised_plan.md / cycle_revised_plan.md]
-    D[cycle_decision.json / decision.json]
-  end
-
-  subgraph Compiler["Generic Decision-To-Execution Compiler"]
-    E[validate decision schema]
-    F[compile-decision]
-    G{executable and trustable?}
-    H[resource_plan.yaml]
-    I[blocked_missing_adapter / blocked_missing_resource_plan / blocked_repeating_evidence]
-  end
-
-  subgraph Adapter["Project Adapter"]
-    J[task capabilities]
-    K[dryrun and entrypoint templates]
-    L[resources, outputs, metrics schema, trust rules]
-  end
-
-  subgraph Execution["Backend + Evidence Loop"]
-    M[generate-runs]
-    N[review / patch / dryrun / queue / submit / monitor]
-    O[collect --metrics-file]
-    P{schema + provenance trusted?}
-    Q[trusted leaderboard + reflection]
-    R[untrusted/block state shown in dashboard/timeline]
-  end
-
-  A --> C
-  B --> C
-  C --> D
-  D --> E --> F --> G
-  J --> F
-  K --> F
-  L --> F
-  G -- yes --> H --> M --> N --> O --> P
-  G -- no --> I --> R
-  P -- yes --> Q --> C
-  P -- no --> R --> C
-```
+VibeResearch 不会直接把自由文本计划变成实验。它先把结构化决策编译为资源计划，再生成运行清单。
 
 ```text
-cycle_revised_plan.md / revised_plan.md
-  -> cycle_decision.json / decision.json
+revised_plan.md
+  -> decision.json
   -> project adapter
-  -> compiled resource_plan.yaml
-  -> run manifests
-  -> 只有通过 schema + provenance 检查的 trusted metrics 才更新 leaderboard best
+  -> resource_plan.yaml
+  -> 运行清单
+  -> 通过格式和来源检查后才成为可信指标
 ```
 
-默认 adapter 是 `config`，并读取 `.vibe/adapter.yaml`。如果 readiness 或 active
-capability 不足，它会以明确的 adapter blocker 停止，而不是继续生成假的 CPU/GPU
-placeholder 工作。本地 smoke test 可以使用 `adapter.kind: toy`。
+常用命令：
 
 ```bash
 vibe validate-decision c001
@@ -396,46 +234,11 @@ vibe compile-decision c001
 vibe validate-resource-plan c001
 ```
 
-`adapter.kind: config` 对应的最小 active capability 示例：
+重复收集同类证据、缺失指标或默认 0.0 指标会被标记为阻塞或不可信，不会更新可信排行榜状态。
 
-```yaml
-capabilities:
-  - id: metrics_export
-    version: v1
-    status: active
-    task_type: metrics_export
-    supported_decisions: [collect_more_metrics]
-    dryrun:
-      command: python .vibe/scripts/metrics_export.py --dryrun
-    entrypoint:
-      type: local
-      command: python .vibe/scripts/metrics_export.py --smoke
-    outputs:
-      expected_output_path: .vibe/bootstrap_metrics/metrics_export.json
-      metrics_file_path: .vibe/bootstrap_metrics/metrics_export.json
-    metrics_schema:
-      required: [primary]
-      types:
-        primary: number
-      version: v1
-    artifact_rules:
-      expected_outputs: [.vibe/bootstrap_metrics/metrics_export.json]
-      version: v1
-    resources:
-      automatic_submission_allowed: false
-      default: {gpu: 0, cpus: 1, mem_gb: 1, time: "00:05:00"}
-    trust_checks: [schema_valid_metrics, expected_output_exists]
-    contract_tests: [metrics_export]
-    activation:
-      contract_status: passed
-```
+## 想法池与深入调研
 
-重复 evidence-only 循环、缺失指标和默认 0.0 指标会被标记为 untrusted 或 blocked，不再更新
-best / best-by-direction leaderboard 状态。
-
-## Idea Pool / 想法池
-
-raw inbox 负责保存用户原始输入；idea pool 负责维护可工作的研究想法，并分配稳定 ID，例如 `idea_001`。
+原始输入会进入收件箱；整理后的研究想法会进入想法池，并获得稳定 ID。
 
 ```bash
 vibe idea "比较两条路线级方法"
@@ -444,58 +247,31 @@ vibe ideas triage
 vibe ideas promote idea_001
 vibe ideas reject idea_001 --reason "暂时超出范围"
 vibe ideas archive idea_001
-vibe ideas clean
 ```
 
-相关文件位于 `.vibe/ideas/`：
-
-```text
-registry.jsonl
-pool.md
-active.md
-deep_research_candidates.md
-backlog.md
-rejected.md
-archive.md
-```
-
-## 从 Idea 生成 Deep Research
-
-把 idea 标记为 `needs_deep_research` 不会自动生成 deep research request。需要用户或 operator 显式触发：
+深入调研需要显式触发。把想法标记为需要深入调研，并不会自动开始调研。
 
 ```bash
 vibe deep-request-from-idea idea_001
-```
-
-把返回的 deep research 报告放到：
-
-```text
-.vibe/research/raw/deep_reports/<request_id>_result.md
-.vibe/research/raw/deep_reports/<request_id>_result.pdf
-```
-
-然后 ingest：
-
-```bash
 vibe ingest-deep-research dr001_idea_001 --kind science
 vibe ingest-deep-research dr001_idea_001 --kind workflow
 vibe ingest-deep-research dr001_idea_001 --kind repo
 vibe ingest-deep-research dr001_idea_001 --kind benchmark
 ```
 
-支持 Markdown 和 PDF。PDF 优先使用 PyMuPDF 抽取文本，不做 OCR。
+支持 Markdown 和 PDF 报告。PDF 文本抽取优先使用 PyMuPDF，不做 OCR。
 
-## Slurm 和 Scheduler
+## 调度与 Slurm
 
-Scheduler 是确定性的，并且会遵守资源预算。未通过 dry-run、manifest 无效、被 portfolio/run review 阻塞、依赖未满足或超出预算的 run 都不会提交。
+调度器是确定性的，并且会遵守预算。未通过预演、清单无效、依赖未满足、超预算或被审阅阻塞的任务都不会提交。
 
-探测当前环境：
+探测本地环境：
 
 ```bash
 vibe config detect
 ```
 
-集群相关配置主要在：
+集群相关配置通常位于：
 
 ```text
 .vibe/config.yaml
@@ -503,97 +279,67 @@ vibe config detect
 .vibe/scheduler/budget.yaml
 ```
 
-使用 Slurm 提交：
+提交并监控：
 
 ```bash
 vibe submit-queue --backend slurm
 vibe monitor --loop --auto-next
 ```
 
-开发时可以使用 dry submit：
+本地开发可以使用模拟提交：
 
 ```bash
 vibe submit-queue --dry
 ```
 
-## Dashboard 和报告
+## 看板与报告
 
-构建静态只读 dashboard：
+构建静态只读看板：
 
 ```bash
 vibe dashboard build
 ```
 
-输出：
-
-```text
-.vibe/site/index.html
-```
-
-本地启动 dashboard：
+本地查看：
 
 ```bash
 vibe dashboard serve --host 127.0.0.1 --port 8765
 ```
 
-导出组会 story pack：
+导出组会材料：
 
 ```bash
 vibe export-meeting
 vibe export-meeting --date 20260529
 ```
 
-输出：
+输出目录：
 
 ```text
 .vibe/reports/meeting/YYYYMMDD/
-  story.md
-  timeline.md
-  leaderboard.md
-  key_runs.md
-  idea_pool.md
-  deep_research_status.md
-  paper_summary.md
-  evidence_table.csv
-  slides_outline.md
-  figures/
 ```
 
-生成最终开发报告和 portal 文档：
+## 本地开发
 
-```bash
-vibe finalize-reports
-```
-
-## 常用命令
-
-```bash
-vibe status
-vibe next
-vibe config show
-vibe config validate
-vibe audit current
-vibe validate-hard-rules
-vibe scheduler-status
-vibe leaderboard
-vibe timeline
-```
-
-## 设计原则
-
-- `.vibe/` 是权威状态根目录。
-- 根目录文件只是生成镜像，不保存唯一状态。
-- Codex 只写边界清晰的 artifact；确定性代码负责真实执行。
-- Dashboard 默认只读。
-- 长任务监控不调用 LLM。
-- 真实 Slurm / Codex / 网络行为需要在部署环境中验证。
-
-## 当前状态
-
-本地/offline 验收路径已经实现并有测试覆盖：
+运行测试：
 
 ```bash
 python -m pytest -q
 ```
 
-测试使用 fake/offline Codex 和 dry Slurm 路径，不需要网络、Codex 登录、GPU 或集群。
+测试使用离线 Codex 和本地模拟调度路径，不需要 Codex 登录、GPU、Slurm 集群或网络。
+
+运行内置冒烟流程：
+
+```bash
+vibe dogfood
+```
+
+## 设计原则
+
+- `.vibe/` 是权威状态目录。
+- 根目录状态文件只是生成镜像。
+- 项目特定执行逻辑留在下游仓库。
+- 能力必须明确声明、经过审查，并通过接口测试后才能使用。
+- 长任务监控不依赖语言模型调用。
+- 旧结果只是历史上下文，只有通过当前 adapter、指标格式、产物和来源规则后才可能成为可信证据。

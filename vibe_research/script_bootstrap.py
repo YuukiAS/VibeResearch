@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import is_placeholder_command
+from .discovery import discover_files, relative_files
 from .io import ensure_dir, read_json, utc_now, write_json, write_text
 from .paths import VibePaths
 
@@ -162,13 +163,5 @@ def script_readiness_matrix(paths: VibePaths, *, script_dir: str = ".vibe/script
 
 
 def project_eval_candidates(paths: VibePaths) -> list[str]:
-    candidates = []
-    for pattern in ["*eval*.py", "*evaluate*.py", "*metric*.py", "*benchmark*.py"]:
-        for path in sorted(paths.root.rglob(pattern)):
-            if ".git" in path.parts or ".vibe" in path.parts or ".vibe_dogfood" in path.parts:
-                continue
-            if path.is_file():
-                candidates.append(str(path.relative_to(paths.root)))
-            if len(candidates) >= 20:
-                return candidates
-    return candidates
+    result = discover_files(paths.root, patterns=["*eval*.py", "*evaluate*.py", "*metric*.py", "*benchmark*.py"], max_files=20)
+    return relative_files(result.files, paths.root)

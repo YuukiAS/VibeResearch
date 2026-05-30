@@ -20,6 +20,7 @@ from .adapter_onboarding import (
     run_contract_test,
 )
 from .adapter_schema import AdapterCapability, AdapterManifest, ArtifactRules, MetricsSchema, ResourcePolicy, load_adapter_manifest, write_adapter_manifest
+from .discovery import discover_files, relative_files
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text, write_yaml
 from .paths import VibePaths
 from .research_manager import export_research_dashboard, policy_completeness, render_daily_memo, research_init, research_readiness
@@ -136,11 +137,13 @@ def record_phase(paths: VibePaths, state: dict[str, Any], phase: str, status: st
     state.setdefault("phase_records", []).append(record)
     for key in ["completed_phases", "blocked_phases", "failed_phases"]:
         state.setdefault(key, [])
-    if status == "passed" and phase not in state["completed_phases"]:
+    for key in ["completed_phases", "blocked_phases", "failed_phases"]:
+        state[key] = [item for item in state[key] if item != phase]
+    if status == "passed":
         state["completed_phases"].append(phase)
-    if status == "blocked" and phase not in state["blocked_phases"]:
+    elif status == "blocked":
         state["blocked_phases"].append(phase)
-    if status == "failed" and phase not in state["failed_phases"]:
+    elif status == "failed":
         state["failed_phases"].append(phase)
     for artifact in record["generated_artifacts"]:
         if artifact not in state.setdefault("generated_artifacts", []):
@@ -256,17 +259,12 @@ def discover_project_surface(paths: VibePaths) -> dict[str, Any]:
         "env": ["environment.yml", "requirements.txt", "pyproject.toml", "env*.sh"],
     }
     result: dict[str, Any] = {}
+    warnings: list[str] = []
     for key, globs in patterns.items():
-        rows = []
-        for pattern in globs:
-            for path in sorted(paths.root.rglob(pattern)):
-                if ".git" in path.parts or ".vibe" in path.parts or ".vibe_dogfood" in path.parts:
-                    continue
-                if path.is_file():
-                    rows.append(str(path.relative_to(paths.root)))
-                if len(rows) >= 80:
-                    break
-        result[key] = rows[:80]
+        discovery = discover_files(paths.root, patterns=globs, max_files=80)
+        warnings.extend(discovery.warnings)
+        result[key] = relative_files(discovery.files, paths.root)
+    result["warnings"] = sorted(set(warnings))
     return result
 
 
@@ -519,7 +517,7 @@ def export_readiness_dashboard(paths: VibePaths) -> dict[str, Any]:
 
 
 def bootstrap_status(paths: VibePaths) -> dict[str, Any]:
-    return {"state": load_bootstrap_state(paths), "readiness": read_json(bootstrap_dir(paths) / "readiness.json", {})}
+    return {"state": load_bootstrap_state(paths), "readiness": build_readiness(paths)}
 
 
 def archive_legacy(paths: VibePaths, *, source: Path | None = None, note: str = "") -> dict[str, Any]:
@@ -537,9 +535,11 @@ def archive_legacy(paths: VibePaths, *, source: Path | None = None, note: str = 
         if candidate.is_file():
             files.append(index_file(source_root, candidate))
         else:
-            for path in sorted(candidate.rglob("*")):
-                if path.is_file():
-                    files.append(index_file(source_root, path))
+            discovered = discover_files(candidate, rel_root=source_root, max_files=max(1, 2000 - len(files)), max_seconds=8.0)
+            for path in discovered.files:
+                files.append(index_file(source_root, path))
+            if discovered.warnings:
+                files.append({"path": str(candidate.relative_to(source_root)), "size": 0, "sha256": "", "status": "truncated", "warnings": discovered.warnings})
     summary = regression_summary_from_index(source_root, files)
     manifest = {"archive_id": archive_id, "created_at": utc_now(), "source_root": str(source_root), "note": note, "files": files[:2000], "file_count": len(files), "failure_summary": summary, "trust_status": "historical_context_only"}
     write_json(archive_dir / "manifest.json", manifest)
@@ -671,7 +671,7 @@ def apply_bootstrap_answers(paths: VibePaths) -> None:
         write_yaml(paths.vibe / "adapter_questions.yaml", {"questions": [q.model_dump() for q in manifest.open_questions]})
 
 
-def run_dogfood(paths: VibePaths, *, profile: str = "0.8.1-happy-path", external_repo: Path | None = None, brief_file: Path | None = None, output_report: Path | None = None, dry_run: bool = False) -> dict[str, Any]:
+def run_dogfood(paths: VibePaths, *, profile: str = "0.8.2-happy-path", external_repo: Path | None = None, brief_file: Path | None = None, output_report: Path | None = None, dry_run: bool = False) -> dict[str, Any]:
     repo = external_repo.expanduser().resolve() if external_repo else create_local_dogfood_profile(paths.root, profile)
     report_path = output_report or (bootstrap_dir(paths) / "dogfood_report.json")
     issues: list[dict[str, Any]] = []
@@ -711,13 +711,15 @@ def run_dogfood(paths: VibePaths, *, profile: str = "0.8.1-happy-path", external
 
 
 def scan_external_repo(repo: Path) -> dict[str, Any]:
+    scripts = discover_files(repo, patterns=["*.py"], max_files=50)
     return {
         "repo": str(repo),
         "readme": (repo / "README.md").exists(),
         "agents": (repo / "AGENTS.md").exists(),
         "legacy_vibe": (repo / ".vibe").exists(),
         "results": (repo / "results").exists(),
-        "candidate_scripts": [str(path.relative_to(repo)) for path in sorted(repo.rglob("*.py")) if ".git" not in path.parts and ".vibe" not in path.parts][:50],
+        "candidate_scripts": relative_files(scripts.files, repo),
+        "discovery_warnings": scripts.warnings,
         "legacy_files": [name for name in ["VIBE_STATUS.md", "VIBE_TIMELINE.md", "VIBE_LEADERBOARD.md", "AUTO_RESEARCH_PROGRESS"] if (repo / name).exists()],
     }
 

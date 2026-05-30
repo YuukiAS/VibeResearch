@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.8.2 - 2026-05-30
+
+- Rewrite the English and Chinese README files with a cleaner project
+  narrative, less mixed terminology, and a more mature onboarding structure.
 - Add a Codex onboarding operator prompt so a fresh clone can be handed to
   Codex for GitHub install, target-repo bootstrap, blocker questions, answer
   writing, and resumable initialization without manual README-following.
@@ -10,6 +14,19 @@
   runnable package, docs, and tests.
 - Ignore root-level `TODO-v*.md` source requirement drafts to prevent future
   planning notes from being accidentally committed.
+- Add a shared bounded discovery walker for bootstrap, adapter discovery,
+  script candidate discovery, external dogfood scans, and legacy archive
+  import so heavy runtime directories are pruned before traversal.
+- Add configurable discovery limits and skip directories through
+  `.vibe/config.yaml`, with warnings when discovery is truncated.
+- Make bootstrap phase state exclusive so a phase that later passes is removed
+  from stale `blocked_phases` or `failed_phases`.
+- Refresh `bootstrap status` readiness from the current adapter and policy
+  state instead of returning stale readiness JSON after user answers.
+- Give generated low-risk instrumentation capabilities default metrics schema
+  and artifact trust rules so environment, data, and baseline probes can pass
+  contract tests without manual schema edits.
+- Ignore local `.vibe/` state in VibeResearch source checkouts.
 
 ## 0.8.1 - 2026-05-30
 
