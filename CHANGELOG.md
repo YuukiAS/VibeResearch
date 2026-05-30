@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.10 - 2026-05-30
+
+- Make `vibe daemon start` capable of running the full `auto-cycle` state
+  machine loop instead of only `monitor --loop --auto-next`.
+- Add daemon start flags for `--mode auto-cycle|monitor`, `--online/--offline`,
+  `--dry-submit/--real-submit`, and `--max-steps`, and record the selected loop
+  policy in `.vibe/state/daemon.json`.
+
 ## 0.8.9 - 2026-05-30
 
 - Add conservative Slurm wait-policy verdicts during monitor polling, including

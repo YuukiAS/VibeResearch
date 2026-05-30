@@ -33,25 +33,54 @@ def daemon_status(paths: VibePaths) -> dict[str, Any]:
     return {**base, "available": True, "running": result.returncode == 0}
 
 
-def daemon_start(paths: VibePaths, *, interval: int | None = None, auto_next: bool = True) -> dict[str, Any]:
+def daemon_start(
+    paths: VibePaths,
+    *,
+    interval: int | None = None,
+    auto_next: bool = True,
+    mode: str = "auto-cycle",
+    offline: bool = False,
+    dry_submit: bool = True,
+    max_steps: int = 30,
+) -> dict[str, Any]:
     status = daemon_status(paths)
     if not status["available"]:
         raise RuntimeError(status["reason"])
     if status["running"]:
         return status
+    if mode not in {"auto-cycle", "monitor"}:
+        raise ValueError("mode must be auto-cycle or monitor")
     config = load_config(paths)
     interval = interval or int(config.get("monitor", {}).get("loop_interval_seconds", 300))
     log_path = paths.dashboard / "daemon.log"
-    command = (
-        f"cd {shlex.quote(str(paths.root))} && "
-        f"python -m vibe_research.cli monitor --target {shlex.quote(str(paths.root))} --loop --interval {interval}"
-        + (" --auto-next" if auto_next else "")
-        + f" >> {shlex.quote(str(log_path))} 2>&1"
-    )
+    target = shlex.quote(str(paths.root))
+    if mode == "monitor":
+        loop_command = f"python -m vibe_research.cli monitor --target {target} --loop --interval {interval}" + (" --auto-next" if auto_next else "")
+    else:
+        loop_command = (
+            "while true; do "
+            f"python -m vibe_research.cli auto-cycle --target {target} --max-steps {max_steps}"
+            + (" --offline" if offline else "")
+            + (" --dry-submit" if dry_submit else " --real-submit")
+            + f"; python -m vibe_research.cli status --target {target}; sleep {interval}; done"
+        )
+    command = f"cd {target} && {loop_command} >> {shlex.quote(str(log_path))} 2>&1"
     result = subprocess.run(["tmux", "new-session", "-d", "-s", status["session"], command], text=True, capture_output=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-    write_json(paths.state / "daemon.json", {"session": status["session"], "started_at": utc_now(), "interval": interval, "auto_next": auto_next})
+    write_json(
+        paths.state / "daemon.json",
+        {
+            "session": status["session"],
+            "started_at": utc_now(),
+            "interval": interval,
+            "auto_next": auto_next,
+            "mode": mode,
+            "offline": offline,
+            "dry_submit": dry_submit,
+            "max_steps": max_steps,
+        },
+    )
     return daemon_status(paths)
 
 

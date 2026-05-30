@@ -156,7 +156,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.9" in show.output
+    assert "0.8.10" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1068,6 +1068,32 @@ def test_v089_slurm_poll_records_fallback_wait_verdict(tmp_path: Path, monkeypat
     poll = backend.poll({"job_id": "123", "partition": "preferred", "resource_request": {"time": "04:00:00", "fallback_partitions": ["fallback"]}})
     assert poll.details["wait_verdict"]["verdict"] == "fallback_better_available"
     assert poll.details["wait_verdict"]["recommended_partition"] == "fallback"
+
+
+def test_v0810_daemon_auto_cycle_command_uses_online_real_submit_flags(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    captured: list[list[str]] = []
+    started = {"value": False}
+
+    def fake_run(args, **kwargs):
+        captured.append(list(args))
+        if args[:2] == ["tmux", "has-session"]:
+            return subprocess.CompletedProcess(args, 0 if started["value"] else 1, stdout="", stderr="")
+        if args[:3] == ["tmux", "new-session", "-d"]:
+            started["value"] = True
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.daemon.shutil.which", lambda name: "/usr/bin/tmux" if name == "tmux" else None)
+    monkeypatch.setattr("vibe_research.daemon.subprocess.run", fake_run)
+    result = invoke("daemon", "start", "--target", str(tmp_path), "--online", "--real-submit", "--mode", "auto-cycle", "--max-steps", "7")
+    assert result.exit_code == 0
+    command = captured[1][-1]
+    assert "auto-cycle" in command
+    assert "--real-submit" in command
+    assert "--offline" not in command
+    assert "--max-steps 7" in command
+    assert "status --target" in command
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

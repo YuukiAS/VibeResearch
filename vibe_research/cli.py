@@ -1807,10 +1807,14 @@ def daemon_start_cmd(
     target: Path = typer.Option(Path("."), "--target", "-t"),
     interval: Optional[int] = typer.Option(None, "--interval"),
     auto_next: bool = typer.Option(True, "--auto-next/--no-auto-next"),
+    mode: str = typer.Option("auto-cycle", "--mode", help="Daemon loop mode: auto-cycle or monitor."),
+    offline: bool = typer.Option(False, "--offline/--online", help="Disable or allow external search calls inside auto-cycle."),
+    dry_submit: bool = typer.Option(True, "--dry-submit/--real-submit", help="Record submissions or allow real backend submission."),
+    max_steps: int = typer.Option(30, "--max-steps", help="Maximum auto-next steps per auto-cycle iteration."),
 ) -> None:
-    """Start a tmux supervisor running monitor --loop."""
+    """Start a tmux supervisor running an autonomous or monitor-only loop."""
 
-    console.print(daemon_start(paths(target), interval=interval, auto_next=auto_next))
+    console.print(daemon_start(paths(target), interval=interval, auto_next=auto_next, mode=mode, offline=offline, dry_submit=dry_submit, max_steps=max_steps))
 
 
 @daemon_app.command("stop")
