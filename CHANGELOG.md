@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.11 - 2026-05-30
+
+- Launch daemon loops with the same Python interpreter that invoked the CLI
+  instead of relying on `python` from the tmux shell `PATH`.
+- Record the daemon interpreter path in `.vibe/state/daemon.json` for
+  debugging environment mismatches.
+
 ## 0.8.10 - 2026-05-30
 
 - Make `vibe daemon start` capable of running the full `auto-cycle` state

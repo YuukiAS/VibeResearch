@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import os
 import subprocess
+import sys
+from shlex import quote as shlex_quote
 
 from typer.testing import CliRunner
 
@@ -156,7 +158,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.10" in show.output
+    assert "0.8.11" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1094,6 +1096,29 @@ def test_v0810_daemon_auto_cycle_command_uses_online_real_submit_flags(tmp_path:
     assert "--offline" not in command
     assert "--max-steps 7" in command
     assert "status --target" in command
+
+
+def test_v0811_daemon_uses_current_python_interpreter(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    captured: list[list[str]] = []
+    started = {"value": False}
+
+    def fake_run(args, **kwargs):
+        captured.append(list(args))
+        if args[:2] == ["tmux", "has-session"]:
+            return subprocess.CompletedProcess(args, 0 if started["value"] else 1, stdout="", stderr="")
+        if args[:3] == ["tmux", "new-session", "-d"]:
+            started["value"] = True
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.daemon.shutil.which", lambda name: "/usr/bin/tmux" if name == "tmux" else None)
+    monkeypatch.setattr("vibe_research.daemon.subprocess.run", fake_run)
+    assert invoke("daemon", "start", "--target", str(tmp_path)).exit_code == 0
+    command = captured[1][-1]
+    assert shlex_quote(sys.executable) in command
+    daemon = read_json(tmp_path / ".vibe" / "state" / "daemon.json", {})
+    assert daemon["interpreter"] == sys.executable
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

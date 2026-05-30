@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -54,15 +55,16 @@ def daemon_start(
     interval = interval or int(config.get("monitor", {}).get("loop_interval_seconds", 300))
     log_path = paths.dashboard / "daemon.log"
     target = shlex.quote(str(paths.root))
+    python = shlex.quote(sys.executable)
     if mode == "monitor":
-        loop_command = f"python -m vibe_research.cli monitor --target {target} --loop --interval {interval}" + (" --auto-next" if auto_next else "")
+        loop_command = f"{python} -m vibe_research.cli monitor --target {target} --loop --interval {interval}" + (" --auto-next" if auto_next else "")
     else:
         loop_command = (
             "while true; do "
-            f"python -m vibe_research.cli auto-cycle --target {target} --max-steps {max_steps}"
+            f"{python} -m vibe_research.cli auto-cycle --target {target} --max-steps {max_steps}"
             + (" --offline" if offline else "")
             + (" --dry-submit" if dry_submit else " --real-submit")
-            + f"; python -m vibe_research.cli status --target {target}; sleep {interval}; done"
+            + f"; {python} -m vibe_research.cli status --target {target}; sleep {interval}; done"
         )
     command = f"cd {target} && {loop_command} >> {shlex.quote(str(log_path))} 2>&1"
     result = subprocess.run(["tmux", "new-session", "-d", "-s", status["session"], command], text=True, capture_output=True, check=False)
@@ -79,6 +81,7 @@ def daemon_start(
             "offline": offline,
             "dry_submit": dry_submit,
             "max_steps": max_steps,
+            "interpreter": sys.executable,
         },
     )
     return daemon_status(paths)
