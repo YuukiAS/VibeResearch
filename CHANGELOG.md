@@ -5,6 +5,8 @@
 - Ignore local planning/TODO/prompt workspaces and remove concrete planning
   notes from the versioned framework surface so cloned checkouts contain only
   runnable package, docs, and tests.
+- Ignore root-level `TODO-v*.md` source requirement drafts to prevent future
+  planning notes from being accidentally committed.
 
 ## 0.7.1 - 2026-05-30
 

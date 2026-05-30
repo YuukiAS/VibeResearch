@@ -30,6 +30,7 @@ dist/
 docs/plans/
 docs/todos/
 prompts/
+/TODO-v*.md
 
 # Local agent/session configuration
 .agents/
