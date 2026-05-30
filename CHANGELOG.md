@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.23 - 2026-05-30
+
+- Treat `monitored` as a terminal result for one `auto-cycle` iteration so a
+  daemon performs one scheduler poll before sleeping instead of looping through
+  the monitor action repeatedly.
+
 ## 0.8.22 - 2026-05-30
 
 - Rank active real-experiment capabilities by prior generated/submitted run

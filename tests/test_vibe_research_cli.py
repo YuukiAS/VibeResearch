@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from vibe_research.artifacts import validate_artifact
 from vibe_research.adapter_schema import AdapterCapability, AdapterManifest, ArtifactRules, MetricsSchema, ResourcePolicy, load_adapter_manifest, write_adapter_manifest
+from vibe_research.automation import auto_cycle
 from vibe_research.codex_adapter import run_codex
 from vibe_research.cli import app
 from vibe_research.config import detect_config
@@ -198,7 +199,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.22" in show.output
+    assert "0.8.23" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1232,6 +1233,32 @@ def test_v089_slurm_poll_records_fallback_wait_verdict(tmp_path: Path, monkeypat
     assert poll.details["wait_verdict"]["recommended_partition"] == "fallback"
 
 
+def test_v089_slurm_fallback_estimates_use_sbatch_test_only(tmp_path: Path, monkeypatch):
+    import vibe_research.backends as backends
+
+    script = tmp_path / "run.sbatch"
+    script.write_text("#!/usr/bin/env bash\n")
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 5, 30, 16, 0, 0, tzinfo=tz)
+
+    def fake_run(args, **kwargs):
+        assert args[:3] == ["sbatch", "--test-only", "--partition=a100-gpu"]
+        assert "--gres=gpu:nvidia_a100-pcie-40gb:1" in args
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="sbatch: Job 1 to start at 2026-05-30T18:00:00 a using 8 processors on nodes g1 in partition a100-gpu\n")
+
+    monkeypatch.setattr(backends, "datetime", FakeDateTime)
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    rows = backends.fallback_completion_estimates(
+        {"sbatch_path": str(script), "resource_request": {"gpu": 1, "time": "04:00:00", "qos": "gpu_access"}},
+        {"execution": {"slurm": {}}},
+        ["a100-gpu"],
+    )
+    assert rows == [{"partition": "a100-gpu", "estimated_start_plus_run_hours": 6.0, "source": "sbatch_test_only"}]
+
+
 def test_v0810_daemon_auto_cycle_command_uses_online_real_submit_flags(tmp_path: Path, monkeypatch):
     assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
     captured: list[list[str]] = []
@@ -1583,6 +1610,18 @@ def test_v0822_synthesized_decision_prefers_less_used_capability(tmp_path: Path)
     assert ok, message
     decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
     assert decision["selected_direction"] == "cap_b"
+
+
+def test_v0823_auto_cycle_stops_after_single_monitor(monkeypatch, tmp_path: Path):
+    calls = {"count": 0}
+
+    def fake_auto_next(paths, *, offline=False, dry_submit=True):
+        calls["count"] += 1
+        return "monitored"
+
+    monkeypatch.setattr("vibe_research.automation.auto_next", fake_auto_next)
+    assert auto_cycle(VibePaths(tmp_path), max_steps=10) == ["monitored"]
+    assert calls["count"] == 1
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

@@ -91,7 +91,7 @@ def auto_cycle(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tr
     for _ in range(max_steps):
         result = auto_next(paths, offline=offline, dry_submit=dry_submit)
         results.append(result)
-        if result.startswith(("blocked:", "manual:", "submitted")):
+        if result.startswith(("blocked:", "manual:", "submitted", "monitored")):
             break
     return results
 
