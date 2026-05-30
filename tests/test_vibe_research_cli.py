@@ -196,7 +196,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.17" in show.output
+    assert "0.8.18" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1242,6 +1242,8 @@ def test_v0812_daemon_launches_command_through_explicit_shell(tmp_path: Path, mo
     monkeypatch.setattr("vibe_research.daemon.subprocess.run", fake_run)
     assert invoke("daemon", "start", "--target", str(tmp_path)).exit_code == 0
     launch_args = captured[1]
+    assert "-c" in launch_args
+    assert launch_args[launch_args.index("-c") + 1] == str(tmp_path.resolve())
     assert launch_args[-3] in {"/usr/bin/bash", "sh"}
     assert launch_args[-2] == "-lc"
     assert "auto-cycle" in launch_args[-1]
@@ -1434,6 +1436,25 @@ def test_v0817_new_cycle_clears_stale_top_level_block(tmp_path: Path):
     assert result.exit_code == 0
     assert f"vibe review-cycle {cycle_id}" in result.output
     assert "offline fallback cannot make a structured research decision" not in result.output
+
+
+def test_v0818_submit_queue_uses_run_entrypoint_backend_when_not_overridden(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1").exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    run_id = sorted(state["runs"])[0]
+    assert state["runs"][run_id]["entrypoint"]["type"] == "slurm"
+    assert invoke("branch", run_id, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("dryrun", run_id, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("queue", run_id, "--target", str(tmp_path)).exit_code == 0
+    assert invoke("submit-queue", "--target", str(tmp_path), "--dry").exit_code == 0
+    launch = read_json(tmp_path / ".vibe" / "runs" / run_id / "launch.json", {})
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert launch["backend"] == "slurm"
+    assert state["runs"][run_id]["backend"] == "slurm"
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):
