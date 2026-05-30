@@ -67,7 +67,8 @@ def daemon_start(
             + f"; {python} -m vibe_research.cli status --target {target}; sleep {interval}; done"
         )
     command = f"cd {target} && {loop_command} >> {shlex.quote(str(log_path))} 2>&1"
-    result = subprocess.run(["tmux", "new-session", "-d", "-s", status["session"], command], text=True, capture_output=True, check=False)
+    shell = "/usr/bin/bash" if Path("/usr/bin/bash").exists() else "sh"
+    result = subprocess.run(["tmux", "new-session", "-d", "-s", status["session"], shell, "-lc", command], text=True, capture_output=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip())
     write_json(
@@ -82,6 +83,7 @@ def daemon_start(
             "dry_submit": dry_submit,
             "max_steps": max_steps,
             "interpreter": sys.executable,
+            "shell": shell,
         },
     )
     return daemon_status(paths)

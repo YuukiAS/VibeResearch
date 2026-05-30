@@ -158,7 +158,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.11" in show.output
+    assert "0.8.12" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1119,6 +1119,31 @@ def test_v0811_daemon_uses_current_python_interpreter(tmp_path: Path, monkeypatc
     assert shlex_quote(sys.executable) in command
     daemon = read_json(tmp_path / ".vibe" / "state" / "daemon.json", {})
     assert daemon["interpreter"] == sys.executable
+
+
+def test_v0812_daemon_launches_command_through_explicit_shell(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    captured: list[list[str]] = []
+    started = {"value": False}
+
+    def fake_run(args, **kwargs):
+        captured.append(list(args))
+        if args[:2] == ["tmux", "has-session"]:
+            return subprocess.CompletedProcess(args, 0 if started["value"] else 1, stdout="", stderr="")
+        if args[:3] == ["tmux", "new-session", "-d"]:
+            started["value"] = True
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.daemon.shutil.which", lambda name: "/usr/bin/tmux" if name == "tmux" else None)
+    monkeypatch.setattr("vibe_research.daemon.subprocess.run", fake_run)
+    assert invoke("daemon", "start", "--target", str(tmp_path)).exit_code == 0
+    launch_args = captured[1]
+    assert launch_args[-3] in {"/usr/bin/bash", "sh"}
+    assert launch_args[-2] == "-lc"
+    assert "auto-cycle" in launch_args[-1]
+    daemon = read_json(tmp_path / ".vibe" / "state" / "daemon.json", {})
+    assert daemon["shell"] == launch_args[-3]
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

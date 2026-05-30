@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.12 - 2026-05-30
+
+- Start tmux daemons through an explicit shell invocation
+  (`/usr/bin/bash -lc` when available, otherwise `sh -lc`) so the requested loop
+  command is executed reliably instead of leaving an idle interactive pane.
+- Record the daemon shell in `.vibe/state/daemon.json` for launch debugging.
+
 ## 0.8.11 - 2026-05-30
 
 - Launch daemon loops with the same Python interpreter that invoked the CLI
