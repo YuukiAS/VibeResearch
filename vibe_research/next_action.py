@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from .adapter_onboarding import adapter_readiness, apply_project_adapter_profile, clear_adapter_block_if_ready
-from .io import read_json, read_jsonl
+from .config import load_config
+from .io import read_json, read_jsonl, read_yaml
 from .paths import VibePaths
+from .scheduler import active_gpu_count
 
 
 RECOVERABLE_RESOURCE_BLOCKS = {
@@ -45,13 +47,14 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     if any(row.get("status") == "needs_deep_research" and not row.get("linked_deep_request_id") for row in read_jsonl(paths.ideas / "registry.jsonl")):
         idea_id = next(row.get("idea_id", "<idea_id>") for row in read_jsonl(paths.ideas / "registry.jsonl") if row.get("status") == "needs_deep_research" and not row.get("linked_deep_request_id"))
         return f"vibe deep-request-from-idea {idea_id}", ""
-    if active:
+    if queue:
+        return "vibe submit-queue", ""
+    active_capacity_full = active and active_jobs_exhaust_capacity(paths, active)
+    if active_capacity_full:
         return "vibe monitor", ""
     for request in read_jsonl(paths.research / "deep_requests" / "registry.jsonl"):
         if request.get("blocking") and request.get("status") != "ingested":
             return "vibe ingest-deep-research " + request.get("request_id", "<request_id>"), "blocked_waiting_deep_research"
-    if queue:
-        return "vibe submit-queue", ""
     cycle_id = state.get("current_cycle_id", "")
     if cycle_id:
         cycle = state.get("cycles", {}).get(cycle_id, {})
@@ -95,7 +98,10 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
             return f"vibe reflect-cycle {cycle_id}", ""
         if all_terminal and not has_text(cycle_dir / "cycle_revised_plan.md"):
             return f"vibe revise-cycle {cycle_id}", ""
-    return state.get("next_action") or "vibe plan-cycle", ""
+    fallback = state.get("next_action") or "vibe plan-cycle"
+    if active and fallback == "vibe monitor":
+        return "vibe plan-cycle", ""
+    return fallback, ""
 
 
 def has_text(path) -> bool:
@@ -111,3 +117,13 @@ def next_action_run_scope(state: dict, cycle_id: str) -> list[tuple[str, dict]]:
     if any(run.get("status") not in terminal for _, run in current):
         return current
     return runs
+
+
+def active_jobs_exhaust_capacity(paths: VibePaths, active: list[dict]) -> bool:
+    config = load_config(paths)
+    budget = read_yaml(paths.scheduler / "budget.yaml", {}) or config.get("scheduler", {})
+    max_parallel = int(budget.get("max_parallel_jobs", 3))
+    max_gpu = int(budget.get("max_parallel_gpu_jobs", budget.get("max_gpu_jobs", 2)))
+    if len(active) >= max_parallel:
+        return True
+    return active_gpu_count(active) >= max_gpu

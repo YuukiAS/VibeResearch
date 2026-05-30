@@ -196,7 +196,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.20" in show.output
+    assert "0.8.21" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1487,6 +1487,35 @@ def test_v0818_submit_queue_uses_run_entrypoint_backend_when_not_overridden(tmp_
     assert launch["backend"] == "slurm"
     assert state["runs"][run_id]["backend"] == "slurm"
     assert "#SBATCH --qos=gpu_access" in Path(launch["sbatch_path"]).read_text()
+
+
+def test_v0821_active_jobs_only_monitor_when_capacity_is_full(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    write_yaml(tmp_path / ".vibe" / "scheduler" / "budget.yaml", {"max_parallel_jobs": 3, "max_gpu_jobs": 2})
+    state_path = tmp_path / ".vibe" / "state" / "state.json"
+    state = read_json(state_path, {})
+    state["status"] = "initialized"
+    state["blocked_reason"] = ""
+    state["next_action"] = "vibe monitor"
+    write_json(state_path, state)
+    write_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {"active": [{"run_id": "r001", "resource_request": {"gpu": 1}, "status": "pending"}]})
+    one_job = invoke("next", "--target", str(tmp_path))
+    assert one_job.exit_code == 0
+    assert "vibe plan-cycle" in one_job.output
+
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {
+            "active": [
+                {"run_id": "r001", "resource_request": {"gpu": 1}, "status": "pending"},
+                {"run_id": "r002", "resource_request": {"gpu": 1}, "status": "pending"},
+            ]
+        },
+    )
+    full = invoke("next", "--target", str(tmp_path))
+    assert full.exit_code == 0
+    assert "vibe monitor" in full.output
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):

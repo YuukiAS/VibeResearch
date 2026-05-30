@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.21 - 2026-05-30
+
+- Let `vibe next` continue planning when active jobs exist but scheduler job/GPU
+  capacity is still available and no queued work is waiting.
+- Preserve conservative monitoring when active jobs exhaust
+  `max_parallel_jobs` or `max_gpu_jobs`.
+
 ## 0.8.20 - 2026-05-30
 
 - Prefer run-level Slurm `resources.account` and `resources.qos` over global
