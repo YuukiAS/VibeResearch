@@ -138,8 +138,29 @@ def parse_simple_yaml(text: str) -> Any:
             return False
         if value == "[]":
             return []
-        if value.startswith('"') or value.startswith("[") or value.startswith("{"):
+        if value.startswith('"') and value.endswith('"'):
             return json.loads(value)
+        if value.startswith("'") and value.endswith("'"):
+            return value[1:-1]
+        if value.startswith("[") and value.endswith("]"):
+            try:
+                return json.loads(value)
+            except Exception:
+                inner = value[1:-1].strip()
+                return [] if not inner else [parse_scalar(part.strip()) for part in inner.split(",")]
+        if value.startswith("{") and value.endswith("}"):
+            try:
+                return json.loads(value)
+            except Exception:
+                inner = value[1:-1].strip()
+                result = {}
+                if not inner:
+                    return result
+                for part in inner.split(","):
+                    key, sep, item_value = part.partition(":")
+                    if sep:
+                        result[key.strip()] = parse_scalar(item_value.strip())
+                return result
         try:
             return int(value)
         except ValueError:
@@ -164,7 +185,16 @@ def parse_simple_yaml(text: str) -> Any:
                 rest = content[1:].strip()
                 index += 1
                 if rest:
-                    items.append(parse_scalar(rest))
+                    if ":" in rest and not rest.startswith(("'", '"', "[", "{")):
+                        key, _, item_rest = rest.partition(":")
+                        item = {key.strip(): parse_scalar(item_rest.strip()) if item_rest.strip() else {}}
+                        if index < len(lines) and lines[index][0] >= indent + 2:
+                            nested, index = parse_block(index, indent + 2)
+                            if isinstance(nested, dict):
+                                item.update(nested)
+                        items.append(item)
+                    else:
+                        items.append(parse_scalar(rest))
                 else:
                     value, index = parse_block(index, indent + 2)
                     items.append(value)

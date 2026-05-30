@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .adapter_onboarding import adapter_readiness, clear_adapter_block_if_ready
+from .adapter_onboarding import adapter_readiness, apply_project_adapter_profile, clear_adapter_block_if_ready
 from .io import read_json, read_jsonl
 from .paths import VibePaths
 
@@ -12,6 +12,10 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
     queue = read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued", [])
     readiness = adapter_readiness(paths)
+    if not readiness.get("ready_for_real_experiments"):
+        profile = apply_project_adapter_profile(paths)
+        if profile.get("applied"):
+            readiness = adapter_readiness(paths)
     if not readiness.get("ready_for_real_experiments"):
         return "vibe adapter doctor", "real_experiment_adapter_readiness_incomplete"
     if state.get("status") == "blocked_missing_adapter":

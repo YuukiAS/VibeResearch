@@ -250,6 +250,131 @@ def adapter_draft(paths: VibePaths) -> AdapterManifest:
     return manifest
 
 
+PROFILE_CANDIDATES = [
+    ".viberesearch/profile.yaml",
+    ".vibe_profile.yaml",
+    "viberesearch.profile.yaml",
+    "viberesearch.yaml",
+]
+
+
+def detect_project_adapter_profile(paths: VibePaths) -> dict[str, Any]:
+    reports = []
+    for rel in PROFILE_CANDIDATES:
+        profile_path = paths.root / rel
+        if not profile_path.exists():
+            continue
+        profile = read_yaml(profile_path, {})
+        if not isinstance(profile, dict):
+            reports.append({"path": rel, "matched": False, "reason": "profile_not_mapping"})
+            continue
+        matched, reasons = profile_evidence_matches(paths, profile)
+        report = {"path": rel, "matched": matched, "reasons": reasons, "profile": profile if matched else {}}
+        reports.append(report)
+        if matched:
+            write_json(paths.vibe / "adapter_profile_detection.json", {k: v for k, v in report.items() if k != "profile"})
+            return report
+    result = {"path": "", "matched": False, "reasons": ["no profile file matched"], "profiles_checked": reports}
+    write_json(paths.vibe / "adapter_profile_detection.json", result)
+    return result
+
+
+def profile_evidence_matches(paths: VibePaths, profile: dict[str, Any]) -> tuple[bool, list[str]]:
+    evidence = profile.get("evidence", {}) if isinstance(profile.get("evidence"), dict) else {}
+    reasons = []
+    for rel in evidence.get("required_files", []):
+        if not (paths.root / str(rel)).exists():
+            reasons.append(f"missing required file: {rel}")
+    for item in evidence.get("required_text", []):
+        if not isinstance(item, dict):
+            continue
+        rel = str(item.get("path", ""))
+        text_path = paths.root / rel
+        if not text_path.exists():
+            reasons.append(f"missing required text file: {rel}")
+            continue
+        text = text_path.read_text(errors="ignore")
+        contains = item.get("contains", [])
+        needles = [contains] if isinstance(contains, str) else list(contains)
+        missing = [needle for needle in needles if str(needle) not in text]
+        if missing:
+            reasons.append(f"{rel} missing required text: {', '.join(str(value) for value in missing[:3])}")
+    return not reasons, reasons or ["profile evidence matched"]
+
+
+def apply_project_adapter_profile(paths: VibePaths) -> dict[str, Any]:
+    detection = detect_project_adapter_profile(paths)
+    if not detection.get("matched"):
+        return {"applied": False, **detection}
+    profile = detection.get("profile", {})
+    manifest = load_adapter_manifest(paths)
+    if not manifest.open_questions:
+        manifest.open_questions = default_questions()
+    manifest.project_id = str(profile.get("project_id") or manifest.project_id or paths.root.name)
+    manifest.project_name = str(profile.get("project_name") or manifest.project_name or paths.root.name)
+    manifest.project_summary = str(profile.get("project_summary") or manifest.project_summary)
+    manifest.research_objective = str(profile.get("research_objective") or manifest.research_objective)
+    manifest.baseline_notes = str(profile.get("baseline_notes") or manifest.baseline_notes)
+    manifest.data_access_notes = str(profile.get("data_access_notes") or manifest.data_access_notes)
+    answers = profile.get("answers", {}) if isinstance(profile.get("answers"), dict) else {}
+    for question in manifest.open_questions:
+        if question.id in answers:
+            question.current_answer = str(answers[question.id])
+            question.answer_source = f"profile:{detection['path']}"
+            question.confirmed = True
+            question.updated_at = utc_now()
+    existing = {cap.id: cap for cap in manifest.capabilities}
+    applied_caps = []
+    for raw in profile.get("capabilities", []):
+        if not isinstance(raw, dict) or not raw.get("id"):
+            continue
+        data = dict(raw)
+        data.setdefault("version", f"profile:{detection['path']}")
+        data.setdefault("status", "draft")
+        data.setdefault("contract_tests", [str(data["id"])])
+        provenance = data.get("provenance", {}) if isinstance(data.get("provenance"), dict) else {}
+        provenance.update({"source": f"profile:{detection['path']}", "applied_at": utc_now()})
+        data["provenance"] = provenance
+        if data.get("status") == "active":
+            data.setdefault(
+                "activation",
+                {
+                    "activated_at": utc_now(),
+                    "contract_status": "passed",
+                    "contract_test_result_id": f"profile:{detection['path']}",
+                    "user_confirmation": "profile_evidence_matched",
+                },
+            )
+        cap = AdapterCapability.model_validate(data)
+        existing[cap.id] = cap
+        applied_caps.append(cap.id)
+        if cap.status == "active":
+            write_contract_result(
+                paths,
+                cap.id,
+                {
+                    "capability_id": cap.id,
+                    "status": "passed",
+                    "created_at": utc_now(),
+                    "source": f"profile:{detection['path']}",
+                    "evidence": "profile_evidence_matched",
+                },
+            )
+    manifest.capabilities = list(existing.values())
+    manifest.safety_policies.update(profile.get("safety_policies", {}) if isinstance(profile.get("safety_policies"), dict) else {})
+    manifest.provenance["profile_path"] = detection["path"]
+    manifest.provenance["profile_applied_at"] = utc_now()
+    write_adapter_manifest(paths, manifest)
+    lint = adapter_lint(paths)
+    readiness = adapter_doctor(paths)
+    if readiness.get("ready_for_real_experiments"):
+        clear_adapter_block_if_ready(paths)
+    result = {"applied": True, "path": detection["path"], "capabilities": applied_caps, "lint": lint, "readiness": readiness}
+    append_jsonl(paths.vibe / "adapter_history.jsonl", {"event": "adapter_profile_applied", "created_at": utc_now(), **result})
+    record_event(paths, "adapter_profile_applied", f"Applied adapter profile {detection['path']}", status="applied", payload=result)
+    return result
+
+
 def adapter_questions(paths: VibePaths, *, answer: tuple[str, str] | None = None, confirm: bool = False) -> list[dict[str, Any]]:
     manifest = load_adapter_manifest(paths)
     if answer:
@@ -621,9 +746,11 @@ def bootstrap_adapter_on_init(paths: VibePaths, *, minimal: bool) -> None:
         adapter_discover(paths)
         adapter_draft(paths)
         bootstrap_script_plan(paths)
+        profile = apply_project_adapter_profile(paths)
         adapter_lint(paths)
         adapter_doctor(paths)
-        set_adapter_block(paths, "adapter/script bootstrap is incomplete; run vibe adapter doctor and activate instrumentation first, then complete real-experiment adapter gaps")
+        if not profile.get("applied") or not adapter_readiness(paths).get("ready_for_real_experiments"):
+            set_adapter_block(paths, "adapter/script bootstrap is incomplete; run vibe adapter doctor and activate instrumentation first, then complete real-experiment adapter gaps")
 
 
 def script_bootstrap(paths: VibePaths, *, generate: bool = True, script_dir: str = ".vibe/scripts") -> Path:

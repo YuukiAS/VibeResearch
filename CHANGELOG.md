@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.8.14 - 2026-05-30
+
+- Add repo-declared adapter profiles (`.viberesearch/profile.yaml`,
+  `.vibe_profile.yaml`, `viberesearch.profile.yaml`, or `viberesearch.yaml`)
+  that are matched by durable project evidence instead of checkout basename.
+- Let matched profiles fill known adapter answers, merge deterministic
+  capabilities, write profile-sourced contract-test records, and recover
+  `blocked_missing_adapter` when the declared contracts are complete.
+- Add `vibe adapter profile-detect` and `vibe adapter profile-apply` for
+  explicit inspection, while allowing init/next-action recovery to apply a
+  matched profile automatically.
+
 ## 0.8.13 - 2026-05-30
 
 - Bind daemon session names to a hash of the target root and make

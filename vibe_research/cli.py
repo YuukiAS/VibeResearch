@@ -21,6 +21,8 @@ from .adapter_onboarding import (
     adapter_init,
     adapter_lint,
     adapter_questions,
+    apply_project_adapter_profile,
+    detect_project_adapter_profile,
     run_contract_test,
     script_bootstrap,
     write_real_experiment_gap_report,
@@ -242,6 +244,25 @@ def adapter_lint_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -
     sync_dashboard(p)
     console.print_json(data=result)
     if not result.get("ok"):
+        raise typer.Exit(1)
+
+
+@adapter_app.command("profile-detect")
+def adapter_profile_detect_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Detect a repo-declared adapter profile by durable project evidence."""
+
+    console.print_json(data=detect_project_adapter_profile(paths(target)))
+
+
+@adapter_app.command("profile-apply")
+def adapter_profile_apply_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Apply a matched repo-declared adapter profile."""
+
+    p = paths(target)
+    result = apply_project_adapter_profile(p)
+    sync_dashboard(p)
+    console.print_json(data=result)
+    if not result.get("applied"):
         raise typer.Exit(1)
 
 

@@ -159,7 +159,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.13" in show.output
+    assert "0.8.14" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1183,6 +1183,67 @@ def test_v0813_slurm_poll_marks_mismatched_workdir_unsafe(tmp_path: Path, monkey
     assert poll.finished is True
     assert poll.status == "unsafe_stale"
     assert poll.details["reason"] == "slurm_workdir_target_mismatch"
+
+
+def test_v0814_adapter_profile_recovers_blocked_adapter_without_basename_match(tmp_path: Path):
+    (tmp_path / "AGENTS.md").write_text("Project policy: no upload. Trusted metric is score.\n")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "train.py").write_text("print('train')\n")
+    (tmp_path / ".vibe_profile.yaml").write_text(
+        "project_id: generic_profile_project\n"
+        "project_name: Generic Profile Project\n"
+        "evidence:\n"
+        "  required_files:\n"
+        "    - AGENTS.md\n"
+        "    - scripts/train.py\n"
+        "  required_text:\n"
+        "    - path: AGENTS.md\n"
+        "      contains:\n"
+        "        - no upload\n"
+        "answers:\n"
+        "  q_primary_metric: score\n"
+        "  q_data_path: local trusted data\n"
+        "  q_baseline: baseline registry\n"
+        "  q_gpu_permission: short local jobs only\n"
+        "  q_metrics_format: JSON with score\n"
+        "  q_trusted_outputs: .vibe/profile_metrics/*.json\n"
+        "capabilities:\n"
+        "  - id: profile_eval_smoke\n"
+        "    status: active\n"
+        "    task_type: evaluation_smoke\n"
+        "    supported_decisions: [collect_more_metrics]\n"
+        "    description: Profile-declared evaluation smoke capability.\n"
+        "    dryrun:\n"
+        "      command: sh -c 'mkdir -p .vibe/profile_metrics && printf \"{\\\"score\\\": 1.0}\\n\" > .vibe/profile_metrics/eval.json'\n"
+        "    entrypoint:\n"
+        "      type: local\n"
+        "      command: sh -c 'mkdir -p .vibe/profile_metrics && printf \"{\\\"score\\\": 1.0}\\n\" > .vibe/profile_metrics/eval.json'\n"
+        "    outputs:\n"
+        "      expected_output_path: .vibe/profile_metrics/eval.json\n"
+        "      metrics_file_path: .vibe/profile_metrics/eval.json\n"
+        "    metrics_schema:\n"
+        "      required: [score]\n"
+        "      types: {score: number}\n"
+        "      primary_metric: score\n"
+        "      version: profile\n"
+        "    artifact_rules:\n"
+        "      expected_outputs: [.vibe/profile_metrics/eval.json]\n"
+        "      trusted_path_patterns: [.vibe/profile_metrics/*.json]\n"
+        "      version: profile\n"
+        "    resources:\n"
+        "      automatic_submission_allowed: false\n"
+        "      user_confirmation_required: false\n"
+        "      allowed_backends: [local]\n"
+        "      default: {gpu: 0, cpus: 1, mem_gb: 1, time: '00:05:00'}\n"
+        "    trust_checks: [schema_valid_metrics, expected_output_exists]\n"
+    )
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    readiness = read_json(tmp_path / ".vibe" / "adapter_readiness.json", {})
+    assert readiness["ready_for_real_experiments"] is True
+    assert not readiness["missing_user_answers"]
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "vibe plan-cycle" in result.output
 
 
 def test_v088_multi_capability_compile_emits_multiple_runs(tmp_path: Path):
