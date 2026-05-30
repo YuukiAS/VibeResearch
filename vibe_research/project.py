@@ -17,7 +17,7 @@ from .models import IdeaRecord, ProjectConfig, RunManifest, default_budget, defa
 from .papers import connect
 from .paths import VibePaths
 from .portal import build_portal, install_agents_snippet, write_agents_files, write_portal_text
-from .promotion import validate_resource_plan
+from .promotion import ensure_executable_resource_plan, validate_resource_plan
 from .research_manager import research_init
 from .timeline import record_event
 
@@ -548,9 +548,30 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
         state = read_json(paths.state / "state.json", default_state())
     cycle_state = state.get("cycles", {}).get(cycle, {})
     if cycle_state.get("review_verdict") in {"BLOCK_PORTFOLIO", "REVISE_PORTFOLIO"} or cycle_state.get("status") == "blocked":
-        raise RuntimeError(f"Cycle {cycle} is blocked by portfolio review: {cycle_state.get('review_verdict', '')}")
+        if cycle_state.get("status") == "blocked" and state.get("status") == "blocked_missing_resource_plan":
+            ok, _ = ensure_executable_resource_plan(paths, cycle)
+            state = read_json(paths.state / "state.json", default_state())
+            cycle_state = state.get("cycles", {}).get(cycle, {})
+            if ok:
+                cycle_state["status"] = "reviewed"
+                state["cycles"][cycle] = cycle_state
+                state["status"] = "resource_plan_compiled"
+                state["blocked_reason"] = ""
+                state["next_action"] = f"vibe generate-runs {cycle}"
+                state["updated_at"] = utc_now()
+                write_json(paths.state / "state.json", state)
+            else:
+                raise RuntimeError(f"Cycle {cycle} is blocked by resource-plan compilation: {state.get('blocked_reason', '')}")
+        else:
+            raise RuntimeError(f"Cycle {cycle} is blocked by portfolio review: {cycle_state.get('review_verdict', '')}")
     state.setdefault("runs", {})
     existing = list(state["runs"].keys())
+    ok, compile_message = ensure_executable_resource_plan(paths, cycle)
+    if not ok:
+        reason = "Cannot generate runs without compiled executable resource_plan.yaml: " + compile_message
+        record_event(paths, "run_generation_blocked", reason, cycle_id=cycle, status="blocked_missing_resource_plan")
+        sync_dashboard(paths)
+        raise RuntimeError(reason)
     resource_plan = load_resource_plan(paths, cycle)
     plan_errors = validate_resource_plan(paths, cycle)
     if plan_errors:

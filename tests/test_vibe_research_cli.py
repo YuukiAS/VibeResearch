@@ -153,7 +153,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.3" in show.output
+    assert "0.8.4" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -517,6 +517,28 @@ def test_v083_real_experiment_progress_counts_only_backend_submitted_interpretab
     assert progress["countable_runs"][0]["run_id"] == run_id
     assert progress["countable_runs"][0]["run_kind"] == "real_experiment"
     assert read_json(tmp_path / ".vibe" / "research" / "real_experiment_progress.json", {})["observed_count"] == 1
+
+
+def test_v084_generate_runs_auto_compiles_and_recovers_resource_plan_block(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    assert invoke("plan-cycle", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("review-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("decision", "write-block", "c001", "--reason", "old placeholder plan", "--decision-type", "blocked_missing_resource_plan", "--target", str(tmp_path)).exit_code == 0
+
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert state["status"] == "blocked_missing_resource_plan"
+    next_action = invoke("next", "--target", str(tmp_path))
+    assert next_action.exit_code == 0
+    assert "vibe generate-runs c001" in next_action.output
+
+    generated = invoke("generate-runs", "c001", "--target", str(tmp_path), "--count", "1")
+    assert generated.exit_code == 0
+    decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
+    plan = read_yaml(tmp_path / ".vibe" / "cycles" / "c001" / "resource_plan.yaml", {})
+    assert decision["decision_type"] == "collect_more_metrics"
+    assert plan["decision_id"] == decision["decision_id"]
+    assert read_json(tmp_path / ".vibe" / "state" / "state.json", {})["runs"]
 
 
 def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
@@ -971,7 +993,8 @@ def test_auto_cycle_reaches_first_submission(tmp_path: Path):
     assert result.exit_code == 0
     assert "planned c001" in result.output
     assert "reviewed c001" in result.output
-    assert "blocked:" in result.output or "Cannot generate runs without compiled executable resource_plan" in result.output
+    assert "generated r001_toy_audit" in result.output
+    assert "submitted r001_toy_audit" in result.output
 
 
 def test_codex_runner_uses_fake_codex_and_writes_artifact(tmp_path: Path, monkeypatch):

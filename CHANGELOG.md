@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.4 - 2026-05-30
+
+- Add deterministic cycle-decision synthesis and resource-plan auto-compile
+  before run generation when a reviewed cycle still has a placeholder plan.
+- Let `generate-runs` recover `blocked_missing_resource_plan` cycles after
+  adapter capabilities or framework code have been repaired.
+- Route `auto-next` back to `generate-runs <cycle>` for recoverable
+  resource-plan blockers instead of treating them as terminal decision dead
+  ends.
+
 ## 0.8.3 - 2026-05-30
 
 - Separate instrumentation readiness from real-experiment readiness so probe
