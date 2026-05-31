@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.52 - 2026-05-31
+
+- Add external research resource context to cycle prompt packets, including
+  recent source/search records, auto-method-search metadata, cloned external
+  repo provenance, bounded README excerpts, and top-level repo file summaries.
+- Make that context available to cycle-level reflection and revised planning so
+  recorded external resources can inform the sustained research loop.
+
 ## 0.8.51 - 2026-05-31
 
 - Treat Slurm socket/controller query failures as non-terminal

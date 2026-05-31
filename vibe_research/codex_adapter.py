@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_config
-from .io import ensure_dir, next_numeric_id, read_jsonl, utc_now, write_json, write_text
+from .io import ensure_dir, next_numeric_id, read_json, read_jsonl, utc_now, write_json, write_text
 from .paths import VibePaths
 from .timeline import record_event
 
@@ -255,7 +255,44 @@ def context_packet(paths: VibePaths, target_id: str) -> str:
             path = cycle_dir / name
             if path.exists():
                 snippets.append(f"### .vibe/cycles/{target_id}/{name}\n{path.read_text()[-8000:]}")
+        external = external_resource_context(paths)
+        if external:
+            snippets.append(external)
     return "\n\n".join(snippets) or "No local context files found."
+
+
+def external_resource_context(paths: VibePaths) -> str:
+    parts = ["### External Research Resources"]
+    sources = read_jsonl(paths.research / "sources.jsonl")
+    if sources:
+        parts.append("#### Source/Search Records")
+        for row in sources[-10:]:
+            parts.append(f"- {row.get('title', row.get('query', 'source'))} | {row.get('source', '')} | {row.get('source_url', row.get('url', ''))}")
+    method = read_json(paths.research / "auto_method_search.json", {})
+    if method:
+        parts.append("#### Auto Method Search")
+        parts.append(json.dumps(method, sort_keys=True)[:4000])
+    repos = read_jsonl(paths.research / "external_repos.jsonl")
+    if repos:
+        parts.append("#### External Repositories")
+        for row in repos[-5:]:
+            parts.append(f"- {row.get('name', '')} status={row.get('status', '')} url={row.get('url', '')} path={row.get('path', '')} commit={row.get('commit', '')}")
+            repo_path = paths.root / str(row.get("path", ""))
+            if repo_path.exists() and repo_path.is_dir():
+                top_level = sorted(item.name for item in repo_path.iterdir())[:30]
+                parts.append(f"  top-level: {', '.join(top_level)}")
+                readme = first_readme(repo_path)
+                if readme:
+                    parts.append(f"  README excerpt:\n{readme.read_text(errors='ignore')[:3000]}")
+    return "\n".join(parts) if len(parts) > 1 else ""
+
+
+def first_readme(repo_path: Path) -> Path | None:
+    for name in ["README.md", "README.rst", "README.txt", "README"]:
+        path = repo_path / name
+        if path.exists() and path.is_file():
+            return path
+    return None
 
 
 def offline_artifact(role: str, target_id: str) -> str:

@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 from vibe_research.artifacts import validate_artifact
 from vibe_research.adapter_schema import AdapterCapability, AdapterManifest, ArtifactRules, MetricsSchema, ResourcePolicy, load_adapter_manifest, write_adapter_manifest
 from vibe_research.automation import auto_cycle, auto_next
-from vibe_research.codex_adapter import run_codex
+from vibe_research.codex_adapter import prompt_packet, run_codex
 from vibe_research.cli import app
 from vibe_research.config import detect_config, load_config
 from vibe_research.daemon import daemon_start, daemon_status
@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.51" in show.output
+    assert "0.8.52" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2715,6 +2715,30 @@ def test_v0849_submit_queue_auto_resumes_required_input_repair(tmp_path: Path):
     directions = read_jsonl(tmp_path / ".vibe" / "directions" / "registry.jsonl")
     assert directions[-1]["status"] == "promoted"
     assert directions[-1]["reason"] == "auto-resumed after required input repair"
+
+
+def test_v0852_cycle_reflect_prompt_includes_external_resource_context(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    append_jsonl(
+        tmp_path / ".vibe" / "research" / "sources.jsonl",
+        {"title": "Useful Segmentation Paper", "source": "openalex", "source_url": "https://example.test/paper"},
+    )
+    write_json(tmp_path / ".vibe" / "research" / "auto_method_search.json", {"query": "segmentation method", "status": "searched"})
+    repo = tmp_path / ".vibe" / "research" / "external_repos" / "upstream-method"
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "README.md").write_text("# Upstream Method\n\nIntegration notes for the method.\n")
+    (repo / "train.py").write_text("print('train')\n")
+    append_jsonl(
+        tmp_path / ".vibe" / "research" / "external_repos.jsonl",
+        {"name": "upstream-method", "status": "cloned", "url": "https://example.test/upstream.git", "path": ".vibe/research/external_repos/upstream-method", "commit": "abc123"},
+    )
+    packet = prompt_packet(VibePaths(tmp_path), "cycle_reflect", "c001")
+    assert "External Research Resources" in packet
+    assert "Useful Segmentation Paper" in packet
+    assert "segmentation method" in packet
+    assert "upstream-method" in packet
+    assert "Upstream Method" in packet
+    assert "train.py" in packet
 
 
 def test_v0821_active_jobs_only_monitor_when_prequeue_disabled(tmp_path: Path):
