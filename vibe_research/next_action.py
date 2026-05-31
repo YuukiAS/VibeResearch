@@ -48,6 +48,11 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     if state.get("status") == "blocked_missing_adapter":
         clear_adapter_block_if_ready(paths)
         state = read_json(paths.state / "state.json", {})
+    ready_output = active_scope_output_action(state, active)
+    if ready_output:
+        return ready_output, ""
+    if active_scope_should_monitor(state, active):
+        return "vibe monitor", ""
     state_status = str(state.get("status", ""))
     next_action = str(state.get("next_action", ""))
     active_block = state_status.startswith("blocked_") or (bool(state.get("blocked_reason")) and next_action.startswith("vibe decision show"))
@@ -144,6 +149,39 @@ def actionable_queue_rows(state: dict, queue: list[dict]) -> list[dict]:
         if run.get("status") == "queued" and item.get("status", "queued") == "queued":
             actionable.append(item)
     return actionable
+
+
+def active_scope_output_action(state: dict, active: list[dict]) -> str:
+    if not active:
+        return ""
+    active_cycle_ids = {str(job.get("cycle_id") or "") for job in active if job.get("cycle_id")}
+    cycle_id = next(iter(active_cycle_ids)) if len(active_cycle_ids) == 1 else str(state.get("current_cycle_id") or "")
+    if not cycle_id:
+        return ""
+    runs = sorted((state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}).items())
+    for run_id, run in runs:
+        if run.get("cycle_id") != cycle_id or terminal_inactive_run(run):
+            continue
+        status = str(run.get("status", ""))
+        if status in {"finished", "submitted_dry"}:
+            return f"vibe collect {run_id}"
+        if status == "collected":
+            return f"vibe reflect {run_id}"
+        if status == "reflected":
+            return f"vibe revise-plan {run_id}"
+    return ""
+
+
+def active_scope_should_monitor(state: dict, active: list[dict]) -> bool:
+    if not active:
+        return False
+    active_cycle_ids = {str(job.get("cycle_id") or "") for job in active if job.get("cycle_id")}
+    if len(active_cycle_ids) != 1:
+        return False
+    cycle_id = next(iter(active_cycle_ids))
+    runs = (state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}).values()
+    active_statuses = {"submitted", "pending", "running", "dry_submitted", "submitted_dry"}
+    return any(run.get("cycle_id") == cycle_id and run.get("status") in active_statuses for run in runs)
 
 
 def abandon_empty_preplanned_cycle_for_active_round(paths: VibePaths, state: dict, active: list[dict]) -> bool:

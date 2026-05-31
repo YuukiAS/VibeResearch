@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.55 - 2026-05-31
+
+- Let `vibe next` surface finished, dry-submitted, collected, or reflected
+  sibling runs in the active cycle before falling back to `vibe monitor`.
+- Keep active sibling jobs intact while allowing partial multi-route output to
+  be collected, reflected, and revised promptly.
+
 ## 0.8.54 - 2026-05-31
 
 - Add `vibe external analyze-repo <name>` for read-only cloned repository
