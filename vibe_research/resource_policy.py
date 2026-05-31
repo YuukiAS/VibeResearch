@@ -14,8 +14,8 @@ def normalize_run_resources(resources: dict[str, Any], config: dict[str, Any], *
     scheduler = config.get("scheduler", {}) if isinstance(config.get("scheduler"), dict) else {}
     preferred = list(normalized.get("preferred_partitions") or [])
     fallback = list(normalized.get("fallback_partitions") or [])
-    if not preferred:
-        preferred = [execution_slurm.get("default_partition", "gpu_short")]
+    if not preferred and execution_slurm.get("default_partition"):
+        preferred = [execution_slurm["default_partition"]]
     if not fallback:
         fallback = list(execution_slurm.get("fallback_partitions") or config.get("slurm", {}).get("fallback_partitions", []))
     normalized["preferred_partitions"] = preferred
@@ -29,9 +29,12 @@ def normalize_run_resources(resources: dict[str, Any], config: dict[str, Any], *
     if fallback and not allow_strict:
         normalized.pop("strict_preferred_partition", None)
         normalized.pop("prefer_configured_partition", None)
+    maturity = str(normalized.get("maturity", "")).lower()
+    delivery_stage = maturity in {"delivery", "submission", "submit", "final", "final_delivery", "production_delivery"}
     normal_cap = float(scheduler.get("max_run_hours_per_experiment", scheduler.get("max_walltime_hours_per_run", 12)) or 0)
     mature_cap = float(scheduler.get("mature_max_run_hours_per_experiment", normal_cap or 24) or 0)
-    max_hours = mature_cap if long_run_allowed or normalized.get("maturity") in {"mature", "full", "production"} else normal_cap
+    delivery_cap = float(scheduler.get("delivery_max_run_hours_per_experiment", mature_cap or normal_cap or 0) or 0)
+    max_hours = delivery_cap if delivery_stage else mature_cap if long_run_allowed or maturity in {"mature", "full", "production"} else normal_cap
     if max_hours > 0:
         current_hours = walltime_hours(str(normalized.get("time", "")))
         if current_hours <= 0 or current_hours > max_hours:
@@ -39,7 +42,8 @@ def normalize_run_resources(resources: dict[str, Any], config: dict[str, Any], *
         normalized.setdefault("runtime_limits", {})["max_run_hours"] = max_hours
     max_epochs = int(scheduler.get("max_epochs_per_experiment", 0) or 0)
     mature_epochs = int(scheduler.get("mature_max_epochs_per_experiment", max_epochs) or 0)
-    epoch_cap = mature_epochs if long_run_allowed or normalized.get("maturity") in {"mature", "full", "production"} else max_epochs
+    delivery_epochs = int(scheduler.get("delivery_max_epochs_per_experiment", mature_epochs or max_epochs) or 0)
+    epoch_cap = delivery_epochs if delivery_stage else mature_epochs if long_run_allowed or maturity in {"mature", "full", "production"} else max_epochs
     if epoch_cap > 0:
         for key in ["epochs", "max_epochs"]:
             if key in normalized:

@@ -204,10 +204,146 @@ def research_init(
     for blocker in blockers:
         if not any(row.get("question_id") == blocker and row.get("status", "open") == "open" for row in read_jsonl(files["questions"])):
             append_jsonl(files["questions"], {"question_id": blocker, "status": "open", "question": blocker.replace("_", " "), "created_at": now})
+    ensure_initial_policy_questions(paths, policies)
     append_research_event(paths, "research_initialized", {"goal": goal, "background_present": bool(background), "blockers": blockers, "constraints": constraints})
     status = research_readiness(paths)
     status["policies"] = policies
     return status
+
+
+def ensure_initial_policy_questions(paths: VibePaths, policies: dict[str, Any] | None = None) -> None:
+    files = research_paths(paths)
+    existing = read_jsonl(files["questions"])
+    by_id = {row.get("question_id"): row for row in existing if row.get("question_id")}
+    now = utc_now()
+    for question in default_initial_policy_questions(paths, policies or {}):
+        old = by_id.get(question["question_id"], {})
+        if old.get("status") in {"answered", "resolved"}:
+            continue
+        if old.get("status") == "open":
+            continue
+        append_jsonl(files["questions"], {**question, "status": "open", "created_at": now, "updated_at": now})
+
+
+def default_initial_policy_questions(paths: VibePaths, policies: dict[str, Any]) -> list[dict[str, Any]]:
+    budget = policies.get("budget") or read_yaml(paths.vibe / "policies" / "budget.yaml", {})
+    stage = policies.get("stage_gates") or read_yaml(paths.vibe / "policies" / "stage_gates.yaml", {})
+    autonomy = policies.get("autonomy") or read_yaml(paths.vibe / "policies" / "autonomy.yaml", {})
+    resource_questions = read_yaml(paths.vibe / "resources" / "policy_questions.yaml", {}) or {}
+    resource_by_id = {row.get("id"): row for row in resource_questions.get("questions", []) if isinstance(row, dict)}
+    return [
+        {
+            "question_id": "q_init_resource_mode",
+            "question": "Should this project use GPU/Slurm execution, local CPU execution, or both?",
+            "why_needed": "resource mode must be a user policy decision before execution planning",
+            "blocks": ["resource_policy", "automatic_execution"],
+            "default": resource_by_id.get("q_resource_mode", {}).get("default", "gpu_slurm_if_available"),
+        },
+        {
+            "question_id": "q_init_queue_wait_limit",
+            "question": "What maximum queued start-plus-run time is acceptable before preferring fallback or asking again?",
+            "why_needed": "queue wait tolerance is a user budget and scheduling preference",
+            "blocks": ["slurm_fallback_policy"],
+            "configured_hours": resource_by_id.get("q_slurm_wait_limit", {}).get("configured_hours", 24),
+        },
+        {
+            "question_id": "q_init_experiment_runtime_cap",
+            "question": "What walltime and epoch caps should ordinary exploratory experiments obey?",
+            "why_needed": "exploratory experiments should stay bounded and cheap",
+            "blocks": ["run_resource_normalization"],
+            "configured_max_run_hours": resource_by_id.get("q_experiment_runtime_caps", {}).get("configured_max_run_hours", 12),
+            "configured_max_epochs": resource_by_id.get("q_experiment_runtime_caps", {}).get("configured_max_epochs", 200),
+        },
+        {
+            "question_id": "q_init_delivery_runtime_cap",
+            "question": "What larger walltime and epoch caps are allowed only for final delivery/submission-stage runs?",
+            "why_needed": "final delivery limits must not leak into exploratory cycles",
+            "blocks": ["final_delivery_resource_policy"],
+            "configured_delivery_max_run_hours": resource_by_id.get("q_delivery_runtime_caps", {}).get("configured_delivery_max_run_hours", 72),
+            "configured_delivery_max_epochs": resource_by_id.get("q_delivery_runtime_caps", {}).get("configured_delivery_max_epochs", 5000),
+        },
+        {
+            "question_id": "q_init_gpu_submission_permission",
+            "question": "May VibeResearch submit GPU/Slurm jobs automatically after adapter, budget, and readiness gates pass?",
+            "why_needed": "automatic GPU submission is high risk and must be explicitly authorized",
+            "blocks": ["automatic_submission_allowed"],
+            "default": "no",
+        },
+        {
+            "question_id": "q_init_budget_caps",
+            "question": "What daily, per-experiment, per-hypothesis, and total budget caps should VibeResearch enforce?",
+            "why_needed": "budget policy should be confirmed before queueing work",
+            "blocks": ["budget_policy"],
+            "configured_defaults": {
+                "daily_job_cap": budget.get("daily_job_cap"),
+                "daily_gpu_hour_cap": budget.get("daily_gpu_hour_cap"),
+                "per_experiment_gpu_hour_cap": budget.get("per_experiment_gpu_hour_cap"),
+                "per_hypothesis_gpu_hour_cap": budget.get("per_hypothesis_gpu_hour_cap"),
+                "total_gpu_hour_cap": budget.get("total_gpu_hour_cap"),
+            },
+        },
+        {
+            "question_id": "q_init_autonomy_level",
+            "question": "What autonomy level and automatic actions are allowed?",
+            "why_needed": "Codex must not choose autonomy boundaries for the user",
+            "blocks": ["autonomy_policy"],
+            "configured_level": autonomy.get("level", "analysis_only"),
+            "configured_automatic_actions": autonomy.get("allowed_automatic_actions", []),
+        },
+        {
+            "question_id": "q_init_primary_metric",
+            "question": "What is the trusted primary metric, direction, and required metric file schema?",
+            "why_needed": "trusted evidence and leaderboard updates require confirmed metric semantics",
+            "blocks": ["metrics_schema", "trusted_leaderboard"],
+            "configured_metric": stage.get("target_metric_improvement", {}).get("metric", "primary"),
+            "configured_direction": stage.get("target_metric_improvement", {}).get("direction", "max"),
+        },
+        {
+            "question_id": "q_init_protected_metrics",
+            "question": "Which protected metrics or guardrails must not regress, and what tolerances are allowed?",
+            "why_needed": "promotion must block harmful regressions even when the primary metric improves",
+            "blocks": ["stage_gate_policy", "promotion_policy"],
+            "configured_protected_metrics": stage.get("protected_metrics", {}),
+        },
+    ]
+
+
+def answer_research_question(paths: VibePaths, question_id: str, answer: str, *, confirm: bool = True, source: str = "user") -> dict[str, Any]:
+    files = research_paths(paths)
+    rows = read_jsonl(files["questions"])
+    now = utc_now()
+    found = False
+    updated: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("question_id") == question_id:
+            row["answer"] = answer
+            row["answer_source"] = source
+            row["status"] = "answered" if confirm else "open"
+            row["confirmed"] = bool(confirm)
+            row["updated_at"] = now
+            if confirm:
+                row["resolved_at"] = now
+            found = True
+        updated.append(row)
+    if not found:
+        updated.append(
+            {
+                "question_id": question_id,
+                "question": question_id.replace("_", " "),
+                "answer": answer,
+                "answer_source": source,
+                "status": "answered" if confirm else "open",
+                "confirmed": bool(confirm),
+                "created_at": now,
+                "updated_at": now,
+                "resolved_at": now if confirm else "",
+            }
+        )
+    write_text(files["questions"], "")
+    for row in updated:
+        append_jsonl(files["questions"], row)
+    append_research_event(paths, "research_question_answered", {"question_id": question_id, "confirmed": confirm, "source": source})
+    return next(row for row in updated if row.get("question_id") == question_id)
 
 
 def read_project_brief(paths: VibePaths) -> dict[str, str]:

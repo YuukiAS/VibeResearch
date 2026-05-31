@@ -124,6 +124,40 @@ def parse_gpu_names(output: str) -> list[str]:
     return names
 
 
+def parse_sinfo_partitions(output: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        parts = text.split(None, 1)
+        name = parts[0].replace("*", "").strip()
+        gres_raw = parts[1].strip() if len(parts) > 1 else ""
+        if not name:
+            continue
+        row: dict[str, Any] = {"name": name}
+        if gres_raw and gres_raw.lower() not in {"(null)", "n/a", "none"}:
+            row["gres_raw"] = gres_raw
+            template = sinfo_gres_template(gres_raw)
+            if template:
+                row["gres"] = template
+        rows.append(row)
+    return rows
+
+
+def sinfo_gres_template(gres_raw: str) -> str:
+    first = gres_raw.split(",", 1)[0].strip()
+    first = first.split("(", 1)[0].strip()
+    if not first.startswith("gpu"):
+        return ""
+    parts = first.split(":")
+    if len(parts) >= 3:
+        return f"gpu:{parts[1]}:{{gpu}}"
+    if len(parts) == 2 and not parts[1].isdigit():
+        return f"gpu:{parts[1]}:{{gpu}}"
+    return "gpu:{gpu}"
+
+
 def detect_config(paths: VibePaths, *, write: bool = True) -> dict[str, Any]:
     git = command_probe("git", ["rev-parse", "--show-toplevel"], cwd=paths.root)
     repo_root = git.get("stdout") if git.get("ok") and git.get("stdout") else str(paths.root)
@@ -139,6 +173,8 @@ def detect_config(paths: VibePaths, *, write: bool = True) -> dict[str, Any]:
     }
     nvidia = command_probe("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader"], cwd=paths.root)
     gpu_names = parse_gpu_names(str(nvidia.get("stdout", ""))) if nvidia.get("ok") else []
+    sinfo_partitions = parse_sinfo_partitions(str(commands["sinfo"].get("stdout", ""))) if commands["sinfo"].get("ok") else []
+    gres_by_partition = {row["name"]: row["gres"] for row in sinfo_partitions if row.get("gres")}
     detected = {
         "detected_at": utc_now(),
         "repo": {"root": str(repo_root), "vibe_root": str(paths.vibe)},
@@ -155,6 +191,7 @@ def detect_config(paths: VibePaths, *, write: bool = True) -> dict[str, Any]:
             "sinfo": commands["sinfo"],
             "squeue": commands["squeue"],
             "sacct": commands["sacct"],
+            "partitions": sinfo_partitions,
         },
         "gpu": {
             "nvidia_smi": nvidia,
@@ -164,7 +201,11 @@ def detect_config(paths: VibePaths, *, write: bool = True) -> dict[str, Any]:
         "directories": detect_directories(paths.root),
         "suggested_config": {
             "execution": {
-                "backend": "slurm" if any(commands[name].get("available") for name in ["sinfo", "squeue", "sbatch"]) else "local"
+                "backend": "slurm" if any(commands[name].get("available") for name in ["sinfo", "squeue", "sbatch"]) else "local",
+                "slurm": {
+                    "partitions": sinfo_partitions,
+                    "gres_by_partition": gres_by_partition,
+                },
             },
             "slurm": {"enabled": any(commands[name].get("available") for name in ["sinfo", "squeue", "sbatch"])},
         },

@@ -40,6 +40,13 @@ def invoke(*args: str, cwd: Path | None = None):
     return runner.invoke(app, list(args), catch_exceptions=False, env={}, prog_name="vibe")
 
 
+def answer_all_research_questions(root: Path) -> None:
+    for question in read_jsonl(root / ".vibe" / "research" / "questions.jsonl"):
+        if question.get("status", "open") == "open":
+            result = invoke("research", "answer", str(question["question_id"]), "--answer", "confirmed for test", "--target", str(root))
+            assert result.exit_code == 0
+
+
 def enable_toy_adapter(root: Path) -> None:
     (root / ".vibe" / "config.local.yaml").write_text("adapter:\n  kind: toy\n")
     paths = VibePaths(root)
@@ -196,13 +203,40 @@ def test_minimal_init_marks_missing_brief(tmp_path: Path):
     assert "project_brief_missing" in result.output
 
 
+def test_init_always_creates_resource_onboarding(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    questions = read_yaml(tmp_path / ".vibe" / "resources" / "policy_questions.yaml", {})
+    assert questions["status"] in {"needs_resource_answers", "configured_needs_confirmation"}
+    question_ids = {row["id"] for row in questions["questions"]}
+    assert {"q_resource_mode", "q_slurm_partitions", "q_slurm_gres", "q_experiment_runtime_caps", "q_delivery_runtime_caps", "q_gpu_submission_permission"} <= question_ids
+    detected = read_yaml(tmp_path / ".vibe" / "resources" / "detected.yaml", {})
+    assert "slurm" in detected
+    assert "gpu" in detected
+    assert (tmp_path / ".vibe" / "config.detected.yaml").exists()
+    research_questions = {row["question_id"] for row in read_jsonl(tmp_path / ".vibe" / "research" / "questions.jsonl")}
+    assert {
+        "q_init_resource_mode",
+        "q_init_queue_wait_limit",
+        "q_init_experiment_runtime_cap",
+        "q_init_delivery_runtime_cap",
+        "q_init_gpu_submission_permission",
+        "q_init_budget_caps",
+        "q_init_autonomy_level",
+        "q_init_primary_metric",
+        "q_init_protected_metrics",
+    } <= research_questions
+    answered = invoke("research", "answer", "q_init_budget_caps", "--answer", "daily 4 jobs, 8 gpu hours", "--target", str(tmp_path))
+    assert answered.exit_code == 0
+    assert any(row.get("question_id") == "q_init_budget_caps" and row.get("status") == "answered" for row in read_jsonl(tmp_path / ".vibe" / "research" / "questions.jsonl"))
+
+
 def test_config_commands_and_schema_validation(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path)).exit_code == 0
     result = invoke("config", "validate", "--target", str(tmp_path))
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.32" in show.output
+    assert "0.8.34" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -226,6 +260,8 @@ def test_config_detect_with_fake_slurm_and_gpu_commands(tmp_path: Path, monkeypa
     monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH','')}")
     detected = detect_config(VibePaths(tmp_path), write=True)
     assert detected["commands"]["sinfo"]["available"]
+    assert detected["slurm"]["partitions"] == [{"name": "gpu_short", "gres_raw": "gpu:a100:2", "gres": "gpu:a100:{gpu}"}]
+    assert detected["suggested_config"]["execution"]["slurm"]["gres_by_partition"] == {"gpu_short": "gpu:a100:{gpu}"}
     assert detected["gpu"]["count"] == 1
     assert (tmp_path / ".vibe" / "config.detected.yaml").exists()
     written = read_yaml(tmp_path / ".vibe" / "config.detected.yaml", {})
@@ -501,6 +537,7 @@ def test_v082_resume_clears_stale_question_block_after_answers(tmp_path: Path):
     for question in manifest.open_questions:
         result = invoke("adapter", "ask", "--target", str(tmp_path), "--id", question.id, "--answer", "confirmed for test", "--confirm")
         assert result.exit_code == 0
+    answer_all_research_questions(tmp_path)
     assert invoke("bootstrap", "resume", "--target", str(tmp_path)).exit_code == 0
 
     resumed = read_json(tmp_path / ".vibe" / "bootstrap" / "state.json", {})
@@ -1250,25 +1287,40 @@ def test_v0830_init_records_partition_wait_and_runtime_policy(tmp_path: Path):
         "a100-gpu",
         "--fallback-partition",
         "volta-gpu",
+        "--partition-gres",
+        "a100-gpu=gpu:nvidia_a100-pcie-40gb:{gpu}",
+        "--partition-gres",
+        "volta-gpu=gpu:tesla_v100-sxm2-16gb:{gpu}",
         "--max-pending-start-plus-run-hours",
         "12",
         "--max-run-hours",
         "8",
         "--mature-max-run-hours",
         "24",
+        "--delivery-max-run-hours",
+        "72",
         "--max-epochs",
         "120",
+        "--delivery-max-epochs",
+        "5000",
     )
     assert result.exit_code == 0
     config = read_yaml(tmp_path / ".vibe" / "config.yaml", {})
     assert config["execution"]["slurm"]["preferred_partitions"] == ["htzhulab"]
     assert config["execution"]["slurm"]["fallback_partitions"] == ["a100-gpu", "volta-gpu"]
+    assert config["execution"]["slurm"]["gres_by_partition"] == {
+        "a100-gpu": "gpu:nvidia_a100-pcie-40gb:{gpu}",
+        "volta-gpu": "gpu:tesla_v100-sxm2-16gb:{gpu}",
+    }
     assert config["execution"]["slurm"]["max_pending_start_plus_run_hours"] == 12
     assert config["scheduler"]["max_run_hours_per_experiment"] == 8
     assert config["scheduler"]["mature_max_run_hours_per_experiment"] == 24
+    assert config["scheduler"]["delivery_max_run_hours_per_experiment"] == 72
     assert config["scheduler"]["max_epochs_per_experiment"] == 120
+    assert config["scheduler"]["delivery_max_epochs_per_experiment"] == 5000
     budget = read_yaml(tmp_path / ".vibe" / "scheduler" / "budget.yaml", {})
     assert budget["fallback_partitions"] == ["a100-gpu", "volta-gpu"]
+    assert budget["delivery_max_run_hours_per_experiment"] == 72
 
 
 def test_v0830_resource_policy_removes_default_strict_and_caps_runtime():
@@ -1296,16 +1348,60 @@ def test_v0830_resource_policy_removes_default_strict_and_caps_runtime():
     assert normalized["max_pending_start_plus_run_hours"] == 12
 
 
-def test_v0831_render_sbatch_uses_partition_specific_gres(tmp_path: Path):
+def test_v0833_delivery_stage_uses_delivery_runtime_cap():
+    resources = {
+        "gpu": 1,
+        "time": "200:00:00",
+        "epochs": 10000,
+        "maturity": "delivery",
+    }
+    config = {
+        "scheduler": {
+            "max_run_hours_per_experiment": 8,
+            "mature_max_run_hours_per_experiment": 24,
+            "delivery_max_run_hours_per_experiment": 72,
+            "max_epochs_per_experiment": 120,
+            "mature_max_epochs_per_experiment": 1000,
+            "delivery_max_epochs_per_experiment": 5000,
+        }
+    }
+    normalized = normalize_run_resources(resources, config)
+    assert normalized["time"] == "72:00:00"
+    assert normalized["epochs"] == 5000
+    assert normalized["runtime_limits"]["max_run_hours"] == 72
+
+
+def test_v0833_render_sbatch_uses_explicit_partition_specific_gres(tmp_path: Path):
     manifest = {
         "run_id": "r001",
         "resources": {"gpu": 1, "cpus": 1, "mem_gb": 4, "time": "01:00:00"},
         "entrypoint": {"command": "python train.py"},
     }
-    a100 = render_sbatch(manifest, workdir=tmp_path, output=tmp_path / "out", error=tmp_path / "err", partition="a100-gpu", config={})
-    volta = render_sbatch(manifest, workdir=tmp_path, output=tmp_path / "out", error=tmp_path / "err", partition="volta-gpu", config={})
+    config = {
+        "execution": {
+            "slurm": {
+                "gres_by_partition": {
+                    "a100-gpu": "gpu:nvidia_a100-pcie-40gb:{gpu}",
+                    "volta-gpu": "gpu:tesla_v100-sxm2-16gb:{gpu}",
+                }
+            }
+        }
+    }
+    a100 = render_sbatch(manifest, workdir=tmp_path, output=tmp_path / "out", error=tmp_path / "err", partition="a100-gpu", config=config)
+    volta = render_sbatch(manifest, workdir=tmp_path, output=tmp_path / "out", error=tmp_path / "err", partition="volta-gpu", config=config)
     assert "#SBATCH --gres=gpu:nvidia_a100-pcie-40gb:1" in a100
     assert "#SBATCH --gres=gpu:tesla_v100-sxm2-16gb:1" in volta
+
+
+def test_v0833_named_gpu_partitions_are_examples_not_builtin_defaults(tmp_path: Path):
+    manifest = {
+        "run_id": "r001",
+        "resources": {"gpu": 1, "cpus": 1, "mem_gb": 4, "time": "01:00:00"},
+        "entrypoint": {"command": "python train.py"},
+    }
+    script = render_sbatch(manifest, workdir=tmp_path, output=tmp_path / "out", error=tmp_path / "err", partition="a100-gpu", config={})
+    assert "#SBATCH --gres=gpu:1" in script
+    assert "nvidia_a100" not in script
 
 
 def test_v0831_vibe_module_commands_use_current_python():
@@ -1480,7 +1576,7 @@ def test_v089_slurm_fallback_estimates_use_sbatch_test_only(tmp_path: Path, monk
     monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
     rows = backends.fallback_completion_estimates(
         {"sbatch_path": str(script), "resource_request": {"gpu": 1, "time": "04:00:00", "qos": "gpu_access"}},
-        {"execution": {"slurm": {}}},
+        {"execution": {"slurm": {"gres_by_partition": {"a100-gpu": "gpu:nvidia_a100-pcie-40gb:{gpu}"}}}},
         ["a100-gpu"],
     )
     assert rows == [{"partition": "a100-gpu", "estimated_start_plus_run_hours": 6.0, "source": "sbatch_test_only"}]

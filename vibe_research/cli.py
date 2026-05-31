@@ -69,6 +69,7 @@ from .research import deep_request, ingest_deep_research, literature_refresh, li
 from .reports import generate_alignment_after_changes, generate_dogfood_reports, write_portal_docs
 from .research_manager import (
     add_evidence,
+    answer_research_question,
     audit_registry,
     budget_status as research_budget_status,
     build_memory_pack,
@@ -155,10 +156,13 @@ def init(
     idea_file: Optional[Path] = typer.Option(None, "--idea-file", help="File containing initial ideas, one per line."),
     preferred_partition: list[str] = typer.Option([], "--preferred-partition", help="Preferred Slurm partition; may be repeated in priority order."),
     fallback_partition: list[str] = typer.Option([], "--fallback-partition", help="Fallback Slurm partition; may be repeated in priority order."),
+    partition_gres: list[str] = typer.Option([], "--partition-gres", help="Explicit Slurm GRES template as partition=gres, e.g. gpu_a100=gpu:a100:{gpu}. May be repeated."),
     max_pending_start_plus_run_hours: Optional[float] = typer.Option(None, "--max-pending-start-plus-run-hours", help="Maximum acceptable queued start plus requested runtime hours before fallback is preferred."),
     max_run_hours: Optional[float] = typer.Option(None, "--max-run-hours", help="Default per-experiment walltime cap for early runs."),
     mature_max_run_hours: Optional[float] = typer.Option(None, "--mature-max-run-hours", help="Relaxed per-experiment walltime cap for mature long-run capabilities."),
+    delivery_max_run_hours: Optional[float] = typer.Option(None, "--delivery-max-run-hours", help="Final delivery/submission walltime cap; only for explicitly marked delivery-stage runs."),
     max_epochs: Optional[int] = typer.Option(None, "--max-epochs", help="Default epoch cap advertised to generated run resources."),
+    delivery_max_epochs: Optional[int] = typer.Option(None, "--delivery-max-epochs", help="Final delivery/submission epoch cap; only for explicitly marked delivery-stage runs."),
 ) -> None:
     """Initialize `.vibe/` and root progress files in a target repo."""
 
@@ -183,12 +187,25 @@ def init(
         idea_file=idea_file,
         preferred_partitions=preferred_partition,
         fallback_partitions=fallback_partition,
+        partition_gres=parse_partition_gres_options(partition_gres),
         max_pending_start_plus_run_hours=max_pending_start_plus_run_hours,
         max_run_hours_per_experiment=max_run_hours,
         mature_max_run_hours_per_experiment=mature_max_run_hours,
+        delivery_max_run_hours_per_experiment=delivery_max_run_hours,
         max_epochs_per_experiment=max_epochs,
+        delivery_max_epochs_per_experiment=delivery_max_epochs,
     )
     console.print(f"Initialized VibeResearch at [bold]{p.root}[/bold]")
+
+
+def parse_partition_gres_options(values: list[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for value in values:
+        partition, sep, gres = value.partition("=")
+        if not sep or not partition.strip() or not gres.strip():
+            raise typer.BadParameter("--partition-gres must use partition=gres-template")
+        result[partition.strip()] = gres.strip()
+    return result
 
 
 @app.command("vendor-runtime")
@@ -479,6 +496,21 @@ def research_audit_cmd(target: Path = typer.Option(Path("."), "--target", "-t"))
     console.print_json(data=result)
     if not result.get("ok"):
         raise typer.Exit(1)
+
+
+@research_app.command("answer")
+def research_answer_cmd(
+    question_id: str = typer.Argument(...),
+    answer: str = typer.Option(..., "--answer"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    confirm: bool = typer.Option(True, "--confirm/--no-confirm"),
+) -> None:
+    """Record a user answer for an initialization or research policy question."""
+
+    p = paths(target)
+    row = answer_research_question(p, question_id, answer, confirm=confirm)
+    sync_dashboard(p)
+    console.print_json(data=row)
 
 
 @hypothesis_app.command("create")

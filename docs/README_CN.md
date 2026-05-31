@@ -60,6 +60,30 @@ vibe init \
   --background "项目背景、数据、指标、算力限制和当前基线"
 ```
 
+GPU/Slurm 资源策略会默认初始化。`vibe init` 会写入 `.vibe/resources/` 和
+`.vibe/config.detected.yaml`，但 VibeResearch 不会根据 `a100-gpu`、`volta-gpu`
+这样的名字推断具体 GPU 型号。接入时应先查看目标集群，再把确认后的策略写入初始化参数：
+
+```bash
+sinfo -h -o "%P %G"
+
+vibe init \
+  --goal "..." \
+  --background "..." \
+  --preferred-partition lab-gpu \
+  --fallback-partition a100-gpu \
+  --partition-gres 'a100-gpu=gpu:nvidia_a100-pcie-40gb:{gpu}' \
+  --max-pending-start-plus-run-hours 12 \
+  --max-run-hours 8 \
+  --max-epochs 120 \
+  --delivery-max-run-hours 72 \
+  --delivery-max-epochs 5000
+```
+
+这里的分区名只是示例。实际应使用目标机器上 `sinfo` 返回的名称和 GRES 写法。
+如果项目只使用本地或 CPU，也应该在资源问题中明确记录，而不是跳过资源初始化。
+普通运行时长限制用于探索阶段实验；交付运行时长限制只用于显式标记为最终交付或提交阶段的 run。
+
 查看当前状态：
 
 ```bash

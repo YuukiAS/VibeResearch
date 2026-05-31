@@ -23,7 +23,7 @@ from .adapter_schema import AdapterCapability, AdapterManifest, ArtifactRules, M
 from .discovery import discover_files, relative_files
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text, write_yaml
 from .paths import VibePaths
-from .research_manager import export_research_dashboard, policy_completeness, render_daily_memo, research_init, research_readiness
+from .research_manager import answer_research_question, export_research_dashboard, policy_completeness, render_daily_memo, research_init, research_readiness
 from .script_bootstrap import bootstrap_script_plan, script_readiness_matrix
 
 
@@ -351,6 +351,11 @@ def run_questions_phase(paths: VibePaths, state: dict[str, Any]) -> None:
     completeness = policy_completeness(paths)
     for issue in completeness.get("issues", []):
         blockers.append(f"policy question required: {issue}")
+    for row in read_jsonl(paths.research / "questions.jsonl"):
+        if row.get("status", "open") == "open":
+            qid = row.get("question_id", "unknown")
+            question_ids.append(qid)
+            blockers.append(f"answer research question {qid}: {row.get('question', qid)}")
     conflicts = scan_context(paths).get("warnings", [])
     for warning in conflicts:
         qid = "q_readme_agents_conflict"
@@ -669,6 +674,9 @@ def apply_bootstrap_answers(paths: VibePaths) -> None:
             question.updated_at = utc_now()
         write_adapter_manifest(paths, manifest)
         write_yaml(paths.vibe / "adapter_questions.yaml", {"questions": [q.model_dump() for q in manifest.open_questions]})
+        for row in read_jsonl(paths.research / "questions.jsonl"):
+            if row.get("status", "open") == "open":
+                answer_research_question(paths, str(row.get("question_id", "")), "confirmed by dogfood bootstrap answers", source=".vibe_bootstrap_answers.yaml")
 
 
 def run_dogfood(paths: VibePaths, *, profile: str = "0.8.8-happy-path", external_repo: Path | None = None, brief_file: Path | None = None, output_report: Path | None = None, dry_run: bool = False) -> dict[str, Any]:

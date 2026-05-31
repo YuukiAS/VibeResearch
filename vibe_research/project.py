@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+import os
 from pathlib import Path
 import sys
 from typing import Any
 
 from .adapter_onboarding import adapter_readiness, bootstrap_adapter_on_init, clear_adapter_block_if_ready, set_adapter_block, write_real_experiment_gap_report
 from .dashboard import sync_dashboard
-from .config import load_config, write_config_schema
+from .config import command_probe, load_config, parse_gpu_names, parse_sinfo_partitions, write_config_schema
 from .decisions import write_block_decision
 from .ideas import create_idea as create_pool_idea
 from .ideas import ensure_idea_pool
@@ -36,6 +38,7 @@ DIRS = [
     "leaderboard/snapshots",
     "scheduler",
     "executor/templates",
+    "resources",
     "research/deep_requests",
     "policies",
     "memos",
@@ -68,6 +71,8 @@ RECOVERABLE_RESOURCE_BLOCKS = {
     "blocked_resource_policy",
 }
 
+_RESOURCE_PROBE_CACHE: dict[str, dict[str, Any]] = {}
+
 
 def init_project(
     target: str | Path = ".",
@@ -84,10 +89,13 @@ def init_project(
     idea_file: str | Path | None = None,
     preferred_partitions: list[str] | None = None,
     fallback_partitions: list[str] | None = None,
+    partition_gres: dict[str, str] | None = None,
     max_pending_start_plus_run_hours: float | None = None,
     max_run_hours_per_experiment: float | None = None,
     mature_max_run_hours_per_experiment: float | None = None,
+    delivery_max_run_hours_per_experiment: float | None = None,
     max_epochs_per_experiment: int | None = None,
+    delivery_max_epochs_per_experiment: int | None = None,
 ) -> VibePaths:
     paths = VibePaths(target)
     ensure_dir(paths.root)
@@ -111,10 +119,13 @@ def init_project(
         config_data,
         preferred_partitions=preferred_partitions or [],
         fallback_partitions=fallback_partitions or [],
+        partition_gres=partition_gres or {},
         max_pending_start_plus_run_hours=max_pending_start_plus_run_hours,
         max_run_hours_per_experiment=max_run_hours_per_experiment,
         mature_max_run_hours_per_experiment=mature_max_run_hours_per_experiment,
+        delivery_max_run_hours_per_experiment=delivery_max_run_hours_per_experiment,
         max_epochs_per_experiment=max_epochs_per_experiment,
+        delivery_max_epochs_per_experiment=delivery_max_epochs_per_experiment,
     )
     config_data.setdefault("portal", {})["root_mode"] = root_portal
     config_data.setdefault("execution", {}).setdefault("python", {})["executable"] = sys.executable
@@ -133,6 +144,7 @@ def init_project(
         "run_contracts/\n",
     )
     write_config_schema(paths)
+    resource_init = initialize_resource_environment(paths, config_data)
 
     state = default_state()
     state["updated_at"] = utc_now()
@@ -177,8 +189,10 @@ def init_project(
         "max_walltime_hours_per_cycle",
         "max_run_hours_per_experiment",
         "mature_max_run_hours_per_experiment",
+        "delivery_max_run_hours_per_experiment",
         "max_epochs_per_experiment",
         "mature_max_epochs_per_experiment",
+        "delivery_max_epochs_per_experiment",
         "max_failed_runs_before_pause",
         "prequeue_when_capacity_full",
         "max_prequeued_runs_when_full",
@@ -211,6 +225,7 @@ def init_project(
         autonomy_level=config_data.get("research", {}).get("autonomy_level", "analysis_only"),
     )
     record_event(paths, "initialized", "Initialized VibeResearch control layer", status="ok")
+    record_event(paths, "resource_policy_initialized", "Initialized GPU/Slurm resource onboarding", status=resource_init["status"], payload=resource_init)
     sync_dashboard(paths)
     if root_portal != "none":
         build_portal(paths, mode=root_portal, force=force)
@@ -224,10 +239,13 @@ def apply_init_resource_policy(
     *,
     preferred_partitions: list[str],
     fallback_partitions: list[str],
+    partition_gres: dict[str, str],
     max_pending_start_plus_run_hours: float | None,
     max_run_hours_per_experiment: float | None,
     mature_max_run_hours_per_experiment: float | None,
+    delivery_max_run_hours_per_experiment: float | None,
     max_epochs_per_experiment: int | None,
+    delivery_max_epochs_per_experiment: int | None,
 ) -> None:
     execution_slurm = config_data.setdefault("execution", {}).setdefault("slurm", {})
     root_slurm = config_data.setdefault("slurm", {})
@@ -240,6 +258,19 @@ def apply_init_resource_policy(
     if fallback_partitions:
         execution_slurm["fallback_partitions"] = fallback_partitions
         root_slurm["fallback_partitions"] = fallback_partitions
+    if partition_gres:
+        execution_slurm["gres_by_partition"] = dict(partition_gres)
+        root_slurm["gres_by_partition"] = dict(partition_gres)
+        profiles = [row for row in execution_slurm.get("partitions", []) if isinstance(row, dict)]
+        by_name = {row.get("name"): row for row in profiles if row.get("name")}
+        for name, gres in partition_gres.items():
+            row = by_name.get(name)
+            if row is None:
+                row = {"name": name}
+                profiles.append(row)
+                by_name[name] = row
+            row["gres"] = gres
+        execution_slurm["partitions"] = profiles
     if max_pending_start_plus_run_hours is not None:
         execution_slurm["max_pending_start_plus_run_hours"] = max_pending_start_plus_run_hours
         root_slurm["max_pending_start_plus_run_hours"] = max_pending_start_plus_run_hours
@@ -247,8 +278,170 @@ def apply_init_resource_policy(
         scheduler["max_run_hours_per_experiment"] = max_run_hours_per_experiment
     if mature_max_run_hours_per_experiment is not None:
         scheduler["mature_max_run_hours_per_experiment"] = mature_max_run_hours_per_experiment
+    if delivery_max_run_hours_per_experiment is not None:
+        scheduler["delivery_max_run_hours_per_experiment"] = delivery_max_run_hours_per_experiment
     if max_epochs_per_experiment is not None:
         scheduler["max_epochs_per_experiment"] = max_epochs_per_experiment
+    if delivery_max_epochs_per_experiment is not None:
+        scheduler["delivery_max_epochs_per_experiment"] = delivery_max_epochs_per_experiment
+
+
+def initialize_resource_environment(paths: VibePaths, config_data: dict[str, Any]) -> dict[str, Any]:
+    """Create default resource discovery and confirmation files for every init."""
+
+    probes = resource_probe(paths)
+    sinfo = probes["sinfo"]
+    nvidia = probes["nvidia-smi"]
+    partitions = parse_sinfo_partitions(str(sinfo.get("stdout", ""))) if sinfo.get("ok") else []
+    gpu_models = parse_gpu_names(str(nvidia.get("stdout", ""))) if nvidia.get("ok") else []
+    gres_by_partition = {row["name"]: row["gres"] for row in partitions if row.get("gres")}
+    detected = {
+        "detected_at": utc_now(),
+        "commands": {
+            "sinfo": sinfo,
+            "nvidia-smi": nvidia,
+        },
+        "slurm": {
+            "available": bool(sinfo.get("available")),
+            "probe_ok": bool(sinfo.get("ok")),
+            "partitions": partitions,
+            "suggested_gres_by_partition": gres_by_partition,
+        },
+        "gpu": {
+            "available": bool(nvidia.get("available")),
+            "probe_ok": bool(nvidia.get("ok")),
+            "count": len(gpu_models),
+            "models": gpu_models,
+        },
+    }
+    write_yaml(paths.vibe / "config.detected.yaml", {"resource_detection": detected, "suggested_config": {"execution": {"slurm": {"partitions": partitions, "gres_by_partition": gres_by_partition}}}})
+    write_yaml(paths.vibe / "resources" / "detected.yaml", detected)
+    questions = resource_policy_questions(config_data, detected)
+    status = "configured_needs_confirmation" if resource_policy_has_gpu_config(config_data) else "needs_resource_answers"
+    payload = {
+        "status": status,
+        "created_at": utc_now(),
+        "principles": [
+            "GPU/Slurm policy is initialized for every project.",
+            "Partition names do not imply GPU model or GRES.",
+            "Automatic GPU/Slurm submission remains disabled until policy and adapter readiness allow it.",
+        ],
+        "configured": {
+            "execution_slurm": config_data.get("execution", {}).get("slurm", {}),
+            "scheduler": config_data.get("scheduler", {}),
+        },
+        "detected": detected,
+        "questions": questions,
+    }
+    write_yaml(paths.vibe / "resources" / "policy_questions.yaml", payload)
+    write_text(paths.vibe / "resources" / "README.md", render_resource_readme(payload))
+    return payload
+
+
+def resource_probe(paths: VibePaths) -> dict[str, Any]:
+    cache_key = os.environ.get("PATH", "")
+    cached = _RESOURCE_PROBE_CACHE.get(cache_key)
+    if cached is not None:
+        return deepcopy(cached)
+    probes = {
+        "sinfo": command_probe("sinfo", ["-h", "-o", "%P %G"], cwd=paths.root, timeout=3),
+        "nvidia-smi": command_probe("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader"], cwd=paths.root, timeout=3),
+    }
+    _RESOURCE_PROBE_CACHE[cache_key] = deepcopy(probes)
+    return probes
+
+
+def resource_policy_has_gpu_config(config_data: dict[str, Any]) -> bool:
+    slurm = config_data.get("execution", {}).get("slurm", {}) if isinstance(config_data.get("execution"), dict) else {}
+    return bool(slurm.get("preferred_partitions") or slurm.get("fallback_partitions") or slurm.get("gres_by_partition") or slurm.get("partitions"))
+
+
+def resource_policy_questions(config_data: dict[str, Any], detected: dict[str, Any]) -> list[dict[str, Any]]:
+    slurm = config_data.get("execution", {}).get("slurm", {}) if isinstance(config_data.get("execution"), dict) else {}
+    scheduler = config_data.get("scheduler", {}) if isinstance(config_data.get("scheduler"), dict) else {}
+    suggested_partitions = [row.get("name", "") for row in detected.get("slurm", {}).get("partitions", []) if row.get("name")]
+    return [
+        {
+            "id": "q_resource_mode",
+            "question": "Will this project use GPU/Slurm execution, local CPU execution, or both?",
+            "default": "gpu_slurm_if_available",
+            "current_answer": "",
+            "blocks": ["automatic_gpu_submission", "slurm_resource_plan_selection"],
+        },
+        {
+            "id": "q_slurm_partitions",
+            "question": "Which Slurm partitions should be preferred and which should be fallback?",
+            "detected_candidates": suggested_partitions,
+            "configured_preferred": slurm.get("preferred_partitions", []),
+            "configured_fallback": slurm.get("fallback_partitions", []),
+            "current_answer": "",
+            "blocks": ["partition_selection", "fallback_requeue_policy"],
+        },
+        {
+            "id": "q_slurm_gres",
+            "question": "What exact GRES template should be used for each GPU partition?",
+            "detected_suggestions": detected.get("slurm", {}).get("suggested_gres_by_partition", {}),
+            "configured_gres_by_partition": slurm.get("gres_by_partition", {}),
+            "example_format": "partition-name=gpu:gpu_type:{gpu}",
+            "current_answer": "",
+            "blocks": ["gpu_sbatch_rendering"],
+        },
+        {
+            "id": "q_slurm_wait_limit",
+            "question": "How long may a queued job wait, including requested runtime, before preferring fallback?",
+            "configured_hours": slurm.get("max_pending_start_plus_run_hours", 24),
+            "examples": [12, 24],
+            "current_answer": "",
+            "blocks": ["fallback_partition_policy"],
+        },
+        {
+            "id": "q_experiment_runtime_caps",
+            "question": "What walltime and epoch caps should exploratory/ordinary experiments obey?",
+            "configured_max_run_hours": scheduler.get("max_run_hours_per_experiment", 12),
+            "configured_max_epochs": scheduler.get("max_epochs_per_experiment", 200),
+            "current_answer": "",
+            "blocks": ["run_resource_normalization"],
+        },
+        {
+            "id": "q_delivery_runtime_caps",
+            "question": "What larger walltime and epoch caps are allowed only for final delivery/submission-stage runs?",
+            "configured_delivery_max_run_hours": scheduler.get("delivery_max_run_hours_per_experiment", 72),
+            "configured_delivery_max_epochs": scheduler.get("delivery_max_epochs_per_experiment", 5000),
+            "only_applies_when_maturity_is_one_of": ["delivery", "submission", "submit", "final", "final_delivery", "production_delivery"],
+            "current_answer": "",
+            "blocks": ["final_delivery_resource_policy"],
+        },
+        {
+            "id": "q_gpu_submission_permission",
+            "question": "May VibeResearch submit GPU/Slurm jobs automatically after adapter and contract gates pass?",
+            "default": "no",
+            "current_answer": "",
+            "blocks": ["automatic_submission_allowed"],
+        },
+    ]
+
+
+def render_resource_readme(payload: dict[str, Any]) -> str:
+    detected = payload.get("detected", {})
+    slurm = detected.get("slurm", {})
+    gpu = detected.get("gpu", {})
+    lines = [
+        "# Resource Initialization",
+        "",
+        "VibeResearch initializes GPU/Slurm resource policy for every project, even when the final answer is CPU-only.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Slurm detected: `{slurm.get('available', False)}`; probe ok: `{slurm.get('probe_ok', False)}`",
+        f"- GPU detected: `{gpu.get('available', False)}`; probe ok: `{gpu.get('probe_ok', False)}`; count: `{gpu.get('count', 0)}`",
+        "",
+        "Partition names are examples, not hardware truth. Confirm exact GRES templates from the target cluster before enabling GPU submission.",
+        "",
+        "## Questions",
+    ]
+    for question in payload.get("questions", []):
+        lines.append(f"- `{question.get('id')}`: {question.get('question')}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def touch_jsonl(path: Path) -> None:
@@ -414,7 +607,7 @@ cd {{ workdir }}
 """,
     )
     write_text(paths.templates / "run_status.md.j2", "# Run {{ run_id }}\n\nStatus: {{ status }}\n")
-    for name in ["slurm_gpu_short.sbatch.j2", "slurm_gpu_long.sbatch.j2"]:
+    for name in ["slurm_gpu_example.sbatch.j2", "slurm_long_run_example.sbatch.j2"]:
         write_text(paths.templates / name, (paths.templates / "slurm_default.sbatch.j2").read_text())
 
 

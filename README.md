@@ -70,6 +70,34 @@ vibe init \
   --background "Project context, data, metrics, compute limits, and current baseline"
 ```
 
+GPU/Slurm resource policy is initialized by default. VibeResearch writes
+`.vibe/resources/` and `.vibe/config.detected.yaml` during `vibe init`, but it
+does not assume that names such as `a100-gpu` or `volta-gpu` imply a specific
+GPU model. During onboarding, inspect the target cluster and pass the selected
+policy explicitly when it is known:
+
+```bash
+sinfo -h -o "%P %G"
+
+vibe init \
+  --goal "..." \
+  --background "..." \
+  --preferred-partition lab-gpu \
+  --fallback-partition a100-gpu \
+  --partition-gres 'a100-gpu=gpu:nvidia_a100-pcie-40gb:{gpu}' \
+  --max-pending-start-plus-run-hours 12 \
+  --max-run-hours 8 \
+  --max-epochs 120 \
+  --delivery-max-run-hours 72 \
+  --delivery-max-epochs 5000
+```
+
+The partition names above are examples only. Use the names and GRES templates
+reported by the target site. If the project is CPU-only, record that answer in
+the resource questions rather than skipping resource initialization. The normal
+runtime cap is for exploratory experiments; the delivery cap is only for
+explicitly marked final delivery or submission-stage runs.
+
 Inspect the state:
 
 ```bash

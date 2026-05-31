@@ -24,8 +24,8 @@ def render_sbatch(
     resources = manifest.get("resources", {})
     config = config or {}
     slurm = config.get("execution", {}).get("slurm", {}) or config.get("slurm", {})
-    partitions = resources.get("preferred_partitions") or [slurm.get("default_partition", "gpu_short")]
-    selected_partition = partition or partitions[0]
+    partitions = resources.get("preferred_partitions") or ([slurm.get("default_partition")] if slurm.get("default_partition") else [])
+    selected_partition = partition or (partitions[0] if partitions else "")
     gres = slurm_gres_for_partition(selected_partition, {"resource_request": resources}, config)
     account = resources.get("account") or slurm.get("account", "")
     qos = resources.get("qos") or slurm.get("qos", "")
@@ -33,7 +33,7 @@ def render_sbatch(
         [line for line in [
             "#!/usr/bin/env bash",
             f"#SBATCH --job-name={manifest.get('run_id', 'vibe')}",
-            f"#SBATCH --partition={selected_partition}",
+            f"#SBATCH --partition={selected_partition}" if selected_partition else "",
             "#SBATCH --nodes=1",
             "#SBATCH --ntasks=1",
             f"#SBATCH --cpus-per-task={resources.get('cpus', 1)}",
@@ -86,11 +86,7 @@ def slurm_gres_for_partition(partition: str, launch: dict[str, Any], config: dic
     profile_gres = profiles.get(partition, {}).get("gres")
     if profile_gres:
         return str(profile_gres).format(gpu=gpu)
-    known = {
-        "a100-gpu": "gpu:nvidia_a100-pcie-40gb:{gpu}",
-        "volta-gpu": "gpu:tesla_v100-sxm2-16gb:{gpu}",
-    }
-    return known.get(partition, "gpu:{gpu}").format(gpu=gpu)
+    return "gpu:{gpu}".format(gpu=gpu)
 
 
 def select_partition(manifest: dict[str, Any], config: dict[str, Any]) -> str:
@@ -104,11 +100,15 @@ def choose_partition(manifest: dict[str, Any], config: dict[str, Any]) -> tuple[
     execution_slurm = config.get("execution", {}).get("slurm", {})
     if resources.get("force_partition"):
         return str(resources["force_partition"]), "forced_partition"
-    if not preferred:
-        preferred = [execution_slurm.get("default_partition", "gpu_short")]
+    if not preferred and execution_slurm.get("default_partition"):
+        preferred = [execution_slurm["default_partition"]]
     if resources.get("strict_preferred_partition") or resources.get("prefer_configured_partition"):
+        if not preferred:
+            return "", "strict_preferred_partition_missing"
         return preferred[0], "strict_preferred_partition"
     candidates = preferred + [p for p in fallback if p not in preferred]
+    if not candidates:
+        return "", "no_partition_configured"
     available, reason = probe_available_partitions()
     if available:
         for name in candidates:

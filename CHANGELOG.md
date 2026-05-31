@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## 0.8.34 - 2026-05-30
+
+- Promote initialization policy decisions into the default research question
+  flow: resource mode, queue wait limits, ordinary experiment runtime caps,
+  final delivery/submission runtime caps, GPU submission permission, budget
+  caps, autonomy level, primary metric schema, and protected metrics.
+- Add `vibe research answer <question_id> --answer ...` so Codex can record
+  user-provided answers without inventing them or manually editing JSONL files.
+- Make bootstrap question gating include open research policy questions, not
+  only adapter questions and policy-file completeness.
+
+## 0.8.33 - 2026-05-30
+
+- Remove built-in partition-name-to-GRES assumptions from Slurm rendering; GPU
+  model-specific GRES strings now come only from run resources, project config,
+  or explicit partition profiles.
+- Add `vibe init --partition-gres partition=gres-template` so onboarding agents
+  can write target-cluster GRES policy during initialization.
+- Initialize GPU/Slurm resource onboarding for every project by writing
+  `.vibe/resources/detected.yaml`, `.vibe/resources/policy_questions.yaml`, and
+  `.vibe/resources/README.md` during `vibe init`.
+- Split ordinary experiment runtime caps from final delivery/submission runtime
+  caps via `--delivery-max-run-hours` and `--delivery-max-epochs`; delivery caps
+  only apply to runs explicitly marked as delivery/submission/final maturity.
+- Extend config detection to parse `sinfo -h -o "%P %G"` into suggested Slurm
+  partition profiles without automatically trusting or applying them.
+- Update onboarding docs to require target-cluster Slurm/GPU discovery before
+  choosing preferred/fallback partitions, wait limits, runtime caps, and epoch
+  caps.
+
 ## 0.8.32 - 2026-05-30
 
 - Normalize null adapter capability mapping/list fields during partial manifest

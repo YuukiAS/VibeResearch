@@ -32,6 +32,10 @@ bootstrap loop directly:
 - install from `https://github.com/YuukiAS/VibeResearch.git`, not by copying a
   local development checkout;
 - ask for the target repo path plus required project goal/background if missing;
+- do not answer user-policy questions yourself; for goals, budget, Slurm/GPU
+  permission, queue wait limits, exploratory experiment runtime caps, final
+  delivery runtime caps, autonomy, trusted metrics, or submission/upload
+  permission, stop and restate the question for the user;
 - run `vibe init`, `vibe bootstrap init`, `vibe bootstrap run`, and
   `vibe bootstrap doctor`;
 - summarize blocker questions in small batches, write the user's answers into

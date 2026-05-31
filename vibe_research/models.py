@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.8.32"
+    vibe_version: str = "0.8.34"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -41,18 +41,14 @@ class ProjectConfig(BaseModel):
             },
             "slurm": {
                 "enabled": True,
-                "default_partition": "gpu_short",
-                "fallback_partitions": ["gpu", "a100", "general_gpu"],
+                "default_partition": "",
+                "fallback_partitions": [],
                 "account": "",
                 "qos": "",
                 "max_pending_start_plus_run_hours": 24,
                 "auto_requeue_to_better_fallback": False,
-                "partitions": [
-                    {"name": "gpu_short", "priority": 100, "max_time": "08:00:00", "gpu": "generic"},
-                    {"name": "gpu", "priority": 80, "max_time": "24:00:00", "gpu": "generic"},
-                    {"name": "a100", "priority": 70, "max_time": "24:00:00", "gpu": "a100"},
-                    {"name": "general_gpu", "priority": 50, "max_time": "24:00:00", "gpu": "generic"},
-                ],
+                "partitions": [],
+                "gres_by_partition": {},
             },
         }
     )
@@ -75,8 +71,10 @@ class ProjectConfig(BaseModel):
             "max_walltime_hours_per_cycle": 48,
             "max_run_hours_per_experiment": 12,
             "mature_max_run_hours_per_experiment": 24,
+            "delivery_max_run_hours_per_experiment": 72,
             "max_epochs_per_experiment": 200,
             "mature_max_epochs_per_experiment": 1000,
+            "delivery_max_epochs_per_experiment": 5000,
             "max_failed_runs_before_pause": 3,
             "queue_policy": "priority_then_resource_fit",
             "prequeue_when_capacity_full": True,
@@ -87,11 +85,12 @@ class ProjectConfig(BaseModel):
     slurm: dict[str, Any] = Field(
         default_factory=lambda: {
             "enabled": True,
-            "default_partition": "gpu_short",
-            "fallback_partitions": ["gpu", "a100", "general_gpu"],
+            "default_partition": "",
+            "fallback_partitions": [],
             "account": "",
             "qos": "",
             "max_pending_start_plus_run_hours": 24,
+            "gres_by_partition": {},
         }
     )
     leaderboard: dict[str, Any] = Field(
@@ -219,8 +218,8 @@ class RunManifest(BaseModel):
             "cpus": 1,
             "mem_gb": 4,
             "time": "01:00:00",
-            "preferred_partitions": ["gpu_short"],
-            "fallback_partitions": ["gpu", "a100", "general_gpu"],
+            "preferred_partitions": [],
+            "fallback_partitions": [],
         }
     )
     dependencies: dict[str, Any] = Field(default_factory=lambda: {"run_after": [], "cancel_if_failed": []})
@@ -262,14 +261,16 @@ def default_budget() -> dict[str, Any]:
         "max_walltime_hours_per_cycle": 48,
         "max_run_hours_per_experiment": 12,
         "mature_max_run_hours_per_experiment": 24,
+        "delivery_max_run_hours_per_experiment": 72,
         "max_epochs_per_experiment": 200,
         "mature_max_epochs_per_experiment": 1000,
+        "delivery_max_epochs_per_experiment": 5000,
         "max_failed_runs_before_pause": 3,
         "queue_policy": "priority_then_resource_fit",
         "prequeue_when_capacity_full": True,
         "max_prequeued_runs_when_full": 1,
         "allow_strict_preferred_partition": False,
         "partition_priority": {},
-        "fallback_partitions": ["gpu", "a100", "general_gpu"],
+        "fallback_partitions": [],
         "cancel_rules": [],
     }
