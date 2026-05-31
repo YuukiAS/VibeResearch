@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.9.2 - 2026-05-31
+
+- Add dual-track portfolio records for `external`, `internal`, and `hybrid`
+  experiments under `.vibe/research/tracks/`.
+- Add `vibe portfolio track-plan`, `compare-plan`, `track-audit`,
+  `track-budget`, and `track-memo` for generic parallel external/internal
+  planning.
+- Gate internal promotion on external baselines, comparable metrics, trusted
+  evidence, protected metric checks, non-empty design diffs, pseudo-internal
+  detection, and configured track budget ratios.
+
 ## 0.9.1 - 2026-05-31
 
 - Add offline scout finding, triage, claim, query-context, audit, and memo

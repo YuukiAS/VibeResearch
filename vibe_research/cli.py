@@ -51,6 +51,7 @@ from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .dashboard_site import build_dashboard_site, serve_dashboard_site
 from .decisions import decision_json, make_decision, validate_decision_file, write_block_decision, write_decision
 from .directions import set_direction_status
+from .dual_track import create_track_experiment, parallel_comparison_plan, track_budget_audit, track_memo, track_transition_audit
 from .external_resources import analyze_external_repo, clone_external_repo
 from .git_ops import abandon_run, create_branch, git_available, git_current_branch, git_diff_text, merge_review, merge_run, protected_diff_paths
 from .ideas import archive_idea as archive_pool_idea
@@ -792,6 +793,82 @@ def portfolio_audit_cmd(target: Path = typer.Option(Path("."), "--target", "-t")
     console.print_json(data=result)
     if not result.get("ok"):
         raise typer.Exit(1)
+
+
+@portfolio_app.command("track-plan")
+def portfolio_track_plan_cmd(
+    experiment_id: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    track: str = typer.Option(..., "--track"),
+    internalization_level: str = typer.Option("external_only", "--internalization-level"),
+    external_baseline_asset_id: str = typer.Option("", "--external-baseline-asset-id"),
+    metrics_comparable: bool = typer.Option(False, "--metrics-comparable"),
+    design_diff: list[str] = typer.Option([], "--design-diff"),
+    protected_metric_passed: bool = typer.Option(True, "--protected-metric-passed/--protected-metric-failed"),
+    trusted_evidence_id: list[str] = typer.Option([], "--trusted-evidence-id"),
+    gpu_hours: float = typer.Option(0.0, "--gpu-hours"),
+    pseudo_internalization: bool = typer.Option(False, "--pseudo-internalization"),
+    pseudo_internalization_reason: str = typer.Option("", "--pseudo-internalization-reason"),
+) -> None:
+    """Attach external/internal/hybrid track metadata to an experiment."""
+
+    result = create_track_experiment(
+        paths(target),
+        experiment_id=experiment_id,
+        track=track,
+        internalization_level=internalization_level,
+        external_baseline_asset_id=external_baseline_asset_id,
+        metrics_comparable=metrics_comparable,
+        design_diff={"changes": design_diff} if design_diff else {},
+        protected_metric_gate={"passed": protected_metric_passed},
+        trusted_evidence_ids=trusted_evidence_id,
+        resource_units={"gpu_hours": gpu_hours},
+        pseudo_internalization=pseudo_internalization,
+        pseudo_internalization_reason=pseudo_internalization_reason,
+    )
+    console.print_json(data=result)
+
+
+@portfolio_app.command("compare-plan")
+def portfolio_compare_plan_cmd(
+    track_record_id: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    comparison_stage: str = typer.Option("smoke", "--comparison-stage"),
+) -> None:
+    """Create a parallel comparison plan against the external baseline."""
+
+    result = parallel_comparison_plan(paths(target), track_record_id, comparison_stage=comparison_stage)
+    console.print_json(data=result)
+    if result.get("blocked"):
+        raise typer.Exit(1)
+
+
+@portfolio_app.command("track-audit")
+def portfolio_track_audit_cmd(
+    track_record_id: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    target_level: str = typer.Option("shadow_internal", "--target-level"),
+) -> None:
+    """Audit dual-track transition readiness for an experiment."""
+
+    result = track_transition_audit(paths(target), track_record_id, target_level=target_level)
+    console.print_json(data=result)
+    if not result.get("can_transition"):
+        raise typer.Exit(1)
+
+
+@portfolio_app.command("track-budget")
+def portfolio_track_budget_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Audit configured budget ratios by track."""
+
+    console.print_json(data=track_budget_audit(paths(target)))
+
+
+@portfolio_app.command("track-memo")
+def portfolio_track_memo_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Render daily dual-track portfolio status."""
+
+    console.print_json(data=track_memo(paths(target)))
 
 
 @external_app.command("clone-repo")
