@@ -251,12 +251,14 @@ def parse_slurm_workdir(text: str) -> str:
 def slurm_wait_evidence(job_id: str, launch: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     resource = launch.get("resource_request") or {}
     fallback_partitions = list(resource.get("fallback_partitions") or config.get("execution", {}).get("slurm", {}).get("fallback_partitions", []))
+    candidates = wait_candidate_partitions(launch, config, fallback_partitions)
     evidence: dict[str, Any] = {
         "squeue_start_stdout": "",
         "squeue_start_stderr": "",
         "requested_walltime": str(resource.get("time", "")),
         "preferred_partition": launch.get("partition", ""),
         "fallback_partitions": fallback_partitions,
+        "candidate_partitions": candidates,
     }
     start = subprocess.run(["squeue", "--start", "-j", job_id, "-h", "-o", "%S"], text=True, capture_output=True, check=False)
     evidence["squeue_start_stdout"] = start.stdout.strip()
@@ -269,43 +271,103 @@ def slurm_wait_evidence(job_id: str, launch: dict[str, Any], config: dict[str, A
             "estimated_start_plus_run_hours": total_hours,
             "verdict": "unknown" if total_hours is None else "within_policy" if total_hours <= max_hours else "exceeds_policy",
         }
-        evidence["wait_verdict"] = evaluate_wait_policy(launch, config, evidence["wait_policy"], fallback_partitions)
+        evidence["wait_verdict"] = evaluate_wait_policy(launch, config, evidence["wait_policy"], candidates)
     return evidence
 
 
-def evaluate_wait_policy(launch: dict[str, Any], config: dict[str, Any], wait_policy: dict[str, Any], fallback_partitions: list[str]) -> dict[str, Any]:
+def wait_candidate_partitions(launch: dict[str, Any], config: dict[str, Any], fallback_partitions: list[str]) -> list[str]:
+    resource = launch.get("resource_request") or {}
+    slurm = config.get("execution", {}).get("slurm", {}) if isinstance(config.get("execution"), dict) else {}
+    raw = [
+        launch.get("partition", ""),
+        *(resource.get("preferred_partitions") or []),
+        slurm.get("default_partition", ""),
+        *fallback_partitions,
+        *(slurm.get("fallback_partitions") or []),
+    ]
+    candidates: list[str] = []
+    for value in raw:
+        name = str(value or "").strip()
+        if name and name not in candidates:
+            candidates.append(name)
+    return candidates
+
+
+def evaluate_wait_policy(launch: dict[str, Any], config: dict[str, Any], wait_policy: dict[str, Any], candidate_partitions: list[str]) -> dict[str, Any]:
     """Return a conservative monitor-time verdict for a pending Slurm job."""
 
     max_hours = float(wait_policy.get("max_start_plus_run_hours") or 0)
     current_hours = wait_policy.get("estimated_start_plus_run_hours")
-    preferred = str(launch.get("partition") or "")
+    current_partition = str(launch.get("partition") or "")
+    candidate_partitions = [name for name in candidate_partitions if name]
+    fallback_evidence = fallback_completion_estimates(launch, config, candidate_partitions)
+    current_proxy = next((row for row in fallback_evidence if row.get("partition") == current_partition and row.get("estimated_start_plus_run_hours") is not None), None)
+    if current_hours is None and current_proxy:
+        current_hours = current_proxy.get("estimated_start_plus_run_hours")
     if current_hours is None:
+        within = [
+            row
+            for row in fallback_evidence
+            if row.get("partition") != current_partition
+            and row.get("estimated_start_plus_run_hours") is not None
+            and (not max_hours or float(row["estimated_start_plus_run_hours"]) <= max_hours)
+        ]
+        if within:
+            best = sorted(within, key=lambda row: float(row["estimated_start_plus_run_hours"]))[0]
+            return {
+                "verdict": "fallback_better_available",
+                "reason": "missing_preferred_start_estimate_fallback_within_policy",
+                "preferred_partition": current_partition,
+                "preferred_estimated_start_plus_run_hours": None,
+                "recommended_partition": best.get("partition", ""),
+                "recommended_estimated_start_plus_run_hours": best.get("estimated_start_plus_run_hours"),
+                "fallback_checked": fallback_evidence,
+            }
         return {
             "verdict": "fallback_check_required",
             "reason": "missing_preferred_start_estimate",
-            "preferred_partition": preferred,
-            "fallback_checked": fallback_partitions,
+            "preferred_partition": current_partition,
+            "fallback_checked": fallback_evidence,
         }
     if max_hours and float(current_hours) <= max_hours:
         return {
             "verdict": "keep_preferred_within_window",
-            "preferred_partition": preferred,
+            "preferred_partition": current_partition,
             "estimated_start_plus_run_hours": current_hours,
             "max_start_plus_run_hours": max_hours,
+            "fallback_checked": fallback_evidence,
         }
-    fallback_evidence = fallback_completion_estimates(launch, config, fallback_partitions)
     better = [
         row
         for row in fallback_evidence
         if row.get("estimated_start_plus_run_hours") is not None
+        and row.get("partition") != current_partition
         and float(row["estimated_start_plus_run_hours"]) < float(current_hours)
         and (not max_hours or float(row["estimated_start_plus_run_hours"]) <= max_hours)
+    ]
+    materially_better = [
+        row
+        for row in fallback_evidence
+        if row.get("estimated_start_plus_run_hours") is not None
+        and row.get("partition") != current_partition
+        and float(row["estimated_start_plus_run_hours"]) + 1.0 < float(current_hours)
     ]
     if better:
         best = sorted(better, key=lambda row: float(row["estimated_start_plus_run_hours"]))[0]
         return {
             "verdict": "fallback_better_available",
-            "preferred_partition": preferred,
+            "preferred_partition": current_partition,
+            "preferred_estimated_start_plus_run_hours": current_hours,
+            "recommended_partition": best.get("partition", ""),
+            "recommended_estimated_start_plus_run_hours": best.get("estimated_start_plus_run_hours"),
+            "fallback_checked": fallback_evidence,
+        }
+    if materially_better:
+        best = sorted(materially_better, key=lambda row: float(row["estimated_start_plus_run_hours"]))[0]
+        return {
+            "verdict": "fallback_better_available",
+            "reason": "fallback_materially_better_even_outside_policy_window",
+            "preferred_partition": current_partition,
             "preferred_estimated_start_plus_run_hours": current_hours,
             "recommended_partition": best.get("partition", ""),
             "recommended_estimated_start_plus_run_hours": best.get("estimated_start_plus_run_hours"),
@@ -313,7 +375,7 @@ def evaluate_wait_policy(launch: dict[str, Any], config: dict[str, Any], wait_po
         }
     return {
         "verdict": "fallback_not_better_keep_preferred",
-        "preferred_partition": preferred,
+        "preferred_partition": current_partition,
         "preferred_estimated_start_plus_run_hours": current_hours,
         "max_start_plus_run_hours": max_hours,
         "fallback_checked": fallback_evidence,

@@ -236,7 +236,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.36" in show.output
+    assert "0.8.37" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1642,6 +1642,67 @@ def test_v089_slurm_fallback_estimates_use_sbatch_test_only(tmp_path: Path, monk
         ["a100-gpu"],
     )
     assert rows == [{"partition": "a100-gpu", "estimated_start_plus_run_hours": 6.0, "source": "sbatch_test_only"}]
+
+
+def test_v0837_missing_start_estimate_uses_fallback_candidates(tmp_path: Path, monkeypatch):
+    script = tmp_path / "run.sbatch"
+    script.write_text("#!/usr/bin/env bash\n")
+
+    def fake_run(args, **kwargs):
+        if args[:3] == ["scontrol", "show", "job"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"JobId=123 WorkDir={tmp_path}\n", stderr="")
+        if args[:2] == ["squeue", "-j"]:
+            return subprocess.CompletedProcess(args, 0, stdout="PENDING|Priority\n", stderr="")
+        if args[:2] == ["squeue", "--start"]:
+            return subprocess.CompletedProcess(args, 0, stdout="N/A\n", stderr="")
+        if args[:3] == ["sbatch", "--test-only", "--partition=volta-gpu"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="sbatch: Job 1 to start at 2026-05-30T18:00:00 x\n")
+        if args[:3] == ["sbatch", "--test-only", "--partition=htzhulab"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="sbatch: Job 1 to start at 2026-05-31T18:00:00 x\n")
+        if args[:3] == ["sbatch", "--test-only", "--partition=a100-gpu"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="sbatch: Job 1 to start at 2027-05-30T18:00:00 x\n")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    import vibe_research.backends as backends
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 5, 30, 16, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr(backends, "datetime", FakeDateTime)
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    backend = SlurmBackend(VibePaths(tmp_path), {"execution": {"slurm": {"max_pending_start_plus_run_hours": 12, "fallback_partitions": ["a100-gpu", "volta-gpu"]}}})
+    poll = backend.poll(
+        {
+            "job_id": "123",
+            "partition": "htzhulab",
+            "sbatch_path": str(script),
+            "launch_workdir": str(tmp_path),
+            "resource_request": {"gpu": 1, "time": "04:00:00", "preferred_partitions": ["htzhulab"], "fallback_partitions": ["a100-gpu", "volta-gpu"]},
+        }
+    )
+    assert poll.details["candidate_partitions"] == ["htzhulab", "a100-gpu", "volta-gpu"]
+    assert poll.details["wait_verdict"]["verdict"] == "fallback_better_available"
+    assert poll.details["wait_verdict"]["recommended_partition"] == "volta-gpu"
+
+
+def test_v0837_fallback_comparison_keeps_original_preferred_and_excludes_self():
+    import vibe_research.backends as backends
+
+    launch = {
+        "partition": "volta-gpu",
+        "resource_request": {
+            "time": "04:00:00",
+            "preferred_partitions": ["htzhulab"],
+            "fallback_partitions": ["a100-gpu", "volta-gpu"],
+            "fallback_partition_estimates": {"volta-gpu": 20, "htzhulab": 8, "a100-gpu": 400},
+        },
+    }
+    config = {"execution": {"slurm": {"default_partition": "htzhulab", "max_pending_start_plus_run_hours": 12}}}
+    verdict = backends.evaluate_wait_policy(launch, config, {"max_start_plus_run_hours": 12, "estimated_start_plus_run_hours": 20}, ["volta-gpu", "htzhulab", "a100-gpu"])
+    assert verdict["recommended_partition"] == "htzhulab"
+    assert verdict["recommended_partition"] != "volta-gpu"
 
 
 def test_v0824_slurm_wait_policy_defaults_and_naive_start_is_local(tmp_path: Path, monkeypatch):

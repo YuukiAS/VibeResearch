@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.37 - 2026-05-30
+
+- Expand Slurm wait-policy comparisons to include the current launch partition,
+  original preferred partitions, configured default partition, and fallback
+  partitions, while never recommending a requeue to the same current partition.
+- When `squeue --start` cannot estimate the current job, evaluate
+  `sbatch --test-only` candidates and conservatively requeue to a proven better
+  candidate within policy or materially better candidate with explicit evidence.
+
 ## 0.8.36 - 2026-05-30
 
 - Let real-progress classify failed/cancelled real experiments with
