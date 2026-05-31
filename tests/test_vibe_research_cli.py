@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.15" in show.output
+    assert "0.10.16" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -465,6 +465,36 @@ def test_v01011_next_collects_finished_current_cycle_before_idea_refresh(tmp_pat
     assert "vibe collect r001_done" in result.output
     assert "lit-refresh-idea" not in result.output
     assert "reflect-cycle" not in result.output
+
+
+def test_v01016_current_cycle_output_lifecycle_preempts_cycle_closeout(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    for status, expected in [
+        ("finished", "vibe collect r001"),
+        ("collected", "vibe reflect r001"),
+        ("reflected", "vibe revise-plan r001"),
+    ]:
+        cycle_dir = tmp_path / ".vibe" / "cycles" / "c001"
+        cycle_dir.mkdir(parents=True, exist_ok=True)
+        for artifact in ["cycle_reflect.md", "cycle_revised_plan.md"]:
+            path = cycle_dir / artifact
+            if path.exists():
+                path.unlink()
+        state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+        state.update(
+            {
+                "current_cycle_id": "c001",
+                "cycles": {"c001": {"status": "reviewed"}},
+                "runs": {"r001": {"run_id": "r001", "cycle_id": "c001", "status": status}},
+                "next_action": "vibe reflect-cycle c001",
+            }
+        )
+        write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+        result = invoke("next", "--target", str(tmp_path))
+        assert result.exit_code == 0
+        assert expected in result.output
+        assert "reflect-cycle" not in result.output
 
 
 def test_v01011_compatible_preferred_partition_remains_ahead_of_available_fallback(monkeypatch):

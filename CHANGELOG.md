@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.16 - 2026-05-31
+
+- Add direct regression coverage that current-cycle `finished`, `collected`,
+  and `reflected` runs complete collect/reflect/revise-plan before cycle-level
+  closeout can run.
+
 ## 0.10.15 - 2026-05-31
 
 - Report recorded daemon options in daemon status and reject attempts to reuse
