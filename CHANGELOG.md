@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.36 - 2026-05-30
+
+- Let real-progress classify failed/cancelled real experiments with
+  `superseded_by`/replacement metadata as non-counting but already classified,
+  so they no longer remain unresolved repair blockers.
+- Prefer monitoring/collection when replacement real experiments are already
+  queued, submitted, pending, or running.
+
 ## 0.8.35 - 2026-05-30
 
 - Treat `.vibe/config.json` as a generated mirror/fill source and let human

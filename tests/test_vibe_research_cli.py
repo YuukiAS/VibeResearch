@@ -236,7 +236,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.35" in show.output
+    assert "0.8.36" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1388,6 +1388,49 @@ def test_v0833_delivery_stage_uses_delivery_runtime_cap():
     assert normalized["time"] == "72:00:00"
     assert normalized["epochs"] == 5000
     assert normalized["runtime_limits"]["max_run_hours"] == 72
+
+
+def test_v0836_real_progress_treats_superseded_failures_as_classified(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {
+        "r001_failed": {
+            "run_id": "r001_failed",
+            "cycle_id": "c001",
+            "status": "failed",
+            "run_kind": "real_experiment",
+            "backend": "slurm",
+            "superseded_by": "r002_replacement",
+            "adapter_metadata": {"task_type": "train_smoke", "capability_id": "train-smoke"},
+        },
+        "r002_replacement": {
+            "run_id": "r002_replacement",
+            "cycle_id": "c001",
+            "status": "submitted",
+            "run_kind": "real_experiment",
+            "backend": "slurm",
+            "adapter_metadata": {"task_type": "train_smoke", "capability_id": "train-smoke"},
+        },
+        "r003_failed": {
+            "run_id": "r003_failed",
+            "cycle_id": "c001",
+            "status": "failed",
+            "run_kind": "real_experiment",
+            "backend": "slurm",
+            "adapter_metadata": {"task_type": "train_smoke", "capability_id": "train-smoke"},
+        },
+    }
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    result = invoke("experiment", "real-progress", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    progress = json.loads(result.output)
+    non_counting_ids = {row["run_id"] for row in progress["non_counting_real_experiment_runs"]}
+    assert "r001_failed" not in non_counting_ids
+    assert "r003_failed" in non_counting_ids
+    failed = next(row for row in progress["all_runs"] if row["run_id"] == "r001_failed")
+    assert failed["classification"] == "non_counting_superseded_by:r002_replacement"
+    assert failed["requires_repair"] is False
+    assert progress["next_action"] == "monitor active replacement real experiments; collect trusted metrics when they finish"
 
 
 def test_v0833_render_sbatch_uses_explicit_partition_specific_gres(tmp_path: Path):

@@ -49,7 +49,11 @@ def summarize_real_experiment_progress(paths: VibePaths, *, write: bool = False)
         rows.append(row)
         if row["counts_toward_real_experiment_cycle"]:
             countable.append(row)
-        elif row["run_kind"] == "real_experiment" and row["status"] in {"failed", "timeout", "cancelled", "dryrun_failed", "collected"}:
+        elif (
+            row["run_kind"] == "real_experiment"
+            and row["status"] in {"failed", "timeout", "cancelled", "dryrun_failed", "collected"}
+            and row.get("requires_repair", True)
+        ):
             non_counting.append(row)
     progress = {
         "created_at": utc_now(),
@@ -59,7 +63,7 @@ def summarize_real_experiment_progress(paths: VibePaths, *, write: bool = False)
         "countable_runs": countable,
         "non_counting_real_experiment_runs": non_counting,
         "all_runs": rows,
-        "next_action": next_real_experiment_action(target_count, countable, non_counting),
+        "next_action": next_real_experiment_action(target_count, countable, non_counting, rows),
     }
     if write:
         write_json(paths.research / "real_experiment_progress.json", progress)
@@ -74,6 +78,7 @@ def classify_run(paths: VibePaths, run_id: str, run: dict[str, Any]) -> dict[str
     run_kind = str(run.get("run_kind") or run_kind_from_task(task_type))
     metrics = read_json(paths.runs / run_id / "metrics.json", {})
     status = str(run.get("status", ""))
+    superseded_by = str(run.get("superseded_by") or run.get("replacement_run_id") or run.get("replaced_by") or "")
     has_metrics = bool(metrics and not metrics.get("missing_metrics"))
     schema_valid = metrics.get("schema_status") == "valid"
     interpretable = bool(has_metrics and schema_valid)
@@ -81,16 +86,23 @@ def classify_run(paths: VibePaths, run_id: str, run: dict[str, Any]) -> dict[str
     submitted = bool(run.get("backend") or read_json(paths.runs / run_id / "launch.json", {}))
     reason = ""
     counts = False
+    requires_repair = False
     if run_kind != "real_experiment":
         reason = "not_real_experiment_run"
+    elif superseded_by and status in {"failed", "timeout", "cancelled", "dryrun_failed"}:
+        reason = f"non_counting_superseded_by:{superseded_by}"
     elif status in {"failed", "timeout", "cancelled", "dryrun_failed"}:
         reason = f"non_counting_execution_failure:{status}"
+        requires_repair = True
     elif not submitted:
         reason = "non_counting_no_backend_submission"
+        requires_repair = True
     elif not interpretable:
         reason = "non_counting_metrics_not_interpretable"
+        requires_repair = status in {"collected", "finished"}
     elif not has_baseline:
         reason = "non_counting_missing_baseline_comparison"
+        requires_repair = status in {"collected", "finished"}
     else:
         counts = True
         reason = "counted"
@@ -108,6 +120,8 @@ def classify_run(paths: VibePaths, run_id: str, run: dict[str, Any]) -> dict[str
         "has_baseline_comparison": has_baseline,
         "counts_toward_real_experiment_cycle": counts,
         "classification": reason,
+        "superseded_by": superseded_by,
+        "requires_repair": requires_repair,
     }
 
 
@@ -124,9 +138,16 @@ def record_repair_issue(paths: VibePaths, run_id: str, run: dict[str, Any], clas
     append_jsonl(paths.research / "repair_queue.jsonl", row)
 
 
-def next_real_experiment_action(target_count: int, countable: list[dict[str, Any]], non_counting: list[dict[str, Any]]) -> str:
+def next_real_experiment_action(target_count: int, countable: list[dict[str, Any]], non_counting: list[dict[str, Any]], all_runs: list[dict[str, Any]] | None = None) -> str:
     if len(countable) >= target_count:
         return "real experiment target count reached; reflect and decide whether to continue"
+    active_replacements = [
+        row
+        for row in (all_runs or [])
+        if row.get("run_kind") == "real_experiment" and row.get("status") in {"queued", "submitted", "pending", "running", "dry_submitted", "submitted_dry"}
+    ]
+    if active_replacements:
+        return "monitor active replacement real experiments; collect trusted metrics when they finish"
     if non_counting:
         return "repair or classify non-counting real experiment failures before counting progress"
     return "compile and run adapter-backed real experiments with baseline comparison"
