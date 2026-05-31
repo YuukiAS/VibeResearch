@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.49" in show.output
+    assert "0.8.50" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2868,6 +2868,27 @@ def test_v0839_next_monitors_fragmented_active_sustained_round(tmp_path: Path):
     result = invoke("next", "--target", str(tmp_path))
     assert result.exit_code == 0
     assert "vibe monitor" in result.output
+
+
+def test_v0850_next_abandons_empty_preplanned_cycle_while_active_round_runs(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["current_cycle_id"] = "c002"
+    state["cycles"] = {"c001": {"status": "reviewed"}, "c002": {"status": "planned"}}
+    state["runs"] = {"r001_active": {"run_id": "r001_active", "cycle_id": "c001", "status": "submitted", "resource_request": {"gpu": 1}}}
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {"active": [{"run_id": "r001_active", "cycle_id": "c001", "resource_request": {"gpu": 1}, "status": "running"}]},
+    )
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "vibe monitor" in result.output
+    updated = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert updated["current_cycle_id"] == "c001"
+    assert updated["cycles"]["c002"]["status"] == "abandoned"
+    assert updated["cycles"]["c002"]["provenance"]["source"] == "next_action_empty_preplanned_cycle_guard"
 
 
 def test_v0823_auto_cycle_stops_after_single_monitor(monkeypatch, tmp_path: Path):

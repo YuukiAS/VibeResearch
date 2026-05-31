@@ -27,6 +27,8 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     readiness = adapter_readiness(paths)
     if state.get("project_brief_missing"):
         return "add project goal/background with vibe init --goal ... --background ...", "project_brief_missing"
+    if abandon_empty_preplanned_cycle_for_active_round(paths, state, active):
+        return "vibe monitor", ""
     if active_jobs_fragment_sustained_round(paths, active):
         return "vibe monitor", ""
     if any(row.get("status") == "new" for row in read_jsonl(paths.ideas / "registry.jsonl")):
@@ -142,6 +144,39 @@ def actionable_queue_rows(state: dict, queue: list[dict]) -> list[dict]:
         if run.get("status") == "queued" and item.get("status", "queued") == "queued":
             actionable.append(item)
     return actionable
+
+
+def abandon_empty_preplanned_cycle_for_active_round(paths: VibePaths, state: dict, active: list[dict]) -> bool:
+    if not active:
+        return False
+    active_cycle_ids = {str(job.get("cycle_id") or "") for job in active if job.get("cycle_id")}
+    if len(active_cycle_ids) != 1:
+        return False
+    active_cycle_id = next(iter(active_cycle_ids))
+    current_cycle_id = str(state.get("current_cycle_id") or "")
+    if not current_cycle_id or current_cycle_id == active_cycle_id:
+        return False
+    cycles = state.get("cycles", {}) if isinstance(state.get("cycles"), dict) else {}
+    current_cycle = cycles.get(current_cycle_id, {})
+    if current_cycle.get("status") not in {"planned", "reviewed"}:
+        return False
+    runs = state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}
+    if any(run.get("cycle_id") == current_cycle_id for run in runs.values()):
+        return False
+    current_cycle["status"] = "abandoned"
+    current_cycle["abandoned_reason"] = "empty preplanned cycle superseded by active attempted cycle"
+    current_cycle["abandoned_at"] = utc_now()
+    current_cycle["provenance"] = {
+        "source": "next_action_empty_preplanned_cycle_guard",
+        "active_cycle_id": active_cycle_id,
+    }
+    cycles[current_cycle_id] = current_cycle
+    state["cycles"] = cycles
+    state["current_cycle_id"] = active_cycle_id
+    state["next_action"] = "vibe monitor"
+    state["updated_at"] = utc_now()
+    write_json(paths.state / "state.json", state)
+    return True
 
 
 def clear_stale_terminal_decision_block(paths: VibePaths, state: dict) -> bool:

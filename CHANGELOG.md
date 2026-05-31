@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.50 - 2026-05-31
+
+- Add a next-action guard for empty preplanned cycles: when all active jobs
+  belong to one attempted cycle but `current_cycle_id` points at a different
+  empty planned/reviewed cycle, the empty cycle is marked abandoned with
+  provenance.
+- Restore `current_cycle_id` to the active attempted cycle and keep the next
+  action on `vibe monitor` until that round can be collected, reflected, and
+  revised.
+
 ## 0.8.49 - 2026-05-31
 
 - Make direction pause checks use the latest direction registry row, so later
