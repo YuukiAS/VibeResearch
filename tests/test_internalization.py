@@ -111,7 +111,7 @@ def test_v090_readiness_blocks_without_trusted_evidence_or_baseline_source(tmp_p
     )
     audit = internalization_readiness(paths, proposal["proposal_id"])
     assert audit["can_transition"] is False
-    assert "missing_trusted_schema_valid_evidence" in audit["blockers"]
+    assert "missing_trusted_or_qualifying_scout_evidence" in audit["blockers"]
     assert "external_baseline_missing_source" in audit["blockers"]
     assert "asset_999:missing_source" in audit["blockers"]
 

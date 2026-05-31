@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-05-31
+
+- Add offline scout finding, triage, claim, query-context, audit, and memo
+  artifacts under `.vibe/research/scout/`.
+- Add `vibe scout` commands that classify findings as background,
+  candidate method, directly actionable, baseline reference, negative evidence,
+  implementation reference, or not relevant using structured quality fields.
+- Add claim-evidence and negative-evidence records, and let qualifying scout
+  evidence support `shadow_internal` readiness while warning that scout evidence
+  does not replace project experiment evidence.
+
 ## 0.9.0 - 2026-05-31
 
 - Add generic research lineage registries for external assets, lineage

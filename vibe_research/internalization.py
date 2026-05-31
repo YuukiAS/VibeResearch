@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_jsonl, utc_now, write_json, write_text
 from .paths import VibePaths
 from .research_manager import load_evidence
+from .scout import qualifying_scout_evidence
 
 
 ASSET_PURPOSES = {
@@ -319,8 +320,11 @@ def internalization_readiness(paths: VibePaths, proposal_id: str, *, target_leve
             for row in load_evidence(paths).values()
             if row.get("evidence_id") in trusted_ids and row.get("trusted") and row.get("schema_valid")
         ]
-        if not trusted_records:
-            blockers.append("missing_trusted_schema_valid_evidence")
+        scout_records = qualifying_scout_evidence(paths, proposal.get("scout_evidence_ids", []))
+        if not trusted_records and not scout_records:
+            blockers.append("missing_trusted_or_qualifying_scout_evidence")
+        if scout_records and not trusted_records:
+            warnings.append("scout_evidence_supports_shadow_internal_but_does_not_replace_project_experiment_evidence")
         if proposal.get("status") not in {"approved", "reviewed", "proposed"}:
             warnings.append("proposal_status_not_ready")
     asset_blockers = external_asset_blockers(assets)

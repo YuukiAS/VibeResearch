@@ -104,6 +104,7 @@ from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
 from .scheduler import operator_fallback_requeue
 from .scheduler import queue_run, review_cycle, review_run, run_dryrun, submit_queue
+from .scout import add_scout_finding, create_scout_claim, scout_audit, scout_query_context, triage_scout_finding
 from .selftests import sustained_round_selftest
 from .timeline import render_timeline_markdown, sync_timeline_files
 
@@ -129,6 +130,7 @@ memo_app = typer.Typer(help="Generate daily research memos.")
 external_app = typer.Typer(help="Acquire external repositories and method resources with provenance.")
 lineage_app = typer.Typer(help="Manage generic research lineage records.")
 internalization_app = typer.Typer(help="Plan and audit generic internalization readiness.")
+scout_app = typer.Typer(help="Triage scout findings into evidence-grade research inputs.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -150,6 +152,7 @@ app.add_typer(memo_app, name="memo")
 app.add_typer(external_app, name="external")
 app.add_typer(lineage_app, name="lineage")
 app.add_typer(internalization_app, name="internalization")
+app.add_typer(scout_app, name="scout")
 console = Console()
 
 
@@ -964,6 +967,115 @@ def internalization_memory_cmd(target: Path = typer.Option(Path("."), "--target"
     """Render lineage-aware planning memory for future agent context."""
 
     console.print_json(data=build_lineage_memory(paths(target)))
+
+
+@scout_app.command("query-context")
+def scout_query_context_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Build traceable scout query context from research memory and hypotheses."""
+
+    console.print_json(data=scout_query_context(paths(target)))
+
+
+@scout_app.command("add-finding")
+def scout_add_finding_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    title: str = typer.Option(..., "--title"),
+    source_type: str = typer.Option("paper", "--source-type"),
+    authors_or_repo: str = typer.Option("", "--authors-or-repo"),
+    year: str = typer.Option("", "--year"),
+    url_or_ref: str = typer.Option("", "--url-or-ref"),
+    task_match: float = typer.Option(0.0, "--task-match"),
+    dataset_match: float = typer.Option(0.0, "--dataset-match"),
+    metric_match: float = typer.Option(0.0, "--metric-match"),
+    method_match: float = typer.Option(0.0, "--method-match"),
+    failure_mode_match: float = typer.Option(0.0, "--failure-mode-match"),
+    actionability: float = typer.Option(0.0, "--actionability"),
+    novelty: float = typer.Option(0.0, "--novelty"),
+    credibility: float = typer.Option(0.0, "--credibility"),
+    has_code: bool = typer.Option(False, "--has-code"),
+    reproducible_experiment: bool = typer.Option(False, "--reproducible-experiment"),
+    hypothesis_id: str = typer.Option("", "--hypothesis-id"),
+    relationship_to_hypothesis: str = typer.Option("", "--relationship"),
+    possible_experiment: str = typer.Option("", "--possible-experiment"),
+    risk: list[str] = typer.Option([], "--risk"),
+    counterevidence: list[str] = typer.Option([], "--counterevidence"),
+    confidence: float = typer.Option(0.0, "--confidence"),
+    summary: str = typer.Option("", "--summary"),
+) -> None:
+    """Record a scout finding with structured quality scores."""
+
+    console.print_json(
+        data=add_scout_finding(
+            paths(target),
+            title=title,
+            source_type=source_type,
+            authors_or_repo=authors_or_repo,
+            year=year,
+            url_or_ref=url_or_ref,
+            task_match=task_match,
+            dataset_match=dataset_match,
+            metric_match=metric_match,
+            method_match=method_match,
+            failure_mode_match=failure_mode_match,
+            actionability=actionability,
+            novelty=novelty,
+            credibility=credibility,
+            has_code=has_code,
+            reproducible_experiment=reproducible_experiment,
+            hypothesis_id=hypothesis_id,
+            relationship_to_hypothesis=relationship_to_hypothesis,
+            possible_experiment=possible_experiment,
+            risks=risk,
+            counterevidence=counterevidence,
+            confidence=confidence,
+            summary=summary,
+        )
+    )
+
+
+@scout_app.command("triage")
+def scout_triage_cmd(
+    finding_id: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    rationale: str = typer.Option("", "--rationale"),
+) -> None:
+    """Classify a scout finding through the quality gate."""
+
+    console.print_json(data=triage_scout_finding(paths(target), finding_id, rationale=rationale))
+
+
+@scout_app.command("claim")
+def scout_claim_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    claim: str = typer.Option(..., "--claim"),
+    support_finding_id: list[str] = typer.Option([], "--support-finding-id"),
+    oppose_finding_id: list[str] = typer.Option([], "--oppose-finding-id"),
+    applicability: str = typer.Option("", "--applicability"),
+    transfer_limits: str = typer.Option("", "--transfer-limits"),
+    suggested_experiment: str = typer.Option("", "--suggested-experiment"),
+    confidence: float = typer.Option(0.0, "--confidence"),
+) -> None:
+    """Create a claim-evidence map entry from triaged scout findings."""
+
+    console.print_json(
+        data=create_scout_claim(
+            paths(target),
+            claim=claim,
+            support_finding_ids=support_finding_id,
+            oppose_finding_ids=oppose_finding_id,
+            applicability=applicability,
+            transfer_limits=transfer_limits,
+            suggested_experiment=suggested_experiment,
+            confidence=confidence,
+        )
+    )
+
+
+@scout_app.command("audit")
+def scout_audit_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Summarize scout quality, actionable evidence, claims, and negative evidence."""
+
+    console.print_json(data=scout_audit(paths(target)))
 
 
 @policy_app.command("lint")
