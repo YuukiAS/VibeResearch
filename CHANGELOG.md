@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.17 - 2026-05-31
+
+- Count real-experiment runs with baseline comparison evidence stored either at
+  the top level of `metrics.json` or under nested `metrics.baseline_metrics`
+  and `metrics.metric_delta`.
+
 ## 0.10.16 - 2026-05-31
 
 - Add direct regression coverage that current-cycle `finished`, `collected`,

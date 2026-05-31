@@ -82,7 +82,7 @@ def classify_run(paths: VibePaths, run_id: str, run: dict[str, Any]) -> dict[str
     has_metrics = bool(metrics and not metrics.get("missing_metrics"))
     schema_valid = metrics.get("schema_status") == "valid"
     interpretable = bool(has_metrics and schema_valid)
-    has_baseline = bool(evaluation.get("baseline_comparison_target") or metrics.get("baseline_comparison_target") or run.get("baseline_comparison_target"))
+    has_baseline = has_baseline_comparison(evaluation, metrics, run)
     submitted = bool(run.get("backend") or read_json(paths.runs / run_id / "launch.json", {}))
     reason = ""
     counts = False
@@ -123,6 +123,19 @@ def classify_run(paths: VibePaths, run_id: str, run: dict[str, Any]) -> dict[str
         "superseded_by": superseded_by,
         "requires_repair": requires_repair,
     }
+
+
+def has_baseline_comparison(evaluation: dict[str, Any], metrics: dict[str, Any], run: dict[str, Any]) -> bool:
+    nested_metrics = metrics.get("metrics", {}) if isinstance(metrics.get("metrics"), dict) else {}
+    return bool(
+        evaluation.get("baseline_comparison_target")
+        or metrics.get("baseline_comparison_target")
+        or metrics.get("baseline_metrics")
+        or metrics.get("metric_delta")
+        or nested_metrics.get("baseline_metrics")
+        or nested_metrics.get("metric_delta")
+        or run.get("baseline_comparison_target")
+    )
 
 
 def record_repair_issue(paths: VibePaths, run_id: str, run: dict[str, Any], classification: str, details: dict[str, Any] | None = None) -> None:
