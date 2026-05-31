@@ -1467,10 +1467,22 @@ def fallback_requeue_cmd(
     execute: bool = typer.Option(False, "--execute", help="Actually cancel and resubmit eligible jobs."),
     allow_outside_policy: bool = typer.Option(False, "--allow-outside-policy", help="Allow outside-wait-policy fallback requeues."),
     allow_carried_forward: bool = typer.Option(False, "--allow-carried-forward", help="Allow requeue from carried-forward wait evidence."),
+    run_id: list[str] = typer.Option([], "--run-id", help="Run id to execute. May be supplied more than once."),
+    all_runs: bool = typer.Option(False, "--all", help="Execute all eligible fallback requeues."),
 ) -> None:
     """List or explicitly execute scheduler fallback requeue recommendations."""
 
-    result = operator_fallback_requeue(paths(target), execute=execute, allow_outside_policy=allow_outside_policy, allow_carried_forward=allow_carried_forward)
+    if execute and not run_id and not all_runs:
+        console.print("[red]--execute requires --run-id <run> or --all[/red]")
+        raise typer.Exit(2)
+    result = operator_fallback_requeue(
+        paths(target),
+        execute=execute,
+        allow_outside_policy=allow_outside_policy,
+        allow_carried_forward=allow_carried_forward,
+        run_ids=run_id,
+        all_runs=all_runs,
+    )
     console.print_json(data=result)
 
 

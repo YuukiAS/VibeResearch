@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.8.59 - 2026-05-31
+
+- Require explicit run scope for fallback requeue execution: `--execute` now
+  needs either `--run-id <run>` or `--all`, while dry-run review remains
+  non-mutating.
+- Add self-contained per-run fallback requeue commands with absolute
+  `--target`, `--run-id`, `--execute`, and required approval flags in dry-run
+  output and sustained audit resource issues.
+- Persist dry-run approval requests under
+  `.vibe/scheduler/fallback_requeue_requests/` with `latest.json`,
+  `latest.md`, affected jobs, risk text, and exact executable commands.
+
 ## 0.8.58 - 2026-05-31
 
 - Link outside-wait-policy fallback diagnostics to a dry-run operator command:

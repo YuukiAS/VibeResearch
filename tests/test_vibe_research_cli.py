@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.58" in show.output
+    assert "0.8.59" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1981,7 +1981,7 @@ def test_v0857_fallback_requeue_execute_with_outside_policy_records_provenance(t
             return {"run_id": submitted_run_id, "cycle_id": "c001", "backend": "slurm", "job_id": "222", "status": "submitted", "partition": manifest["resources"]["force_partition"], "resource_request": manifest["resources"]}
 
     monkeypatch.setattr("vibe_research.scheduler.get_backend", lambda paths, backend_name=None: FakeBackend())
-    result = invoke("fallback-requeue", "--target", str(tmp_path), "--execute", "--allow-outside-policy")
+    result = invoke("fallback-requeue", "--target", str(tmp_path), "--execute", "--allow-outside-policy", "--run-id", run_id)
     assert result.exit_code == 0
     active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
     assert active["active"][0]["job_id"] == "222"
@@ -1989,6 +1989,115 @@ def test_v0857_fallback_requeue_execute_with_outside_policy_records_provenance(t
     completed = read_jsonl(tmp_path / ".vibe" / "scheduler" / "completed_jobs.jsonl")
     assert completed[-1]["status"] == "cancelled_for_fallback"
     assert completed[-1]["operator_requeue"] is True
+
+
+def test_v0859_fallback_requeue_execute_requires_explicit_scope(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {"active": [{"run_id": "r001", "job_id": "111", "backend": "slurm", "partition": "a100", "poll_details": {"wait_verdict": {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "lab"}}}]},
+    )
+    result = invoke("fallback-requeue", "--target", str(tmp_path), "--execute", "--allow-outside-policy")
+    assert result.exit_code == 2
+    assert "--execute requires --run-id <run> or --all" in result.output
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    assert active["active"][0]["job_id"] == "111"
+
+
+def test_v0859_fallback_requeue_dry_run_writes_self_contained_approval_request(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {"active": [{"run_id": "r001", "job_id": "111", "backend": "slurm", "partition": "a100", "poll_details": {"wait_verdict": {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "lab"}}}]},
+    )
+    result = invoke("scheduler-requeue-fallback", "--target", str(tmp_path), "--allow-outside-policy")
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    command = data["candidates"][0]["executable_command"]
+    assert f"--target {shlex_quote(str(tmp_path))}" in command
+    assert "--run-id r001" in command
+    assert "--execute" in command
+    assert "--allow-outside-policy" in command
+    latest_json = read_json(tmp_path / ".vibe" / "scheduler" / "fallback_requeue_requests" / "latest.json", {})
+    latest_md = (tmp_path / ".vibe" / "scheduler" / "fallback_requeue_requests" / "latest.md").read_text()
+    assert latest_json["status"] == "dry_run_only_not_executed"
+    assert latest_json["target"] == str(tmp_path.resolve())
+    assert latest_json["rows"][0]["run_id"] == "r001"
+    assert latest_json["rows"][0]["executable_command"] == command
+    assert command in latest_md
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    assert active["active"][0]["job_id"] == "111"
+
+
+def test_v0859_fallback_requeue_execute_run_id_only_requeues_selected_job(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    for run_id in ["r001", "r002"]:
+        run = {
+            "run_id": run_id,
+            "cycle_id": "c001",
+            "direction_id": f"d-{run_id}",
+            "branch": "",
+            "hypothesis": "fallback requeue",
+            "status": "submitted",
+            "entrypoint": {"type": "slurm", "command": "python train.py"},
+            "dryrun": {"command": "python -c 'print(1)'"},
+            "resources": {"gpu": 1, "cpus": 1, "mem_gb": 1, "time": "00:10:00"},
+        }
+        state.setdefault("runs", {})[run_id] = run
+        run_dir = tmp_path / ".vibe" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        write_json(run_dir / "manifest.json", run)
+        write_yaml(run_dir / "manifest.yaml", run)
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {
+            "active": [
+                {"run_id": "r001", "cycle_id": "c001", "job_id": "111", "backend": "slurm", "partition": "a100", "poll_details": {"wait_verdict": {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "lab"}}},
+                {"run_id": "r002", "cycle_id": "c001", "job_id": "112", "backend": "slurm", "partition": "a100", "poll_details": {"wait_verdict": {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "lab"}}},
+            ]
+        },
+    )
+
+    class FakeBackend:
+        name = "slurm"
+
+        def cancel(self, launch):
+            return {"returncode": 0, "job_id": launch.get("job_id")}
+
+        def submit(self, submitted_run_id, *, dry=False):
+            manifest = read_json(tmp_path / ".vibe" / "runs" / submitted_run_id / "manifest.json", {})
+            return {"run_id": submitted_run_id, "cycle_id": "c001", "backend": "slurm", "job_id": "222", "status": "submitted", "partition": manifest["resources"]["force_partition"], "resource_request": manifest["resources"]}
+
+    monkeypatch.setattr("vibe_research.scheduler.get_backend", lambda paths, backend_name=None: FakeBackend())
+    result = invoke("scheduler-requeue-fallback", "--target", str(tmp_path), "--execute", "--allow-outside-policy", "--run-id", "r001")
+    assert result.exit_code == 0
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    assert [row["run_id"] for row in active["active"]] == ["r001", "r002"]
+    assert active["active"][0]["job_id"] == "222"
+    assert active["active"][1]["job_id"] == "112"
+    completed = read_jsonl(tmp_path / ".vibe" / "scheduler" / "completed_jobs.jsonl")
+    assert len(completed) == 1
+    assert completed[0]["run_id"] == "r001"
+
+
+def test_v0859_sustained_audit_persists_executable_resource_issue_command(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {"active": [{"run_id": "r001", "cycle_id": "c001", "job_id": "111", "backend": "slurm", "partition": "a100", "poll_details": {"wait_verdict": {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "lab"}}}]},
+    )
+    result = invoke("research", "sustained-audit", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
+    command = audit["active_resource_issues"][0]["executable_command"]
+    assert f"--target {shlex_quote(str(tmp_path))}" in command
+    assert "--run-id r001" in command
+    assert "--execute" in command
+    assert "--allow-outside-policy" in command
+    markdown = (tmp_path / ".vibe" / "research" / "sustained_round_audit.md").read_text()
+    assert command in markdown
 
 
 def test_v0844_next_clears_stale_noncounting_run_block_after_cycle_revision(tmp_path: Path):

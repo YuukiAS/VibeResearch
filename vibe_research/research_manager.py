@@ -16,6 +16,7 @@ from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl
 from .paths import VibePaths
 from .promotion import select_executable_decision_for_capability
 from .real_experiments import summarize_real_experiment_progress
+from .scheduler_approvals import fallback_requeue_command
 from .timeline import record_event
 
 
@@ -613,6 +614,7 @@ def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_route
             "next_action": real_progress.get("next_action", ""),
         },
         "active_jobs_by_cycle": dict(sorted(active_cycle_counts.items())),
+        "active_resource_issues": active_resource_issue_rows(paths, active_jobs),
         "cycles": cycle_rows,
         "completed_rounds": completed_rounds,
         "next_action": sustained_round_next_action(len(completed_rounds), target_rounds, issues, active_jobs),
@@ -695,6 +697,16 @@ def render_sustained_round_audit(result: dict[str, Any]) -> str:
         "## Issues",
     ]
     lines.extend([f"- `{issue}`" for issue in result.get("issues", [])] or ["- none"])
+    issue_rows = result.get("active_resource_issues", []) if isinstance(result.get("active_resource_issues"), list) else []
+    if issue_rows:
+        lines.extend(["", "## Active Resource Issues"])
+        for row in issue_rows:
+            lines.extend(
+                [
+                    f"- `{row.get('run_id', '')}` job `{row.get('job_id', '')}`: `{row.get('verdict', '')}`",
+                    f"  - command: `{row.get('executable_command', '')}`",
+                ]
+            )
     lines.extend(["", "## Cycles"])
     for row in result.get("cycles", []):
         lines.append(
@@ -714,6 +726,33 @@ def active_jobs_with_outside_wait_fallback(active_jobs: list[dict[str, Any]]) ->
         if isinstance(verdict, dict) and verdict.get("verdict") == "fallback_better_but_outside_wait_policy":
             return True
     return False
+
+
+def active_resource_issue_rows(paths: VibePaths, active_jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for job in active_jobs:
+        details = job.get("poll_details", {}) if isinstance(job.get("poll_details"), dict) else {}
+        verdict = details.get("wait_verdict", job.get("wait_verdict", {}))
+        if not isinstance(verdict, dict) or verdict.get("verdict") != "fallback_better_but_outside_wait_policy":
+            continue
+        rows.append(
+            {
+                "issue": "fallback_better_but_outside_wait_policy",
+                "run_id": str(job.get("run_id", "")),
+                "job_id": str(job.get("job_id", "")),
+                "current_partition": str(job.get("partition", "")),
+                "recommended_partition": str(verdict.get("recommended_partition", "")),
+                "verdict": str(verdict.get("verdict", "")),
+                "executable_command": fallback_requeue_command(
+                    paths.root,
+                    str(job.get("run_id", "")),
+                    allow_outside_policy=True,
+                    allow_carried_forward=bool(details.get("carried_forward_wait_verdict")),
+                    execute=True,
+                ),
+            }
+        )
+    return rows
 
 
 def policy_completeness(paths: VibePaths) -> dict[str, Any]:

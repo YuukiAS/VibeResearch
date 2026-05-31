@@ -22,6 +22,7 @@ from .manifest import validate_manifest
 from .paths import VibePaths
 from .real_experiments import classify_run, record_repair_issue, summarize_real_experiment_progress
 from .research_manager import collect_run_evidence_if_research_linked, policy_completeness, reserve_budget
+from .scheduler_approvals import fallback_requeue_command, write_fallback_requeue_request
 from .timeline import record_event
 
 
@@ -341,7 +342,12 @@ def operator_fallback_requeue(
     allow_outside_policy: bool = False,
     allow_carried_forward: bool = False,
     backend_name: str | None = None,
+    run_ids: list[str] | None = None,
+    all_runs: bool = False,
 ) -> dict[str, Any]:
+    selected_run_ids = set(run_ids or [])
+    if execute and not selected_run_ids and not all_runs:
+        raise ValueError("--execute requires --run-id <run> or --all")
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []})
     state = read_json(paths.state / "state.json", {})
     rows = []
@@ -360,6 +366,9 @@ def operator_fallback_requeue(
         if details.get("carried_forward_wait_verdict") and not allow_carried_forward:
             eligible = False
             blocked_reason = "carried_forward_wait_verdict_requires_allow_carried_forward"
+        selected_for_execute = all_runs or job.get("run_id", "") in selected_run_ids
+        command_allow_outside_policy = allow_outside_policy or verdict_name == "fallback_better_but_outside_wait_policy"
+        command_allow_carried_forward = allow_carried_forward or bool(details.get("carried_forward_wait_verdict"))
         row = {
             "run_id": job.get("run_id", ""),
             "job_id": job.get("job_id", ""),
@@ -369,9 +378,17 @@ def operator_fallback_requeue(
             "eligible": eligible,
             "blocked_reason": blocked_reason,
             "execute": execute,
+            "selected_for_execute": selected_for_execute,
+            "executable_command": fallback_requeue_command(
+                paths.root,
+                str(job.get("run_id", "")),
+                allow_outside_policy=command_allow_outside_policy,
+                allow_carried_forward=command_allow_carried_forward,
+                execute=True,
+            ),
         }
         rows.append(row)
-        if not execute or not eligible:
+        if not execute or not eligible or not selected_for_execute:
             still_active.append(job)
             continue
         backend = get_backend(paths, job.get("backend") or backend_name)
@@ -397,7 +414,19 @@ def operator_fallback_requeue(
         state["updated_at"] = utc_now()
         write_json(paths.state / "state.json", state)
         sync_dashboard(paths)
-    return {"execute": execute, "allow_outside_policy": allow_outside_policy, "allow_carried_forward": allow_carried_forward, "candidates": rows, "executed": executed}
+    approval_request = None
+    if not execute:
+        approval_request = write_fallback_requeue_request(paths, rows)
+    return {
+        "execute": execute,
+        "allow_outside_policy": allow_outside_policy,
+        "allow_carried_forward": allow_carried_forward,
+        "run_ids": sorted(selected_run_ids),
+        "all_runs": all_runs,
+        "approval_request": approval_request,
+        "candidates": rows,
+        "executed": executed,
+    }
 
 
 def should_requeue_to_fallback(config: dict[str, Any], job: dict[str, Any], details: dict[str, Any]) -> bool:
