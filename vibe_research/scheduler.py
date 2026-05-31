@@ -418,7 +418,9 @@ def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted:
     evaluation = run.get("evaluation", {}) if isinstance(run.get("evaluation"), dict) else {}
     configured_metrics_file = metrics_file or evaluation.get("metrics_file_path", "")
     resolved_metrics_file = resolve_project_path(paths, configured_metrics_file) if configured_metrics_file else ""
-    external_metrics = read_external_metrics(resolved_metrics_file) if resolved_metrics_file and Path(resolved_metrics_file).exists() else {}
+    launch = read_json(paths.runs / run_id / "launch.json", {})
+    dry_launch = is_dry_launch(launch)
+    external_metrics = {} if dry_launch else read_external_metrics(resolved_metrics_file) if resolved_metrics_file and Path(resolved_metrics_file).exists() else {}
     missing_metrics = not external_metrics and metric is None
     metric_values = external_metrics.get("metrics", external_metrics) if external_metrics else ({"primary": metric} if metric is not None else {})
     value = external_metrics.get("primary_metric", metric if metric is not None else 0.0)
@@ -431,6 +433,11 @@ def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted:
     resolved_expected_output = resolve_project_path(paths, expected_output_path) if expected_output_path else ""
     expected_output_exists = bool(resolved_expected_output and Path(resolved_expected_output).exists())
     provenance = build_provenance(paths, run_id)
+    if dry_launch:
+        provenance["dry_launch_metrics_ignored"] = True
+        provenance["ignored_metrics_file_path"] = configured_metrics_file
+        provenance["ignored_metrics_reason"] = "dry submissions are scheduler/provenance checks and cannot produce trusted metrics"
+        write_json(paths.runs / run_id / "provenance.json", provenance)
     if trusted and not provenance_complete(provenance):
         raise RuntimeError("Trusted collection requires complete metric provenance.")
     trust_rules = evaluation.get("trust_rules", {}) if isinstance(evaluation.get("trust_rules"), dict) else {}
@@ -558,6 +565,11 @@ def read_external_metrics(path: str) -> dict[str, Any]:
     if "primary_metric" not in data and "primary" in data:
         data["primary_metric"] = data["primary"]
     return data
+
+
+def is_dry_launch(launch: dict[str, Any]) -> bool:
+    job_id = str(launch.get("job_id", ""))
+    return launch.get("status") == "dry_submitted" or job_id.startswith("slurm-dry-")
 
 
 def validate_metrics_schema(metrics: dict[str, Any], schema: dict[str, Any]) -> list[str]:

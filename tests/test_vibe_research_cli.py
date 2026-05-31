@@ -246,7 +246,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.42" in show.output
+    assert "0.8.43" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2412,6 +2412,44 @@ def test_v0840_slurm_submit_blocks_missing_downstream_dependencies_until_overrid
     assert result.exit_code == 0
     active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
     assert active["active"][0]["run_id"] == "r001_dep"
+
+
+def test_v0843_collect_ignores_stale_metrics_for_dry_submitted_launch(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    run_id = "r001_dry"
+    metrics_path = tmp_path / ".vibe" / "real_metrics" / "stale.json"
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_path.write_text('{"primary": 0.99}\n')
+    run = {
+        "run_id": run_id,
+        "cycle_id": "c001",
+        "direction_id": "dry-test",
+        "status": "finished",
+        "run_kind": "real_experiment",
+        "backend": "slurm",
+        "entrypoint": {"type": "slurm", "command": "python train.py"},
+        "dryrun": {"command": "python -c 'print(1)'"},
+        "resources": {"gpu": 1, "cpus": 1, "mem_gb": 1, "time": "00:10:00"},
+        "outputs": {"expected_output_path": ".vibe/real_metrics/stale.json"},
+        "evaluation": {"metrics_file_path": ".vibe/real_metrics/stale.json", "metrics_schema": {"primary": "number"}},
+        "adapter_metadata": {"capability_id": "train-smoke", "task_type": "train_smoke"},
+    }
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {run_id: run}
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    run_dir = tmp_path / ".vibe" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    write_yaml(run_dir / "manifest.yaml", run)
+    write_json(run_dir / "launch.json", {"run_id": run_id, "backend": "slurm", "status": "dry_submitted", "job_id": f"slurm-dry-{run_id}"})
+
+    collect_run(VibePaths(tmp_path), run_id)
+    metrics = read_json(run_dir / "metrics.json", {})
+    assert metrics["missing_metrics"] is True
+    assert metrics["schema_status"] == "missing"
+    assert metrics["trust_status"] == "untrusted_missing_metrics"
+    assert metrics["primary_metric"] == 0.0
+    assert metrics["provenance"]["dry_launch_metrics_ignored"] is True
+    assert metrics["provenance"]["ignored_metrics_file_path"] == ".vibe/real_metrics/stale.json"
 
 
 def test_v0821_active_jobs_only_monitor_when_prequeue_disabled(tmp_path: Path):

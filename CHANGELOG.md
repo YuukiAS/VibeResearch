@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.43 - 2026-05-31
+
+- Guard metric collection for dry-submitted launches: `collect` now ignores
+  configured external metrics files when `launch.json` records
+  `dry_submitted` or a `slurm-dry-*` job id.
+- Record `provenance.dry_launch_metrics_ignored` plus the ignored metrics path
+  so stale metrics cannot become countable real-experiment evidence.
+
 ## 0.8.42 - 2026-05-31
 
 - Make autonomous submission flags fail closed: `--dry-submit` remains the
