@@ -1878,7 +1878,11 @@ def patch(
 def dryrun(run_id: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
     """Run the manifest dry-run command."""
 
-    result = run_dryrun(paths(target), run_id)
+    try:
+        result = run_dryrun(paths(target), run_id)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
     console.print(f"Dry-run {run_id}: returncode={result['returncode']}")
 
 

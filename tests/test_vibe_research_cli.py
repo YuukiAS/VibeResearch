@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.9" in show.output
+    assert "0.10.10" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -411,6 +411,33 @@ def test_v0109_research_init_syncs_repaired_project_brief_to_config_and_question
     by_id = {row["question_id"]: row for row in read_jsonl(questions_path)}
     assert by_id["missing_project_goal"]["status"] == "resolved"
     assert by_id["missing_project_background"]["status"] == "resolved"
+
+
+def test_v01010_dryrun_refuses_active_submitted_run_without_state_rollback(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    run_id = "r001_active"
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    run = {
+        "run_id": run_id,
+        "cycle_id": "c001",
+        "status": "submitted",
+        "entrypoint": {"type": "slurm", "command": "python train.py"},
+        "dryrun": {"command": "python -c 'print(1)'"},
+        "resources": {"gpu": 1, "cpus": 1, "mem_gb": 1, "time": "00:10:00"},
+    }
+    state.setdefault("runs", {})[run_id] = run
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    run_dir = tmp_path / ".vibe" / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    write_json(run_dir / "manifest.json", run)
+    write_yaml(run_dir / "manifest.yaml", run)
+    write_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {"active": [{"run_id": run_id, "backend": "slurm", "job_id": "123", "status": "submitted"}]})
+
+    result = invoke("dryrun", run_id, "--target", str(tmp_path))
+    assert result.exit_code != 0
+    assert "already active/submitted" in result.output
+    updated = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert updated["runs"][run_id]["status"] == "submitted"
 
 
 def test_v080_portfolio_blocks_budget_and_duplicate_but_allows_changed_repeat(tmp_path: Path):

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.10 - 2026-05-31
+
+- Block `vibe dryrun <run_id>` for runs that are already active, submitted,
+  pending, or running so repeated dry-runs cannot roll submitted scheduler
+  state back to `dryrun_passed`.
+
 ## 0.10.9 - 2026-05-31
 
 - Synchronize repaired `.vibe/project/brief.md` goal/background back into

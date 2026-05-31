@@ -80,6 +80,10 @@ def run_dryrun(paths: VibePaths, run_id: str) -> dict[str, Any]:
     run = state.get("runs", {}).get(run_id)
     if not run:
         raise ValueError(f"Unknown run: {run_id}")
+    active = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
+    submitted_statuses = {"submitted", "pending", "running", "dry_submitted", "submitted_dry"}
+    if any(job.get("run_id") == run_id for job in active) or run.get("status") in submitted_statuses:
+        raise RuntimeError(f"Run {run_id} is already active/submitted; monitor or cancel it before rerunning dryrun")
     issues = validate_manifest(paths, run_id)
     errors = [issue.message for issue in issues if issue.level == "error"]
     if errors:
