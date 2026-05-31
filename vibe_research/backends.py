@@ -410,6 +410,17 @@ def evaluate_wait_policy(launch: dict[str, Any], config: dict[str, Any], wait_po
         }
     if materially_better:
         best = sorted(materially_better, key=lambda row: float(row["estimated_start_plus_run_hours"]))[0]
+        if max_hours and float(best["estimated_start_plus_run_hours"]) > max_hours:
+            return {
+                "verdict": "fallback_better_but_outside_wait_policy",
+                "reason": "fallback_materially_better_but_exceeds_policy_window",
+                "preferred_partition": current_partition,
+                "preferred_estimated_start_plus_run_hours": current_hours,
+                "recommended_partition": best.get("partition", ""),
+                "recommended_estimated_start_plus_run_hours": best.get("estimated_start_plus_run_hours"),
+                "max_start_plus_run_hours": max_hours,
+                "fallback_checked": fallback_evidence,
+            }
         return {
             "verdict": "fallback_better_available",
             "reason": "fallback_materially_better_even_outside_policy_window",

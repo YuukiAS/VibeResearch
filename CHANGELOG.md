@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.53 - 2026-05-31
+
+- Split Slurm fallback evidence into a distinct
+  `fallback_better_but_outside_wait_policy` verdict when a fallback is
+  materially better than the current partition but still exceeds the configured
+  wait-policy window.
+- Keep automatic requeue disabled for that verdict while surfacing it in
+  sustained audit as a queue-policy issue for operator review.
+
 ## 0.8.52 - 2026-05-31
 
 - Add external research resource context to cycle prompt packets, including

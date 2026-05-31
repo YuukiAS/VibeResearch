@@ -561,6 +561,8 @@ def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_route
         issues.append("default_portfolio_generates_too_few_routes")
     if active_jobs and max(active_cycle_counts.values() or [0]) < min_routes_per_round and len(active_jobs) >= min_routes_per_round:
         issues.append("active_jobs_fragmented_across_cycles_not_one_round")
+    if active_jobs_with_outside_wait_fallback(active_jobs):
+        issues.append("fallback_better_but_outside_wait_policy")
     source_rows = read_jsonl(paths.research / "sources.jsonl")
     external_repo_rows = read_jsonl(paths.research / "external_repos.jsonl")
     method_marker = read_json(paths.research / "auto_method_search.json", {})
@@ -659,6 +661,8 @@ def sustained_round_next_action(completed_count: int, target_rounds: int, issues
         return "repair or classify non-counting real experiment failures before planning another round"
     if "blocked_missing_capability" in issues:
         return "run adapter doctor, activate a changed executable capability, or repair missing inputs before scheduling another sustained round"
+    if "fallback_better_but_outside_wait_policy" in issues:
+        return "review Slurm fallback wait policy or keep monitoring with explicit queue-policy awareness"
     if active_jobs:
         return "monitor active jobs, then collect metrics and run cycle reflection/revision before planning the next round"
     if "default_portfolio_generates_too_few_routes" in issues:
@@ -688,6 +692,15 @@ def render_sustained_round_audit(result: dict[str, Any]) -> str:
     if not result.get("cycles"):
         lines.append("- none")
     return "\n".join(lines) + "\n"
+
+
+def active_jobs_with_outside_wait_fallback(active_jobs: list[dict[str, Any]]) -> bool:
+    for job in active_jobs:
+        details = job.get("poll_details", {}) if isinstance(job.get("poll_details"), dict) else {}
+        verdict = details.get("wait_verdict", job.get("wait_verdict", {}))
+        if isinstance(verdict, dict) and verdict.get("verdict") == "fallback_better_but_outside_wait_policy":
+            return True
+    return False
 
 
 def policy_completeness(paths: VibePaths) -> dict[str, Any]:

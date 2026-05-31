@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.52" in show.output
+    assert "0.8.53" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1824,6 +1824,30 @@ def test_v0848_sustained_round_audit_surfaces_missing_capability_block(tmp_path:
     assert audit["next_action"] == "run adapter doctor, activate a changed executable capability, or repair missing inputs before scheduling another sustained round"
 
 
+def test_v0853_sustained_audit_flags_outside_wait_fallback(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(tmp_path / ".vibe" / "research" / "auto_method_search.json", {"searches": {"test": {"status": "searched"}}})
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {
+            "active": [
+                {
+                    "run_id": "r001",
+                    "cycle_id": "c001",
+                    "backend": "slurm",
+                    "status": "pending",
+                    "poll_details": {"wait_verdict": {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "htzhulab"}},
+                }
+            ]
+        },
+    )
+    result = invoke("research", "sustained-audit", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
+    assert "fallback_better_but_outside_wait_policy" in audit["issues"]
+    assert audit["next_action"] == "review Slurm fallback wait policy or keep monitoring with explicit queue-policy awareness"
+
+
 def test_v0844_next_clears_stale_noncounting_run_block_after_cycle_revision(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
     enable_toy_adapter(tmp_path)
@@ -2180,6 +2204,30 @@ def test_v0847_missing_squeue_start_does_not_requeue_outside_wait_policy():
         job,
         {"wait_verdict": {"verdict": "fallback_better_available", "recommended_partition": "a100-gpu", "recommended_estimated_start_plus_run_hours": None}},
     )
+
+
+def test_v0853_fallback_better_but_outside_wait_policy_has_distinct_verdict():
+    import vibe_research.backends as backends
+
+    launch = {
+        "partition": "a100-gpu",
+        "resource_request": {
+            "time": "04:00:00",
+            "fallback_partitions": ["htzhulab"],
+            "fallback_partition_estimates": {"a100-gpu": 40, "htzhulab": 20},
+        },
+    }
+    verdict = backends.evaluate_wait_policy(
+        launch,
+        {"execution": {"slurm": {"max_pending_start_plus_run_hours": 12}}},
+        {"max_start_plus_run_hours": 12, "estimated_start_plus_run_hours": None},
+        ["a100-gpu", "htzhulab"],
+    )
+    assert verdict["verdict"] == "fallback_better_but_outside_wait_policy"
+    assert verdict["preferred_estimated_start_plus_run_hours"] == 40.0
+    assert verdict["recommended_partition"] == "htzhulab"
+    assert verdict["recommended_estimated_start_plus_run_hours"] == 20.0
+    assert verdict["max_start_plus_run_hours"] == 12.0
 
 
 def test_v0847_slurm_poll_timeout_returns_unknown_not_hang(tmp_path: Path, monkeypatch):
