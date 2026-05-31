@@ -565,9 +565,18 @@ def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_route
         issues.append("fallback_better_but_outside_wait_policy")
     source_rows = read_jsonl(paths.research / "sources.jsonl")
     external_repo_rows = read_jsonl(paths.research / "external_repos.jsonl")
+    repo_analysis_rows = read_jsonl(paths.research / "external_repo_analyses.jsonl")
     method_marker = read_json(paths.research / "auto_method_search.json", {})
     if not source_rows and not external_repo_rows and not method_marker:
         issues.append("no_external_resource_provenance_recorded")
+    analyzed_repos = {row.get("name", "") for row in repo_analysis_rows}
+    cloned_without_analysis = [
+        row.get("name", "")
+        for row in external_repo_rows
+        if row.get("status") == "cloned" and row.get("name", "") not in analyzed_repos
+    ]
+    if cloned_without_analysis:
+        issues.append("cloned_external_repo_without_integration_analysis")
     state_status = str(state.get("status", ""))
     if state_status == "blocked_missing_capability" or str(state.get("blocked_reason", "")).startswith("blocked_missing_capability"):
         issues.append("blocked_missing_capability")
@@ -594,6 +603,8 @@ def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_route
             "external_search_contexts": sorted((method_marker.get("searches") or {}).keys()) if isinstance(method_marker.get("searches"), dict) else [],
             "external_source_records": len(source_rows),
             "external_repo_records": len(external_repo_rows),
+            "external_repo_analysis_records": len(repo_analysis_rows),
+            "cloned_repos_without_analysis": cloned_without_analysis,
         },
         "real_experiment_progress": {
             "observed_count": real_progress.get("observed_count", 0),
@@ -663,6 +674,8 @@ def sustained_round_next_action(completed_count: int, target_rounds: int, issues
         return "run adapter doctor, activate a changed executable capability, or repair missing inputs before scheduling another sustained round"
     if "fallback_better_but_outside_wait_policy" in issues:
         return "review Slurm fallback wait policy or keep monitoring with explicit queue-policy awareness"
+    if "cloned_external_repo_without_integration_analysis" in issues:
+        return "run vibe external analyze-repo <name> for cloned external repositories before relying on them"
     if active_jobs:
         return "monitor active jobs, then collect metrics and run cycle reflection/revision before planning the next round"
     if "default_portfolio_generates_too_few_routes" in issues:

@@ -51,7 +51,7 @@ from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .dashboard_site import build_dashboard_site, serve_dashboard_site
 from .decisions import decision_json, make_decision, validate_decision_file, write_block_decision, write_decision
 from .directions import set_direction_status
-from .external_resources import clone_external_repo
+from .external_resources import analyze_external_repo, clone_external_repo
 from .git_ops import abandon_run, create_branch, git_available, git_current_branch, git_diff_text, merge_review, merge_run, protected_diff_paths
 from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
@@ -780,6 +780,14 @@ def external_clone_repo_cmd(
     console.print_json(data=result)
     if result.get("status") == "failed":
         raise typer.Exit(1)
+
+
+@external_app.command("analyze-repo")
+def external_analyze_repo_cmd(name: str, target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Create a read-only integration analysis for a cloned external repo."""
+
+    result = analyze_external_repo(paths(target), name)
+    console.print_json(data=result)
 
 
 @policy_app.command("lint")

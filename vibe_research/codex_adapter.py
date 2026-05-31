@@ -284,6 +284,19 @@ def external_resource_context(paths: VibePaths) -> str:
                 readme = first_readme(repo_path)
                 if readme:
                     parts.append(f"  README excerpt:\n{readme.read_text(errors='ignore')[:3000]}")
+    analyses = read_jsonl(paths.research / "external_repo_analyses.jsonl")
+    if analyses:
+        parts.append("#### External Repo Integration Analyses")
+        for row in analyses[-5:]:
+            summary = {
+                "name": row.get("name", ""),
+                "analysis_json": row.get("analysis_json", ""),
+                "setup_files": row.get("setup_files", []),
+                "package_roots": row.get("package_roots", []),
+                "likely_entrypoints": row.get("likely_entrypoints", []),
+                "safe_integration_policy": row.get("safe_integration_policy", ""),
+            }
+            parts.append(json.dumps(summary, sort_keys=True)[:3000])
     return "\n".join(parts) if len(parts) > 1 else ""
 
 

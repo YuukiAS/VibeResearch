@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.53" in show.output
+    assert "0.8.54" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2787,6 +2787,45 @@ def test_v0852_cycle_reflect_prompt_includes_external_resource_context(tmp_path:
     assert "upstream-method" in packet
     assert "Upstream Method" in packet
     assert "train.py" in packet
+
+
+def test_v0854_external_analyze_repo_creates_artifacts_and_context(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    repo = tmp_path / ".vibe" / "research" / "external_repos" / "upstream-method"
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "README.md").write_text("# Upstream Method\n\nIntegration notes.\n")
+    (repo / "pyproject.toml").write_text("[project]\nname='upstream'\n")
+    (repo / "train_model.py").write_text("print('train')\n")
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "__init__.py").write_text("")
+    append_jsonl(
+        tmp_path / ".vibe" / "research" / "external_repos.jsonl",
+        {"name": "upstream-method", "status": "cloned", "url": "https://example.test/upstream.git", "path": ".vibe/research/external_repos/upstream-method", "commit": "abc123"},
+    )
+
+    result = invoke("external", "analyze-repo", "upstream-method", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    analysis = read_json(tmp_path / ".vibe" / "research" / "external_repo_analyses" / "upstream-method.json", {})
+    assert "pyproject.toml" in analysis["setup_files"]
+    assert "pkg/__init__.py" in analysis["package_roots"]
+    assert "train_model.py" in analysis["likely_entrypoints"]
+    assert "external code was not imported" in " ".join(analysis["risk_notes"])
+    packet = prompt_packet(VibePaths(tmp_path), "cycle_reflect", "c001")
+    assert "External Repo Integration Analyses" in packet
+    assert "train_model.py" in packet
+
+
+def test_v0854_sustained_audit_flags_cloned_repo_without_analysis(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    append_jsonl(
+        tmp_path / ".vibe" / "research" / "external_repos.jsonl",
+        {"name": "upstream-method", "status": "cloned", "url": "https://example.test/upstream.git", "path": ".vibe/research/external_repos/upstream-method", "commit": "abc123"},
+    )
+    result = invoke("research", "sustained-audit", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
+    assert "cloned_external_repo_without_integration_analysis" in audit["issues"]
+    assert audit["framework_capabilities"]["cloned_repos_without_analysis"] == ["upstream-method"]
 
 
 def test_v0821_active_jobs_only_monitor_when_prequeue_disabled(tmp_path: Path):

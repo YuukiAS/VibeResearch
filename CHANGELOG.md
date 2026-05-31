@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.54 - 2026-05-31
+
+- Add `vibe external analyze-repo <name>` for read-only cloned repository
+  integration analysis: setup files, package roots, likely train/infer/eval
+  entrypoints, README excerpts, top-level layout, risks, and safe-integration
+  policy.
+- Include latest external repo analysis records in cycle prompt context and
+  flag cloned repositories without matching integration analysis in sustained
+  audit.
+
 ## 0.8.53 - 2026-05-31
 
 - Split Slurm fallback evidence into a distinct
