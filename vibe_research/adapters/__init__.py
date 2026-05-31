@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import shlex
+import sys
 from typing import Any
 
 from ..adapter_schema import AdapterCapability, hash_dict, load_adapter_manifest
@@ -138,8 +140,8 @@ def resource_plan_from_task(cycle_id: str, decision: Any, task: dict[str, Any]) 
                 "hypothesis": task.get("hypothesis") or getattr(decision, "required_action", "") or key,
                 "expected_learning": task.get("expected_learning") or task.get("hypothesis") or key,
                 "cost": task.get("cost", "low"),
-                "dryrun": {"command": task.get("dryrun_command", ""), "max_minutes": int(task.get("dryrun_max_minutes", 5))},
-                "entrypoint": {"type": task.get("entrypoint_type", "local"), "command": task.get("entrypoint_command", "")},
+                "dryrun": {"command": normalize_python_command(task.get("dryrun_command", ""), task.get("config", {})), "max_minutes": int(task.get("dryrun_max_minutes", 5))},
+                "entrypoint": {"type": task.get("entrypoint_type", "local"), "command": normalize_python_command(task.get("entrypoint_command", ""), task.get("config", {}))},
                 "resources": task.get("resources", {}),
                 "outputs": {"expected_output_path": task.get("expected_output_path", "")},
                 "evaluation": {
@@ -278,7 +280,29 @@ def task_from_capability(paths: VibePaths, manifest: Any, capability: AdapterCap
         "baseline_comparison_target": getattr(decision, "baseline_comparison_target", ""),
         "run_kind": run_kind_from_task(capability.task_type),
         "adapter_metadata": metadata,
+        "config": config,
     }
+
+
+def normalize_python_command(command: str, config: dict[str, Any]) -> str:
+    """Rewrite framework module commands to the current configured interpreter."""
+
+    if not command:
+        return ""
+    python_config = config.get("execution", {}).get("python", {}) if isinstance(config.get("execution"), dict) else {}
+    if python_config.get("rewrite_vibe_module_commands", True) is False:
+        return command
+    interpreter = str(python_config.get("executable") or sys.executable)
+    if "{vibe_python}" in command or "{python}" in command:
+        return command.replace("{vibe_python}", shlex.quote(interpreter)).replace("{python}", shlex.quote(interpreter))
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return command
+    if len(parts) >= 3 and parts[1] == "-m" and parts[2].startswith("vibe_research."):
+        parts[0] = interpreter
+        return " ".join(shlex.quote(part) for part in parts)
+    return command
 
 
 def metrics_schema_for_plan(capability: AdapterCapability) -> dict[str, Any]:

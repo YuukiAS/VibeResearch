@@ -14,7 +14,7 @@ from .adapters import is_placeholder_command
 from .backends import get_backend
 from .config import load_config
 from .dashboard import sync_dashboard
-from .io import append_jsonl, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text
+from .io import append_jsonl, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text, write_yaml
 from .manifest import validate_manifest
 from .paths import VibePaths
 from .real_experiments import classify_run, record_repair_issue, summarize_real_experiment_progress
@@ -248,6 +248,7 @@ def submit_run(paths: VibePaths, run_id: str, *, dry: bool = False, backend_name
 def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | None = None) -> None:
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []})
     state = read_json(paths.state / "state.json", {})
+    config = load_config(paths)
     still_active: list[dict[str, Any]] = []
     for job in active.get("active", []):
         backend = get_backend(paths, job.get("backend") or backend_name)
@@ -265,6 +266,30 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
                 if classify_run(paths, job["run_id"], run)["run_kind"] == "real_experiment":
                     record_repair_issue(paths, job["run_id"], run, f"non_counting_execution_failure:{poll.status}", poll.details)
                 apply_failure_rules(paths, state, job["run_id"], run)
+        elif should_requeue_to_fallback(config, job, poll.details):
+            recommended = poll.details.get("wait_verdict", {}).get("recommended_partition", "")
+            cancel_result = backend.cancel(job)
+            job["cancelled_at"] = utc_now()
+            job["status"] = "cancelled_for_fallback_requeue"
+            job["cancel_result"] = cancel_result
+            append_jsonl(paths.scheduler / "completed_jobs.jsonl", job)
+            run = state.get("runs", {}).get(job["run_id"], {})
+            force_run_partition(paths, job["run_id"], run, recommended)
+            launch = submit_run(paths, job["run_id"], dry=False, backend_name=backend.name)
+            launch["requeued_from_job_id"] = job.get("job_id", "")
+            launch["requeue_reason"] = "fallback_better_available"
+            still_active.append(launch)
+            state = read_json(paths.state / "state.json", state)
+            state.setdefault("runs", {}).setdefault(job["run_id"], {})["status"] = "submitted"
+            record_event(
+                paths,
+                "job_requeued",
+                f"Requeued {job['run_id']} to fallback partition {recommended}",
+                cycle_id=job.get("cycle_id", ""),
+                run_id=job["run_id"],
+                status="fallback_requeued",
+                payload={"previous_job": job, "new_launch": launch, "poll_details": poll.details},
+            )
         else:
             job["status"] = poll.status
             job["poll_details"] = poll.details
@@ -284,6 +309,32 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
     write_json(paths.state / "state.json", state)
     summarize_real_experiment_progress(paths, write=True)
     sync_dashboard(paths)
+
+
+def should_requeue_to_fallback(config: dict[str, Any], job: dict[str, Any], details: dict[str, Any]) -> bool:
+    slurm = config.get("execution", {}).get("slurm", {}) if isinstance(config.get("execution"), dict) else {}
+    if not slurm.get("auto_requeue_to_better_fallback", False):
+        return False
+    if job.get("backend") != "slurm":
+        return False
+    verdict = details.get("wait_verdict", {}) if isinstance(details.get("wait_verdict"), dict) else {}
+    return verdict.get("verdict") == "fallback_better_available" and bool(verdict.get("recommended_partition"))
+
+
+def force_run_partition(paths: VibePaths, run_id: str, run: dict[str, Any], partition: str) -> None:
+    resources = run.setdefault("resources", {})
+    resources["force_partition"] = partition
+    resources["preferred_partitions"] = [partition] + [p for p in resources.get("preferred_partitions", []) if p != partition]
+    run["resources"] = resources
+    state = read_json(paths.state / "state.json", {})
+    state.setdefault("runs", {}).setdefault(run_id, {}).update(run)
+    write_json(paths.state / "state.json", state)
+    manifest_json = paths.runs / run_id / "manifest.json"
+    manifest_yaml = paths.runs / run_id / "manifest.yaml"
+    manifest = read_json(manifest_json, run)
+    manifest["resources"] = resources
+    write_json(manifest_json, manifest)
+    write_yaml(manifest_yaml, manifest)
 
 
 def cancel_run(paths: VibePaths, run_id: str) -> dict[str, Any]:

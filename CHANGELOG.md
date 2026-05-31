@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.8.31 - 2026-05-30
+
+- Render Slurm `--gres` with partition-specific GPU names for known A100 and
+  Volta partitions, while still allowing config/resource overrides.
+- Rewrite adapter commands that invoke `python -m vibe_research.*` to the
+  current configured framework interpreter, avoiding stale external supervisor
+  environments in freshly cloned targets.
+- Add an explicit opt-in `execution.slurm.auto_requeue_to_better_fallback`
+  policy that cancels and re-submits pending Slurm jobs only when monitor
+  evidence proves a fallback partition has a better completion window.
+
 ## 0.8.30 - 2026-05-30
 
 - Add init-time scheduler resource policy options for preferred/fallback Slurm

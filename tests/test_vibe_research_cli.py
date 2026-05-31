@@ -29,8 +29,8 @@ from vibe_research.promotion import compile_decision, ensure_executable_resource
 from vibe_research.research_manager import default_candidates
 from vibe_research.resource_policy import normalize_run_resources
 from vibe_research.scheduler import collect as collect_run
-from vibe_research.backends import SlurmBackend, fallback_completion_estimates, start_plus_run_hours
-from vibe_research.slurm import choose_partition
+from vibe_research.backends import PollResult, SlurmBackend, fallback_completion_estimates, start_plus_run_hours
+from vibe_research.slurm import choose_partition, render_sbatch
 
 
 runner = CliRunner()
@@ -202,7 +202,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.30" in show.output
+    assert "0.8.31" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1266,6 +1266,86 @@ def test_v0830_resource_policy_removes_default_strict_and_caps_runtime():
     assert normalized["epochs"] == 120
     assert normalized["max_epochs"] == 120
     assert normalized["max_pending_start_plus_run_hours"] == 12
+
+
+def test_v0831_render_sbatch_uses_partition_specific_gres(tmp_path: Path):
+    manifest = {
+        "run_id": "r001",
+        "resources": {"gpu": 1, "cpus": 1, "mem_gb": 4, "time": "01:00:00"},
+        "entrypoint": {"command": "python train.py"},
+    }
+    a100 = render_sbatch(manifest, workdir=tmp_path, output=tmp_path / "out", error=tmp_path / "err", partition="a100-gpu", config={})
+    volta = render_sbatch(manifest, workdir=tmp_path, output=tmp_path / "out", error=tmp_path / "err", partition="volta-gpu", config={})
+    assert "#SBATCH --gres=gpu:nvidia_a100-pcie-40gb:1" in a100
+    assert "#SBATCH --gres=gpu:tesla_v100-sxm2-16gb:1" in volta
+
+
+def test_v0831_vibe_module_commands_use_current_python():
+    from vibe_research.adapters import normalize_python_command
+
+    command = "/old/external/env/bin/python -m vibe_research.some_entry --arg x"
+    config = {"execution": {"python": {"executable": "/current/env/bin/python", "rewrite_vibe_module_commands": True}}}
+    assert normalize_python_command(command, config).startswith("/current/env/bin/python -m vibe_research.some_entry")
+
+
+def test_v0831_monitor_requeues_to_better_fallback_when_opted_in(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    config = read_yaml(tmp_path / ".vibe" / "config.yaml", {})
+    config.setdefault("execution", {}).setdefault("slurm", {})["auto_requeue_to_better_fallback"] = True
+    write_yaml(tmp_path / ".vibe" / "config.yaml", config)
+    write_json(tmp_path / ".vibe" / "config.json", config)
+    run_id = "r001_fallback"
+    run = {
+        "run_id": run_id,
+        "cycle_id": "c001",
+        "status": "submitted",
+        "entrypoint": {"type": "slurm", "command": "python train.py"},
+        "resources": {"gpu": 1, "cpus": 1, "mem_gb": 4, "time": "04:00:00", "preferred_partitions": ["preferred"], "fallback_partitions": ["fallback"]},
+    }
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state.setdefault("runs", {})[run_id] = run
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    run_dir = tmp_path / ".vibe" / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    write_json(run_dir / "manifest.json", run)
+    write_yaml(run_dir / "manifest.yaml", run)
+    (run_dir / "monitor.jsonl").write_text("")
+    write_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {"active": [{"run_id": run_id, "cycle_id": "c001", "backend": "slurm", "job_id": "111", "partition": "preferred", "resource_request": run["resources"]}]})
+
+    class FakeBackend:
+        name = "slurm"
+
+        def poll(self, launch):
+            return PollResult(
+                "pending",
+                False,
+                {"wait_verdict": {"verdict": "fallback_better_available", "recommended_partition": "fallback"}},
+            )
+
+        def cancel(self, launch):
+            return {"returncode": 0, "job_id": launch.get("job_id")}
+
+        def submit(self, submitted_run_id, *, dry=False):
+            manifest = read_json(tmp_path / ".vibe" / "runs" / submitted_run_id / "manifest.json", {})
+            return {
+                "run_id": submitted_run_id,
+                "cycle_id": "c001",
+                "backend": "slurm",
+                "job_id": "222",
+                "status": "submitted",
+                "partition": manifest["resources"]["force_partition"],
+                "resource_request": manifest["resources"],
+            }
+
+    monkeypatch.setattr("vibe_research.scheduler.get_backend", lambda paths, backend_name=None: FakeBackend())
+    assert invoke("monitor", "--target", str(tmp_path)).exit_code == 0
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    assert active["active"][0]["job_id"] == "222"
+    assert active["active"][0]["partition"] == "fallback"
+    manifest = read_json(run_dir / "manifest.json", {})
+    assert manifest["resources"]["force_partition"] == "fallback"
+    completed = read_jsonl(tmp_path / ".vibe" / "scheduler" / "completed_jobs.jsonl")
+    assert completed[-1]["status"] == "cancelled_for_fallback_requeue"
 
 
 def test_v087_compile_preserves_active_job_next_action(tmp_path: Path):

@@ -26,8 +26,7 @@ def render_sbatch(
     slurm = config.get("execution", {}).get("slurm", {}) or config.get("slurm", {})
     partitions = resources.get("preferred_partitions") or [slurm.get("default_partition", "gpu_short")]
     selected_partition = partition or partitions[0]
-    gpu = int(resources.get("gpu", 0) or 0)
-    gres = f"gpu:{gpu}" if gpu else ""
+    gres = slurm_gres_for_partition(selected_partition, {"resource_request": resources}, config)
     account = resources.get("account") or slurm.get("account", "")
     qos = resources.get("qos") or slurm.get("qos", "")
     return "\n".join(
@@ -66,6 +65,34 @@ def runtime_limit_exports(resources: dict[str, Any]) -> list[str]:
     return lines
 
 
+def slurm_gres_for_partition(partition: str, launch: dict[str, Any], config: dict[str, Any]) -> str:
+    resource = launch.get("resource_request") or {}
+    gpu = int(resource.get("gpu", 0) or 0)
+    if not gpu:
+        return ""
+    for source in [
+        resource.get("gres_by_partition", {}),
+        resource.get("partition_gres", {}),
+        config.get("execution", {}).get("slurm", {}).get("gres_by_partition", {}),
+        config.get("execution", {}).get("slurm", {}).get("partition_gres", {}),
+    ]:
+        if isinstance(source, dict) and source.get(partition):
+            return str(source[partition]).format(gpu=gpu)
+    profiles = {
+        row.get("name"): row
+        for row in config.get("execution", {}).get("slurm", {}).get("partitions", [])
+        if isinstance(row, dict) and row.get("name")
+    }
+    profile_gres = profiles.get(partition, {}).get("gres")
+    if profile_gres:
+        return str(profile_gres).format(gpu=gpu)
+    known = {
+        "a100-gpu": "gpu:nvidia_a100-pcie-40gb:{gpu}",
+        "volta-gpu": "gpu:tesla_v100-sxm2-16gb:{gpu}",
+    }
+    return known.get(partition, "gpu:{gpu}").format(gpu=gpu)
+
+
 def select_partition(manifest: dict[str, Any], config: dict[str, Any]) -> str:
     return choose_partition(manifest, config)[0]
 
@@ -75,6 +102,8 @@ def choose_partition(manifest: dict[str, Any], config: dict[str, Any]) -> tuple[
     preferred = list(resources.get("preferred_partitions") or [])
     fallback = list(resources.get("fallback_partitions") or [])
     execution_slurm = config.get("execution", {}).get("slurm", {})
+    if resources.get("force_partition"):
+        return str(resources["force_partition"]), "forced_partition"
     if not preferred:
         preferred = [execution_slurm.get("default_partition", "gpu_short")]
     if resources.get("strict_preferred_partition") or resources.get("prefer_configured_partition"):

@@ -16,7 +16,7 @@ from .config import load_config
 from .io import ensure_dir, utc_now, write_text
 from .manifest import load_manifest
 from .paths import VibePaths
-from .slurm import choose_partition, classify_failure, render_sbatch
+from .slurm import choose_partition, classify_failure, render_sbatch, slurm_gres_for_partition
 
 
 @dataclass
@@ -370,34 +370,6 @@ def sbatch_test_only_completion_estimate(launch: dict[str, Any], config: dict[st
         return None
     start_text = parse_sbatch_test_start(result.stdout + "\n" + result.stderr)
     return start_plus_run_hours(start_text, str(resource.get("time", ""))) if start_text else None
-
-
-def slurm_gres_for_partition(partition: str, launch: dict[str, Any], config: dict[str, Any]) -> str:
-    resource = launch.get("resource_request") or {}
-    gpu = int(resource.get("gpu", 0) or 0)
-    if not gpu:
-        return ""
-    for source in [
-        resource.get("gres_by_partition", {}),
-        resource.get("partition_gres", {}),
-        config.get("execution", {}).get("slurm", {}).get("gres_by_partition", {}),
-        config.get("execution", {}).get("slurm", {}).get("partition_gres", {}),
-    ]:
-        if isinstance(source, dict) and source.get(partition):
-            return str(source[partition]).format(gpu=gpu)
-    profiles = {
-        row.get("name"): row
-        for row in config.get("execution", {}).get("slurm", {}).get("partitions", [])
-        if isinstance(row, dict) and row.get("name")
-    }
-    profile_gres = profiles.get(partition, {}).get("gres")
-    if profile_gres:
-        return str(profile_gres).format(gpu=gpu)
-    known = {
-        "a100-gpu": "gpu:nvidia_a100-pcie-40gb:{gpu}",
-        "volta-gpu": "gpu:tesla_v100-sxm2-16gb:{gpu}",
-    }
-    return known.get(partition, "gpu:{gpu}").format(gpu=gpu)
 
 
 def parse_sbatch_test_start(text: str) -> str:

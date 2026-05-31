@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Any
 
 from .adapter_onboarding import adapter_readiness, bootstrap_adapter_on_init, clear_adapter_block_if_ready, set_adapter_block, write_real_experiment_gap_report
@@ -116,6 +117,7 @@ def init_project(
         max_epochs_per_experiment=max_epochs_per_experiment,
     )
     config_data.setdefault("portal", {})["root_mode"] = root_portal
+    config_data.setdefault("execution", {}).setdefault("python", {})["executable"] = sys.executable
     write_yaml(paths.vibe / "config.yaml", config_data)
     write_json(paths.vibe / "config.json", config_data)
     write_yaml(paths.vibe / "config.local.yaml", {"local": {"notes": "local-only overrides; not auto-merged into config.yaml"}})

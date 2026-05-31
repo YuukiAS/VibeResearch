@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.8.30"
+    vibe_version: str = "0.8.31"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -35,6 +35,10 @@ class ProjectConfig(BaseModel):
                 "launcher": "auto",
                 "tmux_session_prefix": "vibe",
             },
+            "python": {
+                "executable": "",
+                "rewrite_vibe_module_commands": True,
+            },
             "slurm": {
                 "enabled": True,
                 "default_partition": "gpu_short",
@@ -42,6 +46,7 @@ class ProjectConfig(BaseModel):
                 "account": "",
                 "qos": "",
                 "max_pending_start_plus_run_hours": 24,
+                "auto_requeue_to_better_fallback": False,
                 "partitions": [
                     {"name": "gpu_short", "priority": 100, "max_time": "08:00:00", "gpu": "generic"},
                     {"name": "gpu", "priority": 80, "max_time": "24:00:00", "gpu": "generic"},
