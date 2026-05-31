@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.8 - 2026-05-31
+
+- Add a generic feature-surface regression covering the lineage,
+  internalization, scout, dual-track portfolio, owned-framework, and
+  optimization CLI entrypoints in an initialized downstream workspace.
+
 ## 0.10.7 - 2026-05-31
 
 - Refresh the English and Chinese README files for the current 0.10.x feature
