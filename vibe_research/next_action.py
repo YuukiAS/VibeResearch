@@ -31,6 +31,9 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
         return "vibe monitor", ""
     if active_jobs_fragment_sustained_round(paths, active):
         return "vibe monitor", ""
+    pending_output = pending_current_cycle_output_step(state)
+    if pending_output:
+        return pending_output, ""
     if any(row.get("status") == "new" for row in read_jsonl(paths.ideas / "registry.jsonl")):
         return "vibe ideas triage", ""
     if any(row.get("status") == "needs_literature_refresh" for row in read_jsonl(paths.ideas / "registry.jsonl")):
@@ -163,6 +166,24 @@ def active_scope_output_action(state: dict, active: list[dict]) -> str:
         return ""
     active_cycle_ids = {str(job.get("cycle_id") or "") for job in active if job.get("cycle_id")}
     cycle_id = next(iter(active_cycle_ids)) if len(active_cycle_ids) == 1 else str(state.get("current_cycle_id") or "")
+    if not cycle_id:
+        return ""
+    runs = sorted((state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}).items())
+    for run_id, run in runs:
+        if run.get("cycle_id") != cycle_id or terminal_inactive_run(run):
+            continue
+        status = str(run.get("status", ""))
+        if status in {"finished", "submitted_dry"}:
+            return f"vibe collect {run_id}"
+        if status == "collected":
+            return f"vibe reflect {run_id}"
+        if status == "reflected":
+            return f"vibe revise-plan {run_id}"
+    return ""
+
+
+def pending_current_cycle_output_step(state: dict) -> str:
+    cycle_id = str(state.get("current_cycle_id") or "")
     if not cycle_id:
         return ""
     runs = sorted((state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}).items())

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.10.11 - 2026-05-31
+
+- Let current-cycle finished, collected, and reflected runs complete their
+  collect/reflect/revise output lifecycle before idea refresh or cycle closeout
+  actions.
+- Add regression coverage for compatible preferred Slurm partitions staying
+  ahead of merely available fallback partitions.
+
 ## 0.10.10 - 2026-05-31
 
 - Block `vibe dryrun <run_id>` for runs that are already active, submitted,

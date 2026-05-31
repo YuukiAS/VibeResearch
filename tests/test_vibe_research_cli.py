@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.10" in show.output
+    assert "0.10.11" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -438,6 +438,58 @@ def test_v01010_dryrun_refuses_active_submitted_run_without_state_rollback(tmp_p
     assert "already active/submitted" in result.output
     updated = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
     assert updated["runs"][run_id]["status"] == "submitted"
+
+
+def test_v01011_next_collects_finished_current_cycle_before_idea_refresh(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    create_idea(VibePaths(tmp_path), "needs literature")
+    ideas = read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")
+    ideas[0]["status"] = "needs_literature_refresh"
+    (tmp_path / ".vibe" / "ideas" / "registry.jsonl").write_text("")
+    for row in ideas:
+        append_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl", row)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state.update(
+        {
+            "current_cycle_id": "c001",
+            "cycles": {"c001": {"status": "reviewed"}},
+            "runs": {"r001_done": {"run_id": "r001_done", "cycle_id": "c001", "status": "finished"}},
+            "next_action": "vibe reflect-cycle c001",
+        }
+    )
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "vibe collect r001_done" in result.output
+    assert "lit-refresh-idea" not in result.output
+    assert "reflect-cycle" not in result.output
+
+
+def test_v01011_compatible_preferred_partition_remains_ahead_of_available_fallback(monkeypatch):
+    monkeypatch.setattr("vibe_research.slurm.probe_available_partitions", lambda: ({"a100-gpu"}, "sinfo"))
+    manifest = {
+        "resources": {
+            "gpu": 1,
+            "preferred_partitions": ["lab-gpu"],
+            "fallback_partitions": ["a100-gpu"],
+            "min_cuda_compute_capability": 7.5,
+        }
+    }
+    config = {
+        "execution": {
+            "slurm": {
+                "partitions": [
+                    {"name": "lab-gpu", "gpu_family": "a100", "cuda_compute_capability": 8.0},
+                    {"name": "a100-gpu", "gpu_family": "a100", "cuda_compute_capability": 8.0},
+                ]
+            }
+        }
+    }
+    partition, reason = choose_partition(manifest, config)
+    assert partition == "lab-gpu"
+    assert reason.startswith("preferred_partition_selected: fallback_requires_wait_policy_evidence")
 
 
 def test_v080_portfolio_blocks_budget_and_duplicate_but_allows_changed_repeat(tmp_path: Path):
