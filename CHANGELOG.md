@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.10.9 - 2026-05-31
+
+- Synchronize repaired `.vibe/project/brief.md` goal/background back into
+  `.vibe/config.yaml` and `.vibe/config.json` during research initialization.
+- Resolve stale placeholder project goal/background research questions once a
+  concrete project brief exists.
+
 ## 0.10.8 - 2026-05-31
 
 - Add a generic feature-surface regression covering the lineage,

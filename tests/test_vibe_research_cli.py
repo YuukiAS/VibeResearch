@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.8" in show.output
+    assert "0.10.9" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -379,6 +379,38 @@ def test_v080_research_init_registry_policy_memory_memo_and_exports(tmp_path: Pa
     assert invoke("dashboard", "export-research", "--target", str(tmp_path)).exit_code == 0
     graph = read_json(tmp_path / ".vibe" / "dashboard" / "hypothesis_graph.json", {})
     assert any(edge["type"] == "hypothesis_to_experiment" for edge in graph["edges"])
+
+
+def test_v0109_research_init_syncs_repaired_project_brief_to_config_and_questions(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--no-root-portal").exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    questions_path = tmp_path / ".vibe" / "research" / "questions.jsonl"
+    questions_path.write_text("")
+    append_jsonl(questions_path, {"question_id": "missing_project_goal", "status": "open"})
+    append_jsonl(questions_path, {"question_id": "missing_project_background", "status": "open"})
+    (tmp_path / ".vibe" / "project" / "brief.md").write_text(
+        "# Project Brief\n\n"
+        "## Goal\n"
+        "Run a generic evidence-gated research pipeline.\n\n"
+        "## Background\n"
+        "The project has concrete baseline, metrics, and compute constraints.\n"
+    )
+    stale = read_yaml(tmp_path / ".vibe" / "config.yaml", {})
+    stale.setdefault("project", {})["goal"] = "Define the research objective for stale."
+    stale["project"]["background"] = "Project background has not been supplied yet; update .vibe/project/brief.md before serious planning."
+    write_yaml(tmp_path / ".vibe" / "config.yaml", stale)
+    write_json(tmp_path / ".vibe" / "config.json", stale)
+
+    result = invoke("research", "init", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert not [row for row in data["open_questions"] if row.get("question_id") in {"missing_project_goal", "missing_project_background"}]
+    config = read_yaml(tmp_path / ".vibe" / "config.yaml", {})
+    assert config["project"]["goal"] == "Run a generic evidence-gated research pipeline."
+    assert "concrete baseline" in config["project"]["background"]
+    by_id = {row["question_id"]: row for row in read_jsonl(questions_path)}
+    assert by_id["missing_project_goal"]["status"] == "resolved"
+    assert by_id["missing_project_background"]["status"] == "resolved"
 
 
 def test_v080_portfolio_blocks_budget_and_duplicate_but_allows_changed_repeat(tmp_path: Path):

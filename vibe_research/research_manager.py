@@ -185,6 +185,7 @@ def research_init(
     project_brief = read_project_brief(paths)
     goal = goal or project_brief.get("goal", "")
     background = background or project_brief.get("background", "")
+    sync_config_project_context(paths, goal=goal, background=background)
     constraints = scan_repo_constraints(paths)
     write_text(
         paths.research / "research_brief.md",
@@ -192,9 +193,9 @@ def research_init(
     )
     policies = write_default_policies(paths, memo_language=memo_language, timezone=timezone, autonomy_level=autonomy_level, force=force)
     blockers = []
-    if not goal or "Define the research objective" in goal or goal.startswith("MISSING"):
+    if missing_goal_text(goal):
         blockers.append("q_init_project_goal")
-    if not background or "not been supplied" in background or background.startswith("MISSING"):
+    if missing_background_text(background):
         blockers.append("q_init_project_background")
     existing_questions = read_jsonl(files["questions"])
     if existing_questions:
@@ -212,6 +213,37 @@ def research_init(
     status = research_readiness(paths)
     status["policies"] = policies
     return status
+
+
+def sync_config_project_context(paths: VibePaths, *, goal: str, background: str) -> None:
+    if missing_goal_text(goal) and missing_background_text(background):
+        return
+    for path, writer in [(paths.vibe / "config.yaml", write_yaml), (paths.vibe / "config.json", write_json)]:
+        data = read_yaml(path, {}) if path.suffix in {".yaml", ".yml"} else read_json(path, {})
+        if not isinstance(data, dict):
+            continue
+        project = data.setdefault("project", {})
+        changed = False
+        if goal and not missing_goal_text(goal) and project.get("goal") != goal:
+            project["goal"] = goal
+            changed = True
+        if background and not missing_background_text(background) and project.get("background") != background:
+            project["background"] = background
+            changed = True
+        if changed:
+            project["brief_path"] = ".vibe/project/brief.md"
+            project["brief_missing"] = missing_goal_text(project.get("goal", "")) or missing_background_text(project.get("background", ""))
+            writer(path, data)
+
+
+def missing_goal_text(value: str) -> bool:
+    text = str(value or "").strip()
+    return not text or "Define the research objective" in text or text.startswith("MISSING")
+
+
+def missing_background_text(value: str) -> bool:
+    text = str(value or "").strip()
+    return not text or "not been supplied" in text or text.startswith("MISSING")
 
 
 def ensure_initial_policy_questions(paths: VibePaths, policies: dict[str, Any] | None = None) -> None:
