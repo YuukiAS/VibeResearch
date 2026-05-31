@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.10.1 - 2026-05-31
+
+- Add `vibe optimize` champion/challenger, ablation, regression, optimization
+  memory, and external-deemphasis commands for owned-framework optimization.
+- Gate champion promotion on trusted evidence, protected metric checks, budget
+  policy, and agent rationale.
+- Require structured ablations with hypothesis, expected effect, metric target,
+  protected-metric risk, and rollback plan; repeated failed ablations produce
+  memory warnings.
+- Record regression suites that block larger stages on failure and require
+  periodic external baseline regression before reducing external exploration.
+
 ## 0.10.0 - 2026-05-31
 
 - Add `vibe owned` commands for proposal-bound owned-framework alpha scaffold

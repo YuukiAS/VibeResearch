@@ -70,6 +70,7 @@ from .manifest import validate_manifest
 from .meeting import export_meeting_report
 from .next_action import compute_next_action
 from .owned import owned_contract, owned_design_audit, owned_shadow_plan, scaffold_owned_framework
+from .optimization import external_deemphasis_plan, plan_ablation, promote_champion, record_optimization_memory, record_regression_suite, register_challenger
 from .papers import add_paper, auto_method_search, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
 from .portal import build_portal
@@ -134,6 +135,7 @@ lineage_app = typer.Typer(help="Manage generic research lineage records.")
 internalization_app = typer.Typer(help="Plan and audit generic internalization readiness.")
 scout_app = typer.Typer(help="Triage scout findings into evidence-grade research inputs.")
 owned_app = typer.Typer(help="Generate and audit downstream owned framework alpha scaffolds.")
+optimize_app = typer.Typer(help="Manage champion/challenger owned optimization loops.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -157,6 +159,7 @@ app.add_typer(lineage_app, name="lineage")
 app.add_typer(internalization_app, name="internalization")
 app.add_typer(scout_app, name="scout")
 app.add_typer(owned_app, name="owned")
+app.add_typer(optimize_app, name="optimize")
 console = Console()
 
 
@@ -1208,6 +1211,103 @@ def owned_audit_cmd(
     result = owned_design_audit(paths(target), framework_name, proposal_id=proposal_id)
     console.print_json(data=result)
     if not result.get("owned_core_allowed"):
+        raise typer.Exit(1)
+
+
+@optimize_app.command("champion")
+def optimize_champion_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    stage: str = typer.Option(..., "--stage"),
+    candidate_id: str = typer.Option(..., "--candidate-id"),
+    candidate_type: str = typer.Option("owned", "--candidate-type"),
+    evidence_id: list[str] = typer.Option([], "--evidence-id"),
+    protected_metric_passed: bool = typer.Option(True, "--protected-metric-passed/--protected-metric-failed"),
+    budget_policy_ok: bool = typer.Option(False, "--budget-policy-ok"),
+    rationale: str = typer.Option("", "--rationale"),
+) -> None:
+    """Promote a candidate to champion only when evidence and policy gates pass."""
+
+    result = promote_champion(paths(target), stage=stage, candidate_id=candidate_id, candidate_type=candidate_type, evidence_ids=evidence_id, protected_metric_gate={"passed": protected_metric_passed}, budget_policy_ok=budget_policy_ok, rationale=rationale)
+    console.print_json(data=result)
+    if not result.get("promoted"):
+        raise typer.Exit(1)
+
+
+@optimize_app.command("challenger")
+def optimize_challenger_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    stage: str = typer.Option(..., "--stage"),
+    candidate_id: str = typer.Option(..., "--candidate-id"),
+    candidate_type: str = typer.Option("owned", "--candidate-type"),
+    against_champion_id: str = typer.Option("", "--against-champion-id"),
+    rationale: str = typer.Option("", "--rationale"),
+) -> None:
+    """Register a challenger against the current champion."""
+
+    console.print_json(data=register_challenger(paths(target), stage=stage, candidate_id=candidate_id, candidate_type=candidate_type, against_champion_id=against_champion_id, rationale=rationale))
+
+
+@optimize_app.command("ablation")
+def optimize_ablation_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    candidate_id: str = typer.Option(..., "--candidate-id"),
+    ablation_key: str = typer.Option(..., "--ablation-key"),
+    hypothesis: str = typer.Option(..., "--hypothesis"),
+    expected_effect: str = typer.Option(..., "--expected-effect"),
+    metrics_target: str = typer.Option(..., "--metrics-target"),
+    protected_metric_risk: str = typer.Option(..., "--protected-metric-risk"),
+    rollback_plan: str = typer.Option(..., "--rollback-plan"),
+) -> None:
+    """Plan a structured owned-framework ablation."""
+
+    console.print_json(data=plan_ablation(paths(target), candidate_id=candidate_id, ablation_key=ablation_key, hypothesis=hypothesis, expected_effect=expected_effect, metrics_target=metrics_target, protected_metric_risk=protected_metric_risk, rollback_plan=rollback_plan))
+
+
+@optimize_app.command("regression")
+def optimize_regression_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    candidate_id: str = typer.Option(..., "--candidate-id"),
+    stage: str = typer.Option(..., "--stage"),
+    smoke: bool = typer.Option(True, "--smoke/--no-smoke"),
+    metrics_schema: bool = typer.Option(True, "--metrics-schema/--no-metrics-schema"),
+    artifact_output: bool = typer.Option(True, "--artifact-output/--no-artifact-output"),
+    protected_metrics: bool = typer.Option(True, "--protected-metrics/--no-protected-metrics"),
+    champion_comparison: bool = typer.Option(True, "--champion-comparison/--no-champion-comparison"),
+) -> None:
+    """Record a regression suite result for an owned challenger."""
+
+    checks = {"smoke": smoke, "metrics_schema": metrics_schema, "artifact_output": artifact_output, "protected_metrics": protected_metrics, "champion_comparison": champion_comparison}
+    result = record_regression_suite(paths(target), candidate_id=candidate_id, stage=stage, checks=checks)
+    console.print_json(data=result)
+    if result.get("blocks_larger_stage"):
+        raise typer.Exit(1)
+
+
+@optimize_app.command("memory")
+def optimize_memory_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    ablation_key: str = typer.Option(..., "--ablation-key"),
+    outcome: str = typer.Option(..., "--outcome"),
+    rationale: str = typer.Option("", "--rationale"),
+) -> None:
+    """Record optimization memory to prevent repeated failed ablations."""
+
+    console.print_json(data=record_optimization_memory(paths(target), ablation_key=ablation_key, outcome=outcome, rationale=rationale))
+
+
+@optimize_app.command("external-deemphasis")
+def optimize_external_deemphasis_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    proposed_external_ratio: float = typer.Option(..., "--proposed-external-ratio"),
+    policy_allowed: bool = typer.Option(False, "--policy-allowed"),
+    rationale: str = typer.Option("", "--rationale"),
+    keep_periodic_regression: bool = typer.Option(True, "--keep-periodic-regression/--drop-periodic-regression"),
+) -> None:
+    """Propose policy-controlled gradual external budget de-emphasis."""
+
+    result = external_deemphasis_plan(paths(target), proposed_external_ratio=proposed_external_ratio, policy_allowed=policy_allowed, rationale=rationale, keep_periodic_regression=keep_periodic_regression)
+    console.print_json(data=result)
+    if not result.get("approved"):
         raise typer.Exit(1)
 
 
