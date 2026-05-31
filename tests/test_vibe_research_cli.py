@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.4" in show.output
+    assert "0.10.5" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2202,6 +2202,39 @@ def test_v0844_next_clears_stale_cycle_block_after_abandoned_cycle_revision(tmp_
     assert result.exit_code == 0
     assert "Blocked:" not in result.output
     assert "vibe plan-cycle" in result.output
+
+
+def test_v0105_next_suppresses_stale_blocked_prefix_after_round_recovery(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    cycle_dir = tmp_path / ".vibe" / "cycles" / "c001"
+    cycle_dir.mkdir(parents=True, exist_ok=True)
+    (cycle_dir / "cycle_reflect.md").write_text("## Run comparison\nok\n## Route classification\nok\n")
+    (cycle_dir / "cycle_revised_plan.md").write_text("## Next-cycle diversity requirement\nok\n")
+    write_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {"issues": [], "next_action": "plan the next multi-route portfolio"})
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state.update(
+        {
+            "status": "blocked_repeating_evidence",
+            "blocked_reason": "same decision repeated 2 times: collect_more_metrics",
+            "next_action": "vibe plan-cycle",
+            "current_cycle_id": "c001",
+            "cycles": {"c001": {"status": "reviewed"}},
+            "runs": {
+                "r001": {"run_id": "r001", "cycle_id": "c001", "status": "revised"},
+                "r002": {"run_id": "r002", "cycle_id": "c001", "status": "revised"},
+                "r003": {"run_id": "r003", "cycle_id": "c001", "status": "revised"},
+            },
+        }
+    )
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "Blocked:" not in result.output
+    assert "Next:" in result.output
+    assert "vibe plan-cycle" in result.output
+    updated = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert updated["blocked_reason"] == ""
 
 
 def test_v0833_render_sbatch_uses_explicit_partition_specific_gres(tmp_path: Path):

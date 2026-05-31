@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.10.5 - 2026-05-31
+
+- Clear stale blocked state after a recovered multi-route round has closed with
+  cycle reflection, cycle revision, terminal route states, and a clean sustained
+  round audit.
+- Prevent `vibe next` from retaining a stale `Blocked:` prefix after round
+  recovery when the correct next action is to plan the next cycle.
+
 ## 0.10.4 - 2026-05-31
 
 - Scope repeated decision loop-guard checks to the same target instead of

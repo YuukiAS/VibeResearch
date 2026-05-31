@@ -64,6 +64,11 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
             state_status = str(state.get("status", ""))
             next_action = str(state.get("next_action", ""))
             active_block = state_status.startswith("blocked_") or (bool(state.get("blocked_reason")) and next_action.startswith("vibe decision show"))
+        elif clear_recovered_round_block(paths, state, active):
+            state = read_json(paths.state / "state.json", {})
+            state_status = str(state.get("status", ""))
+            next_action = str(state.get("next_action", ""))
+            active_block = state_status.startswith("blocked_") or (bool(state.get("blocked_reason")) and next_action.startswith("vibe decision show"))
     if active_block:
         if state_status in RECOVERABLE_RESOURCE_BLOCKS and state.get("current_cycle_id"):
             return f"vibe generate-runs {state['current_cycle_id']}", ""
@@ -251,6 +256,31 @@ def clear_stale_terminal_decision_block(paths: VibePaths, state: dict) -> bool:
     state["status"] = "initialized"
     state["blocked_reason"] = ""
     state["next_action"] = "vibe plan-cycle"
+    state["updated_at"] = utc_now()
+    write_json(paths.state / "state.json", state)
+    return True
+
+
+def clear_recovered_round_block(paths: VibePaths, state: dict, active: list[dict]) -> bool:
+    if active:
+        return False
+    cycle_id = str(state.get("current_cycle_id") or "")
+    if not cycle_id:
+        return False
+    cycles = state.get("cycles", {}) if isinstance(state.get("cycles"), dict) else {}
+    if cycle_id not in cycles or not cycle_closed_with_revision(paths, cycle_id):
+        return False
+    runs = state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}
+    cycle_runs = [run for run in runs.values() if run.get("cycle_id") == cycle_id]
+    if cycle_runs and not all(terminal_run_for_cycle_close(run) for run in cycle_runs):
+        return False
+    audit = read_json(paths.research / "sustained_round_audit.json", {})
+    if isinstance(audit, dict) and audit.get("issues"):
+        return False
+    state["status"] = "initialized"
+    state["blocked_reason"] = ""
+    if str(state.get("next_action", "")).startswith("vibe decision show"):
+        state["next_action"] = "vibe plan-cycle"
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
     return True
