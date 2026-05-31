@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.48 - 2026-05-31
+
+- Update sustained round audit semantics so blocked runs with non-counting
+  classifications count as terminal attempted routes, while all-abandoned
+  cycles no longer count as completed sustained rounds.
+- Surface current `blocked_missing_capability` state as a sustained-audit issue
+  with a next action to run adapter doctor, activate a changed executable
+  capability, or repair missing inputs.
+
 ## 0.8.47 - 2026-05-31
 
 - Add bounded timeouts to Slurm polling calls (`scontrol`, `squeue`, `sacct`,

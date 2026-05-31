@@ -247,7 +247,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.47" in show.output
+    assert "0.8.48" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1770,6 +1770,57 @@ def test_v0841_sustained_audit_blocks_on_unrepaired_real_experiment_failure(tmp_
     assert "real_experiment_repair_required" in audit["issues"]
     assert audit["real_experiment_progress"]["repair_blockers"][0]["run_id"] == "r001_failed"
     assert audit["next_action"] == "repair or classify non-counting real experiment failures before planning another round"
+
+
+def test_v0848_sustained_round_audit_counts_noncounting_terminal_but_not_all_abandoned(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(tmp_path / ".vibe" / "research" / "auto_method_search.json", {"searches": {"test": {"status": "searched"}}})
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["cycles"] = {"c001": {"status": "reviewed"}, "c002": {"status": "reviewed"}}
+    state["runs"] = {}
+    for cycle_id, status, classification in [
+        ("c001", "blocked", "non_counting_execution_failure:failed"),
+        ("c002", "abandoned", ""),
+    ]:
+        cycle_dir = tmp_path / ".vibe" / "cycles" / cycle_id
+        cycle_dir.mkdir(parents=True, exist_ok=True)
+        (cycle_dir / "cycle_reflect.md").write_text("## Run comparison\n\n## Route classification\n")
+        (cycle_dir / "cycle_revised_plan.md").write_text("## Next-cycle diversity requirement\n")
+        for idx, cap_id in enumerate(["cap-a", "cap-b", "cap-c"], start=1):
+            run = {
+                "run_id": f"{cycle_id}_r{idx}",
+                "cycle_id": cycle_id,
+                "status": status,
+                "adapter_metadata": {"capability_id": cap_id, "task_type": "train_smoke"},
+            }
+            if classification:
+                run["non_counting_classification"] = classification
+            state["runs"][run["run_id"]] = run
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+
+    result = invoke("research", "sustained-audit", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
+    rows = {row["cycle_id"]: row for row in audit["cycles"]}
+    assert rows["c001"]["round_complete"] is True
+    assert rows["c001"]["attempted_route_count"] == 3
+    assert rows["c002"]["round_complete"] is False
+    assert rows["c002"]["all_runs_abandoned"] is True
+    assert audit["completed_round_count"] == 1
+
+
+def test_v0848_sustained_round_audit_surfaces_missing_capability_block(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(tmp_path / ".vibe" / "research" / "auto_method_search.json", {"searches": {"test": {"status": "searched"}}})
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["status"] = "blocked_missing_capability"
+    state["blocked_reason"] = "active capabilities exactly repeat non-counting cycle"
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    result = invoke("research", "sustained-audit", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
+    assert "blocked_missing_capability" in audit["issues"]
+    assert audit["next_action"] == "run adapter doctor, activate a changed executable capability, or repair missing inputs before scheduling another sustained round"
 
 
 def test_v0844_next_clears_stale_noncounting_run_block_after_cycle_revision(tmp_path: Path):

@@ -566,6 +566,9 @@ def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_route
     method_marker = read_json(paths.research / "auto_method_search.json", {})
     if not source_rows and not external_repo_rows and not method_marker:
         issues.append("no_external_resource_provenance_recorded")
+    state_status = str(state.get("status", ""))
+    if state_status == "blocked_missing_capability" or str(state.get("blocked_reason", "")).startswith("blocked_missing_capability"):
+        issues.append("blocked_missing_capability")
     real_progress = summarize_real_experiment_progress(paths)
     real_repair_blockers = [
         row
@@ -618,8 +621,8 @@ def audit_cycle_round(paths: VibePaths, cycle_id: str, runs: dict[str, Any], min
         for run in cycle_runs.values()
         if isinstance(run.get("adapter_metadata"), dict)
     }
-    terminal_statuses = {"collected", "reflected", "revised", "merged", "abandoned", "cancelled", "failed", "timeout"}
-    all_finished = bool(cycle_runs) and all(str(run.get("status", "")) in terminal_statuses for run in cycle_runs.values())
+    all_finished = bool(cycle_runs) and all(round_terminal_run(run) for run in cycle_runs.values())
+    attempted_runs = [run for run in cycle_runs.values() if str(run.get("status", "")) != "abandoned"]
     reflect_path = paths.cycles / cycle_id / "cycle_reflect.md"
     revised_path = paths.cycles / cycle_id / "cycle_revised_plan.md"
     reflect_text = reflect_path.read_text(errors="ignore") if reflect_path.exists() else ""
@@ -633,10 +636,20 @@ def audit_cycle_round(paths: VibePaths, cycle_id: str, runs: dict[str, Any], min
         "route_count": route_count,
         "capability_count": len({item for item in capability_ids if item}),
         "all_runs_finished": all_finished,
+        "attempted_route_count": len(attempted_runs),
+        "all_runs_abandoned": bool(cycle_runs) and not attempted_runs,
         "has_cycle_reflection": has_reflection,
         "has_cycle_revision": has_revision,
-        "round_complete": route_count >= min_routes_per_round and all_finished and has_reflection and has_revision,
+        "round_complete": route_count >= min_routes_per_round and all_finished and bool(attempted_runs) and has_reflection and has_revision,
     }
+
+
+def round_terminal_run(run: dict[str, Any]) -> bool:
+    status = str(run.get("status", ""))
+    terminal_statuses = {"collected", "reflected", "revised", "merged", "abandoned", "cancelled", "failed", "timeout"}
+    if status in terminal_statuses:
+        return True
+    return status == "blocked" and bool(run.get("non_counting_classification") or run.get("classification"))
 
 
 def sustained_round_next_action(completed_count: int, target_rounds: int, issues: list[str], active_jobs: list[dict[str, Any]]) -> str:
@@ -644,6 +657,8 @@ def sustained_round_next_action(completed_count: int, target_rounds: int, issues
         return "sustained round target met"
     if "real_experiment_repair_required" in issues:
         return "repair or classify non-counting real experiment failures before planning another round"
+    if "blocked_missing_capability" in issues:
+        return "run adapter doctor, activate a changed executable capability, or repair missing inputs before scheduling another sustained round"
     if active_jobs:
         return "monitor active jobs, then collect metrics and run cycle reflection/revision before planning the next round"
     if "default_portfolio_generates_too_few_routes" in issues:
