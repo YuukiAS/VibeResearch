@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.8.60 - 2026-05-31
+
+- Add `vibe research sustained-selftest` as an operator-visible end-to-end
+  synthetic check for the sustained multi-route research contract.
+- Create isolated self-test workspaces under
+  `.vibe/selftests/sustained_round/<timestamp>/workspace`, install a toy active
+  adapter, seed three active routes and three completed reflected/revised
+  rounds, and run `sustained_round_audit()`.
+- Persist self-test `latest.json` and `latest.md` summaries and fail the
+  command if the audit reports fewer than three completed rounds or any
+  structural issue.
+
 ## 0.8.59 - 2026-05-31
 
 - Require explicit run scope for fallback requeue execution: `--execute` now

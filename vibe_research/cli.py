@@ -96,6 +96,7 @@ from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
 from .scheduler import operator_fallback_requeue
 from .scheduler import queue_run, review_cycle, review_run, run_dryrun, submit_queue
+from .selftests import sustained_round_selftest
 from .timeline import render_timeline_markdown, sync_timeline_files
 
 app = typer.Typer(help="Repo-specific sustained Vibe Research orchestration.")
@@ -517,6 +518,16 @@ def research_sustained_audit_cmd(
 
     result = sustained_round_audit(paths(target), target_rounds=target_rounds, min_routes_per_round=min_routes)
     console.print_json(data=result)
+
+
+@research_app.command("sustained-selftest")
+def research_sustained_selftest_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Run an isolated synthetic sustained-round contract self-test."""
+
+    result = sustained_round_selftest(paths(target))
+    console.print_json(data=result)
+    if result.get("status") != "passed":
+        raise typer.Exit(1)
 
 
 @research_app.command("sustained-next")

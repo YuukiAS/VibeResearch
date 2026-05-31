@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.59" in show.output
+    assert "0.8.60" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2098,6 +2098,29 @@ def test_v0859_sustained_audit_persists_executable_resource_issue_command(tmp_pa
     assert "--allow-outside-policy" in command
     markdown = (tmp_path / ".vibe" / "research" / "sustained_round_audit.md").read_text()
     assert command in markdown
+
+
+def test_v0860_sustained_selftest_creates_isolated_passing_workspace(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    result = invoke("research", "sustained-selftest", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["status"] == "passed"
+    assert data["completed_round_count"] == 3
+    assert data["candidate_count"] >= 3
+    assert data["issues"] == []
+    workspace = Path(data["workspace"])
+    assert workspace.exists()
+    assert tmp_path / ".vibe" / "selftests" / "sustained_round" in workspace.parents
+    latest = read_json(tmp_path / ".vibe" / "selftests" / "sustained_round" / "latest.json", {})
+    latest_md = (tmp_path / ".vibe" / "selftests" / "sustained_round" / "latest.md").read_text()
+    assert latest["status"] == "passed"
+    assert latest["workspace"] == data["workspace"]
+    assert "Status: `passed`" in latest_md
+    audit = read_json(workspace / ".vibe" / "research" / "sustained_round_audit.json", {})
+    assert audit["complete"] is True
+    assert audit["issues"] == []
+    assert len(default_candidates(VibePaths(workspace))) >= 3
 
 
 def test_v0844_next_clears_stale_noncounting_run_block_after_cycle_revision(tmp_path: Path):
