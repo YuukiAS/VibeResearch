@@ -38,6 +38,8 @@ Typical use cases include:
   orchestration layer;
 - running local or Slurm-backed experiments with explicit budget and readiness
   gates;
+- tracking external baselines, scout evidence, internalization decisions, owned
+  framework scaffolds, and champion/challenger optimization loops;
 - preserving old failed attempts as historical evidence without trusting them
   automatically;
 - producing status dashboards, daily memos, and meeting-ready summaries.
@@ -286,6 +288,70 @@ metric regression. Stopping requires trusted negative evidence or an explicit
 user decision. Duplicate experiments, unknown cost, missing scripts, missing
 metrics schemas, and unsupported capabilities are blocked before execution.
 
+## Lineage, Scout, And Owned Frameworks
+
+VibeResearch can record how a project moves from external tools toward owned
+implementation. It separates five cases that should not be conflated: calling an
+external repository, wrapping an external capability, using an external idea as
+inspiration, shadowing an internal implementation, and treating a candidate as
+owned core.
+
+Useful lineage and internalization commands:
+
+```bash
+vibe lineage add-external-asset --asset-type repo --name baseline_repo --source https://example.org/repo
+vibe lineage link --source-id asset_001 --target-id hyp_001 --relation-type supports
+vibe internalization propose --title "owned evaluator" --external-baseline-asset-id asset_001 --downstream-src-target src/owned_eval
+vibe internalization readiness proposal_001
+vibe internalization memory
+```
+
+Scout evidence is structured before it can influence experiments or
+internalization. Findings are scored for relevance, specificity, actionability,
+novelty, credibility, implementation detail, and failure-mode fit. Background
+reading is preserved, but it does not automatically become an experiment.
+
+```bash
+vibe scout query-context
+vibe scout add-finding --title "method note" --source https://example.org/paper --summary "..."
+vibe scout triage scout_001
+vibe scout claim --finding-id scout_001 --claim "..."
+vibe scout audit
+```
+
+Dual-track portfolio commands keep external and internal work comparable:
+
+```bash
+vibe portfolio track-plan --experiment-id exp_001 --track external
+vibe portfolio track-plan --experiment-id exp_002 --track internal --internalization-level shadow_internal
+vibe portfolio compare-plan --track-record-id track_002
+vibe portfolio track-audit --track-record-id track_002 --target-level hybrid_internal
+vibe portfolio track-memo
+```
+
+Owned framework alpha generation is gated by an approved proposal and writes
+project-owned scaffold code into the downstream repository. VibeResearch
+provides the generic scaffold, audit, contract, and adapter mechanisms; it does
+not embed project-specific model logic.
+
+```bash
+vibe owned scaffold proposal_001 --framework-name owned_eval
+vibe owned contract owned_eval
+vibe owned shadow-plan proposal_001
+vibe owned audit owned_eval --proposal-id proposal_001
+```
+
+Once an owned alpha exists, optimization should run as a
+champion/challenger process rather than an unbounded parameter sweep:
+
+```bash
+vibe optimize champion --stage shadow --candidate-id owned_eval --evidence-id ev_001 --budget-policy-ok --rationale "trusted comparison"
+vibe optimize challenger --stage shadow --candidate-id owned_eval_v2 --against-champion-id owned_eval
+vibe optimize ablation --candidate-id owned_eval_v2 --ablation-key loss_a --hypothesis "..." --expected-effect "..." --metrics-target primary --rollback-plan "..."
+vibe optimize regression --candidate-id owned_eval_v2 --stage shadow
+vibe optimize external-deemphasis --proposed-external-ratio 0.4 --policy-allowed --rationale "owned candidate is stable"
+```
+
 ## Decision-To-Execution Safety
 
 VibeResearch compiles structured decisions into resource plans before it creates
@@ -368,6 +434,21 @@ Submit and monitor:
 ```bash
 vibe submit-queue --backend slurm
 vibe monitor --loop --auto-next
+```
+
+When preferred and fallback Slurm partitions are configured, submission uses the
+preferred partition by default. Fallback availability from `sinfo` is not enough
+to bypass the preferred partition; fallback selection requires wait-policy
+evidence that the preferred partition is materially too slow for the current run
+budget. Launch records distinguish `preferred_partition_selected` from
+`fallback_selected_after_wait_policy`.
+
+If a pending job is found on a fallback partition and should be moved back to
+the preferred partition, dry-run review artifacts include an executable command:
+
+```bash
+vibe scheduler-requeue-fallback
+vibe scheduler-requeue-fallback --run-id r001 --execute --to-preferred
 ```
 
 For local development:

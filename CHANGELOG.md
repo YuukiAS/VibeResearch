@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.10.7 - 2026-05-31
+
+- Refresh the English and Chinese README files for the current 0.10.x feature
+  surface, including lineage, scout evidence gates, dual-track portfolios,
+  owned framework alpha scaffolds, champion/challenger optimization, and Slurm
+  preferred/fallback policy.
+
 ## 0.10.6 - 2026-05-31
 
 - Make Slurm preferred partitions the default submission target when configured;

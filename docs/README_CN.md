@@ -29,6 +29,8 @@ VibeResearch 是一个本地优先的研究流程管理框架，面向已经存�
 - 持续多轮推进一个研究项目，并保留每轮决策依据；
 - 将项目自己的训练、评估或推理脚本接入统一的编排层；
 - 在本地或 Slurm 集群上运行实验，同时保留预算和就绪检查；
+- 跟踪外部基线、scout 证据、内化决策、自有框架雏形和
+  champion/challenger 优化过程；
 - 归档旧失败状态，把它作为历史经验，而不是直接当成可信证据；
 - 生成状态看板、每日记录和组会材料。
 
@@ -241,6 +243,59 @@ vibe dashboard export-research
 
 晋升需要可信且符合指标格式的证据，并且受保护指标不能出现不可接受的回退。停止假设需要可信负证据或明确的用户决定。同构重复实验、未知成本、缺脚本、缺指标格式和缺 `active` 能力都会在执行前被阻止。
 
+## 谱系、Scout 与自有框架
+
+VibeResearch 可以记录项目如何从外部工具逐步走向自有实现。它会区分几类不同状态：直接调用外部仓库、封装外部能力、受外部想法启发、正在内部 shadow 复现，以及可以作为 owned core 候选的自有实现。这些状态不能混在一起。
+
+常用谱系和内化命令：
+
+```bash
+vibe lineage add-external-asset --asset-type repo --name baseline_repo --source https://example.org/repo
+vibe lineage link --source-id asset_001 --target-id hyp_001 --relation-type supports
+vibe internalization propose --title "owned evaluator" --external-baseline-asset-id asset_001 --downstream-src-target src/owned_eval
+vibe internalization readiness proposal_001
+vibe internalization memory
+```
+
+Scout 查到的资料必须先结构化，才能影响实验或内化决策。框架会记录 relevance、specificity、actionability、novelty、credibility、实现细节和 failure-mode fit。背景资料会被保留，但不会自动变成实验依据。
+
+```bash
+vibe scout query-context
+vibe scout add-finding --title "method note" --source https://example.org/paper --summary "..."
+vibe scout triage scout_001
+vibe scout claim --finding-id scout_001 --claim "..."
+vibe scout audit
+```
+
+Dual-track portfolio 用来让外部路线和内部路线保持可比较：
+
+```bash
+vibe portfolio track-plan --experiment-id exp_001 --track external
+vibe portfolio track-plan --experiment-id exp_002 --track internal --internalization-level shadow_internal
+vibe portfolio compare-plan --track-record-id track_002
+vibe portfolio track-audit --track-record-id track_002 --target-level hybrid_internal
+vibe portfolio track-memo
+```
+
+Owned framework alpha 必须来自已经通过审查的 proposal，并且会把项目自有脚手架写入下游仓库。VibeResearch 只提供通用的生成、审计、接口测试和 adapter 机制，不把项目特定模型逻辑写进主框架。
+
+```bash
+vibe owned scaffold proposal_001 --framework-name owned_eval
+vibe owned contract owned_eval
+vibe owned shadow-plan proposal_001
+vibe owned audit owned_eval --proposal-id proposal_001
+```
+
+当 owned alpha 已经存在后，后续优化应当按 champion/challenger 推进，而不是无边界地扫参数：
+
+```bash
+vibe optimize champion --stage shadow --candidate-id owned_eval --evidence-id ev_001 --budget-policy-ok --rationale "trusted comparison"
+vibe optimize challenger --stage shadow --candidate-id owned_eval_v2 --against-champion-id owned_eval
+vibe optimize ablation --candidate-id owned_eval_v2 --ablation-key loss_a --hypothesis "..." --expected-effect "..." --metrics-target primary --rollback-plan "..."
+vibe optimize regression --candidate-id owned_eval_v2 --stage shadow
+vibe optimize external-deemphasis --proposed-external-ratio 0.4 --policy-allowed --rationale "owned candidate is stable"
+```
+
 ## 从决策到执行
 
 VibeResearch 不会直接把自由文本计划变成实验。它先把结构化决策编译为资源计划，再生成运行清单。
@@ -315,6 +370,16 @@ vibe config detect
 ```bash
 vibe submit-queue --backend slurm
 vibe monitor --loop --auto-next
+```
+
+如果配置了 preferred 和 fallback Slurm 分区，提交时默认使用 preferred 分区。
+`sinfo` 显示 fallback 可用，并不足以绕过 preferred 分区。只有等待策略证据表明 preferred 分区对当前 run 的预算来说明显太慢时，才会选择 fallback。提交记录会区分 `preferred_partition_selected` 和 `fallback_selected_after_wait_policy`。
+
+如果发现一个还未开始运行的任务落在 fallback 分区，而策略要求回到 preferred 分区，dry-run 审批材料会给出可直接执行的命令：
+
+```bash
+vibe scheduler-requeue-fallback
+vibe scheduler-requeue-fallback --run-id r001 --execute --to-preferred
 ```
 
 本地开发可以使用模拟提交：
