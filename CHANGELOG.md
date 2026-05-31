@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.8.58 - 2026-05-31
+
+- Link outside-wait-policy fallback diagnostics to a dry-run operator command:
+  `vibe next` and sustained audit now recommend
+  `vibe scheduler-requeue-fallback --allow-outside-policy` for review.
+- Add `scheduler-requeue-fallback` as a command alias for the protected
+  fallback requeue review/execution surface while keeping dry-run as the
+  default behavior.
+- Coerce adapter revision metadata to string when creating experiment records
+  so YAML-parsed scalar values cannot break research registry creation.
+
 ## 0.8.57 - 2026-05-31
 
 - Add `vibe fallback-requeue` as a provenance-preserving operator surface for

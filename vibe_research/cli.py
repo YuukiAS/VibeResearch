@@ -1461,6 +1461,7 @@ def scheduler_explain_cmd(target: Path = typer.Option(Path("."), "--target", "-t
 
 
 @app.command("fallback-requeue")
+@app.command("scheduler-requeue-fallback")
 def fallback_requeue_cmd(
     target: Path = typer.Option(Path("."), "--target", "-t"),
     execute: bool = typer.Option(False, "--execute", help="Actually cancel and resubmit eligible jobs."),

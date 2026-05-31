@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.57" in show.output
+    assert "0.8.58" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1845,7 +1845,29 @@ def test_v0853_sustained_audit_flags_outside_wait_fallback(tmp_path: Path):
     assert result.exit_code == 0
     audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
     assert "fallback_better_but_outside_wait_policy" in audit["issues"]
-    assert audit["next_action"] == "review Slurm fallback wait policy or keep monitoring with explicit queue-policy awareness"
+    assert audit["next_action"] == "run vibe scheduler-requeue-fallback --allow-outside-policy to review fallback candidates before any explicit execute"
+
+
+def test_v0858_next_links_outside_policy_fallback_review_command(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {
+            "active": [
+                {
+                    "run_id": "r001",
+                    "cycle_id": "c001",
+                    "backend": "slurm",
+                    "status": "pending",
+                    "poll_details": {"wait_verdict": {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "htzhulab"}},
+                }
+            ]
+        },
+    )
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "vibe scheduler-requeue-fallback --allow-outside-policy" in result.output
 
 
 def test_v0856_monitor_carries_forward_wait_verdict_after_transient_unknown(tmp_path: Path, monkeypatch):

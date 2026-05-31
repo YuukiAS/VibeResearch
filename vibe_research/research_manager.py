@@ -673,7 +673,7 @@ def sustained_round_next_action(completed_count: int, target_rounds: int, issues
     if "blocked_missing_capability" in issues:
         return "run adapter doctor, activate a changed executable capability, or repair missing inputs before scheduling another sustained round"
     if "fallback_better_but_outside_wait_policy" in issues:
-        return "review Slurm fallback wait policy or keep monitoring with explicit queue-policy awareness"
+        return "run vibe scheduler-requeue-fallback --allow-outside-policy to review fallback candidates before any explicit execute"
     if "cloned_external_repo_without_integration_analysis" in issues:
         return "run vibe external analyze-repo <name> for cloned external repositories before relying on them"
     if active_jobs:
@@ -948,7 +948,7 @@ def create_experiment(
         stage=stage,
         decision_id=decision_id,
         capability_id=capability_id,
-        adapter_revision=manifest.adapter_revision,
+        adapter_revision=str(manifest.adapter_revision),
         execution_script=(cap.entrypoint.get("command", "") if cap else ""),
         resource_plan=resource_plan or {},
         expected_evidence=expected_evidence or {},

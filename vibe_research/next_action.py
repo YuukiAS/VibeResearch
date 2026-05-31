@@ -51,6 +51,8 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     ready_output = active_scope_output_action(state, active)
     if ready_output:
         return ready_output, ""
+    if active_jobs_have_outside_policy_fallback(active):
+        return "vibe scheduler-requeue-fallback --allow-outside-policy", ""
     if active_scope_should_monitor(state, active):
         return "vibe monitor", ""
     state_status = str(state.get("status", ""))
@@ -170,6 +172,15 @@ def active_scope_output_action(state: dict, active: list[dict]) -> str:
         if status == "reflected":
             return f"vibe revise-plan {run_id}"
     return ""
+
+
+def active_jobs_have_outside_policy_fallback(active: list[dict]) -> bool:
+    for job in active:
+        details = job.get("poll_details", {}) if isinstance(job.get("poll_details"), dict) else {}
+        verdict = details.get("wait_verdict", {}) if isinstance(details.get("wait_verdict"), dict) else {}
+        if verdict.get("verdict") == "fallback_better_but_outside_wait_policy":
+            return True
+    return False
 
 
 def active_scope_should_monitor(state: dict, active: list[dict]) -> bool:
