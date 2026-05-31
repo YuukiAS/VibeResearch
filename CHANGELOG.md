@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.14 - 2026-05-31
+
+- Suppress executable fallback requeue commands when scheduler wait evidence
+  says no fallback partition is demonstrably better than the current preferred
+  partition.
+
 ## 0.10.13 - 2026-05-31
 
 - Exclude non-counting classified runs from daemon status next-collection

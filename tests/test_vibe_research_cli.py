@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.13" in show.output
+    assert "0.10.14" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -507,6 +507,37 @@ def test_v01013_scheduler_status_ignores_noncounting_finished_collect_noise(tmp_
 
     status = daemon_status(VibePaths(tmp_path))
     assert status["next_collection_runs"] == ["r002_collect"]
+
+
+def test_v01014_fallback_requeue_no_better_partition_has_no_executable_command(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {
+            "active": [
+                {
+                    "run_id": "r001",
+                    "job_id": "111",
+                    "backend": "slurm",
+                    "partition": "preferred",
+                    "poll_details": {
+                        "wait_verdict": {
+                            "verdict": "fallback_not_better_keep_preferred",
+                            "preferred_partition": "preferred",
+                            "fallback_checked": [{"partition": "fallback", "estimated_start_plus_run_hours": 99}],
+                        }
+                    },
+                }
+            ]
+        },
+    )
+    result = invoke("scheduler-requeue-fallback", "--target", str(tmp_path), "--allow-outside-policy")
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    candidate = data["candidates"][0]
+    assert candidate["eligible"] is False
+    assert candidate["recommended_partition"] == ""
+    assert candidate["executable_command"] == ""
 
 
 def test_v080_portfolio_blocks_budget_and_duplicate_but_allows_changed_repeat(tmp_path: Path):

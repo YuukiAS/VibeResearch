@@ -423,7 +423,9 @@ def operator_fallback_requeue(
                 allow_carried_forward=command_allow_carried_forward,
                 to_preferred=to_preferred,
                 execute=True,
-            ),
+            )
+            if eligible or blocked_reason in {"outside_wait_policy_requires_allow_outside_policy", "carried_forward_wait_verdict_requires_allow_carried_forward"}
+            else "",
             "preferred_requeue_command": fallback_requeue_command(
                 paths.root,
                 str(job.get("run_id", "")),
