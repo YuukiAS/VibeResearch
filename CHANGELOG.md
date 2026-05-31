@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.10.2 - 2026-05-31
+
+- Probe `codex exec --help` before constructing non-interactive Codex commands
+  and avoid unsupported approval/search/model flags.
+- Default read-role Codex calls to a writable sandbox so local runtimes can
+  create session/app-server state while prompts still forbid repository edits.
+- When a non-offline Codex call exits nonzero with no usable last message, write
+  the current deterministic fallback instead of preserving stale artifacts; run
+  revised-plan fallback preserves schema-valid completed metrics as
+  `collect_more_metrics`.
+
 ## 0.10.1 - 2026-05-31
 
 - Add `vibe optimize` champion/challenger, ablation, regression, optimization

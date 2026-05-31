@@ -6,6 +6,7 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -151,22 +152,11 @@ def run_codex(
         returncode = 0
         write_text(last_message_path, last_message)
     else:
-        command = [
-            "codex",
-            "exec",
-            "-C",
-            str(paths.root),
-            "--ask-for-approval",
-            config.get("codex", {}).get("approval_policy", "never"),
-            "--sandbox",
-            codex_sandbox_for(role, config),
-            "--output-last-message",
-            str(last_message_path),
-        ]
+        command = codex_exec_command(paths, role, config, last_message_path)
         selected_model = model or config.get("codex", {}).get("model", "")
-        if selected_model:
+        if selected_model and codex_exec_supports("--model"):
             command.extend(["--model", selected_model])
-        if search or (role == "literature" and config.get("codex", {}).get("enable_search_for_literature", True)):
+        if (search or (role == "literature" and config.get("codex", {}).get("enable_search_for_literature", True))) and codex_exec_supports("--search"):
             command.append("--search")
         command.append("-")
         proc = subprocess.run(command, input=prompt, text=True, capture_output=True, cwd=paths.root, check=False)
@@ -182,7 +172,7 @@ def run_codex(
     write_text(stdout_path, stdout)
     write_text(stderr_path, stderr)
     if role != "codex_patch":
-        artifact_body = nonempty_artifact_body(role, target_id, output, last_message)
+        artifact_body = nonempty_artifact_body(role, target_id, output, last_message, codex_failed=(not offline and returncode != 0))
         if artifact_body != last_message:
             last_message = artifact_body
             write_text(last_message_path, last_message)
@@ -210,23 +200,57 @@ def run_codex(
     return CodexCallResult(call_id, role, target_id, output, returncode, call_dir, last_message, stdout, stderr)
 
 
-def nonempty_artifact_body(role: str, target_id: str, output: Path, last_message: str) -> str:
+def codex_exec_command(paths: VibePaths, role: str, config: dict[str, Any], last_message_path: Path) -> list[str]:
+    command = ["codex", "exec"]
+    if codex_exec_supports("-C"):
+        command.extend(["-C", str(paths.root)])
+    approval = config.get("codex", {}).get("approval_policy", "never")
+    if codex_exec_supports("--ask-for-approval"):
+        command.extend(["--ask-for-approval", approval])
+    elif codex_exec_supports("--approval-policy"):
+        command.extend(["--approval-policy", approval])
+    if codex_exec_supports("--sandbox"):
+        command.extend(["--sandbox", codex_sandbox_for(role, config)])
+    if codex_exec_supports("--output-last-message"):
+        command.extend(["--output-last-message", str(last_message_path)])
+    return command
+
+
+@lru_cache(maxsize=1)
+def codex_exec_help() -> str:
+    try:
+        proc = subprocess.run(["codex", "exec", "--help"], text=True, capture_output=True, check=False, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return f"{proc.stdout}\n{proc.stderr}"
+
+
+def codex_exec_supports(flag: str) -> bool:
+    help_text = codex_exec_help()
+    if not help_text:
+        return flag in {"-C", "--sandbox", "--output-last-message", "--model"}
+    return flag in help_text
+
+
+def nonempty_artifact_body(role: str, target_id: str, output: Path, last_message: str, *, codex_failed: bool = False) -> str:
     """Prevent empty Codex responses from erasing deterministic artifacts."""
 
     if last_message.strip():
         return last_message
+    if codex_failed:
+        return deterministic_artifact(role, target_id, output)
     if output.exists():
         existing = output.read_text()
         if existing.strip():
             return existing
-    return offline_artifact(role, target_id)
+    return deterministic_artifact(role, target_id, output)
 
 
 def codex_sandbox_for(role: str, config: dict[str, Any]) -> str:
     codex = config.get("codex", {})
     if role == "codex_patch":
         return codex.get("sandbox", {}).get("patch_role", "workspace-write")
-    return codex.get("sandbox", {}).get("read_roles", "read-only")
+    return codex.get("sandbox", {}).get("read_roles", "workspace-write")
 
 
 def context_packet(paths: VibePaths, target_id: str) -> str:
@@ -309,6 +333,10 @@ def first_readme(repo_path: Path) -> Path | None:
 
 
 def offline_artifact(role: str, target_id: str) -> str:
+    return deterministic_artifact(role, target_id)
+
+
+def deterministic_artifact(role: str, target_id: str, output: Path | None = None) -> str:
     title = role.replace("_", " ").title()
     if role == "portfolio_reviewer":
         return "# Portfolio Review\n\nVerdict: APPROVE_WITH_RESOURCE_GUARDS\n\nGuards: dry-run first; respect scheduler budget.\n"
@@ -321,12 +349,22 @@ def offline_artifact(role: str, target_id: str) -> str:
     if role == "cycle_reflect":
         return f"# Cycle Reflect for {target_id}\n\n## Run comparison\nOffline fallback; compare run metrics and revised plans.\n"
     if role == "revised_plan":
+        if target_id.startswith("r") and output is not None and run_has_schema_valid_metrics(output.parent):
+            return f"# Revised Plan for {target_id}\n\n## Result interpretation\nDeterministic fallback preserved schema-valid completed metrics for cycle-level comparison.\n\n## Decision\ncollect_more_metrics\n\n## Plan update\nUse this run's collected metrics in the next cycle-level comparison before deciding promotion, revision, or stop.\n\n## Required changes\ncompare this route against sibling routes at cycle level\n\n## Evidence needed\ncycle-level reflection over schema-valid metrics\n\n## Literature refresh decision\nno\n\n## Deep research decision\nno\n\n## Idea pool update\n- no changes\n\n## Portfolio implication\nDo not treat this as a missing-decision blocker; hand evidence to cycle reflection.\n\n## Next experiment proposal\nnone until cycle-level comparison completes\n\n## Stop condition\nStop only after cycle-level evidence review.\n"
         return f"# Revised Plan for {target_id}\n\n## Result interpretation\nOffline fallback cannot make a validated scientific decision.\n\n## Decision\nblocked_missing_decision\n\n## Plan update\nBlocked until a structured decision is supplied or a project adapter compiles an executable resource plan.\n\n## Required changes\nwrite a structured decision.json with concrete action, evidence, and adapter requirements\n\n## Evidence needed\nschema-valid metrics and complete provenance\n\n## Literature refresh decision\nno\n\n## Deep research decision\nno\n\n## Idea pool update\n- no changes\n\n## Portfolio implication\nNo automatic promotion.\n\n## Next experiment proposal\nnone while blocked\n\n## Stop condition\nStop repeated evidence collection without a compiled resource plan.\n"
     if role == "cycle_revised_plan":
         return f"# Cycle Revised Plan for {target_id}\n\n## Cycle-level interpretation\nOffline fallback cannot bridge a text plan into executable experiments.\n\n## Direction decisions\nblocked_missing_decision\n\n## Portfolio mode update\nbalanced\n\n## Next portfolio sketch\nBlocked until a structured cycle decision and adapter-compiled resource plan exist.\n\n## Resource update\nNo resource allocation is safe without an adapter-validated resource_plan.yaml.\n\n## Literature and deep research decision\nLiterature refresh: no. Deep research: no.\n\n## Idea pool update\n- no changes\n\n## User decision needed\nprovide adapter configuration or a structured cycle decision\n\n## Stop condition\nStop repeated evidence-only loops without executable resource plans.\n"
     if role == "deep_research_request":
         return f"# Deep Research Request: {target_id or 'request'}\n\n## Project context\nOffline fallback.\n\n## Current experimental evidence\nSee local status.\n\n## Existing local knowledge\nSee wiki.\n\n## Core research question\nRoute selection.\n\n## Required comparisons\nCompare methods, repos, weights, datasets, risks.\n\n## What counts as useful output\nActionable experiments with evidence.\n\n## What to avoid\nGeneric unsourced survey.\n\n## Expected deliverable\nEvidence table, method map, risk assessment, next experiments, citations.\n"
     return f"# {title} for {target_id}\n\nGenerated by offline fallback.\n"
+
+
+def run_has_schema_valid_metrics(run_dir: Path) -> bool:
+    for name in ["metrics.json", "analysis.json", "collect.json"]:
+        data = read_json(run_dir / name, {})
+        if isinstance(data, dict) and (data.get("schema_valid") is True or data.get("trusted") is True or data.get("metrics")):
+            return True
+    return False
 
 
 def git_diff(root: Path) -> str:
