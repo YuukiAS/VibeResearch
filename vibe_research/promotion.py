@@ -168,6 +168,19 @@ def synthesize_cycle_decision(paths: VibePaths, cycle_id: str) -> ResearchDecisi
     if multi_route_groups:
         group = sorted(multi_route_groups, key=lambda rows: (-len(rows), rows[0].id))[0]
         caps = sorted(group, key=lambda cap: cap.id)
+        repeated = latest_noncounting_multiroute_capability_set(paths, min_routes)
+        if repeated and set(cap.id for cap in caps) == repeated:
+            return make_decision(
+                paths,
+                cycle_id,
+                "blocked_missing_capability",
+                rationale="Active real-experiment capabilities exactly repeat the latest non-counting multi-route cycle; change capabilities, repair missing inputs, or provide an explicit override decision before repeating.",
+                blocking_questions=[
+                    "activate a genuinely changed executable capability, repair the non-counting cause, or write an explicit adapter decision to override the repeat guard"
+                ],
+                confidence="blocked",
+                provenance={"source": "deterministic_auto_compile_multi_route_repeat_guard", "capability_ids": sorted(repeated)},
+            )
         decision_type = select_executable_decision_for_capability(caps[0])
         return make_decision(
             paths,
@@ -199,6 +212,33 @@ def synthesize_cycle_decision(paths: VibePaths, cycle_id: str) -> ResearchDecisi
         resource_intent={"capability_id": capability.id, "task_type": capability.task_type, "source": "auto_compile"},
         provenance={"source": "deterministic_auto_compile", "capability_id": capability.id},
     )
+
+
+def latest_noncounting_multiroute_capability_set(paths: VibePaths, min_routes: int) -> set[str]:
+    state = read_json(paths.state / "state.json", {})
+    runs = state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}
+    cycles = state.get("cycles", {}) if isinstance(state.get("cycles"), dict) else {}
+    for cycle_id in sorted(cycles, reverse=True):
+        cycle_runs = [run for run in runs.values() if isinstance(run, dict) and run.get("cycle_id") == cycle_id]
+        if len(cycle_runs) < min_routes:
+            continue
+        capability_ids = {
+            str((run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}).get("capability_id") or "")
+            for run in cycle_runs
+        }
+        capability_ids = {capability_id for capability_id in capability_ids if capability_id}
+        if len(capability_ids) < min_routes:
+            continue
+        if all(run_is_noncounting_terminal(run) for run in cycle_runs):
+            return capability_ids
+    return set()
+
+
+def run_is_noncounting_terminal(run: dict[str, Any]) -> bool:
+    if run.get("non_counting_classification") or run.get("classification"):
+        return True
+    status = str(run.get("status", ""))
+    return status == "blocked" and bool(run.get("blocked_reason"))
 
 
 def validate_resource_plan(paths: VibePaths, cycle_id: str) -> list[str]:

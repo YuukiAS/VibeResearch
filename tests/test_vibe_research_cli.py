@@ -246,7 +246,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.44" in show.output
+    assert "0.8.45" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2650,6 +2650,40 @@ def test_v0839_synthesized_cycle_decision_compiles_multiroute_capabilities(tmp_p
     assert set(plan["runs"]) == {"train-smoke", "train-smoke-b", "train-smoke-c"}
     decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
     assert decision["resource_intent"]["source"] == "auto_compile_multi_route"
+
+
+def test_v0845_synthesized_cycle_decision_blocks_exact_noncounting_multiroute_repeat(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy").exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    paths = VibePaths(tmp_path)
+    manifest = load_adapter_manifest(paths)
+    base = manifest.capabilities[0]
+    for cap_id in ["train-smoke-b", "train-smoke-c"]:
+        cap = base.model_copy(deep=True)
+        cap.id = cap_id
+        cap.outputs = {"expected_output_path": f".vibe/{cap_id}.json", "metrics_file_path": f".vibe/{cap_id}.json"}
+        cap.artifact_rules.expected_outputs = [f".vibe/{cap_id}.json"]
+        cap.activation = {**cap.activation, "contract_test_result_id": cap_id}
+        manifest.capabilities.append(cap)
+        write_json(tmp_path / ".vibe" / "contract_tests" / f"{cap_id}.json", {"capability_id": cap_id, "status": "passed", "created_at": "test"})
+    write_adapter_manifest(paths, manifest)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["cycles"] = {"c001": {"status": "reviewed"}}
+    state["runs"] = {
+        f"r00{idx}_{cap_id}": {
+            "run_id": f"r00{idx}_{cap_id}",
+            "cycle_id": "c001",
+            "status": "blocked",
+            "non_counting_classification": "non_counting_execution_failure:failed",
+            "adapter_metadata": {"capability_id": cap_id, "task_type": "train_smoke"},
+        }
+        for idx, cap_id in enumerate(["train-smoke", "train-smoke-b", "train-smoke-c"], start=1)
+    }
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+
+    decision = synthesize_cycle_decision(paths, "c002")
+    assert decision.decision_type == "blocked_missing_capability"
+    assert decision.provenance["source"] == "deterministic_auto_compile_multi_route_repeat_guard"
 
 
 def test_v0839_next_monitors_fragmented_active_sustained_round(tmp_path: Path):

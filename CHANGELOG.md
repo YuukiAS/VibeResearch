@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.45 - 2026-05-31
+
+- Add a multi-route repeat guard to deterministic cycle synthesis: if the
+  active real-experiment capability set exactly repeats the latest
+  non-counting multi-route cycle, synthesis now blocks with
+  `blocked_missing_capability`.
+- The block asks for a changed executable capability, repaired non-counting
+  cause, or explicit adapter decision before repeating the same route set.
+
 ## 0.8.44 - 2026-05-31
 
 - Clear stale `blocked_missing_decision` next-action blocks when the referenced
