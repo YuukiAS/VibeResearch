@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.42 - 2026-05-31
+
+- Make autonomous submission flags fail closed: `--dry-submit` remains the
+  default recording mode, while real backend submission now requires explicit
+  `--real-submit`.
+- Add `vibe research sustained-next` and `vibe research sustained-cycle`
+  aliases with the same explicit dry/real submission semantics.
+- Update daemon and auto-cycle entrypoints to pass the effective dry-submit
+  value as `dry_submit and not real_submit`.
+
 ## 0.8.41 - 2026-05-31
 
 - Add generic Slurm partition/runtime compatibility checks driven by declared

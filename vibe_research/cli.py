@@ -139,6 +139,10 @@ app.add_typer(external_app, name="external")
 console = Console()
 
 
+def effective_dry_submit(dry_submit: bool, real_submit: bool) -> bool:
+    return bool((dry_submit or not real_submit) and not real_submit)
+
+
 def paths(target: Path) -> VibePaths:
     return VibePaths(target)
 
@@ -512,6 +516,32 @@ def research_sustained_audit_cmd(
 
     result = sustained_round_audit(paths(target), target_rounds=target_rounds, min_routes_per_round=min_routes)
     console.print_json(data=result)
+
+
+@research_app.command("sustained-next")
+def research_sustained_next_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    offline: bool = typer.Option(False, "--offline"),
+    dry_submit: bool = typer.Option(False, "--dry-submit", help="Record backend submissions without launching jobs."),
+    real_submit: bool = typer.Option(False, "--real-submit", help="Explicitly allow real backend submission."),
+) -> None:
+    """Execute one sustained research step with fail-closed submission semantics."""
+
+    console.print(run_auto_next(paths(target), offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit)))
+
+
+@research_app.command("sustained-cycle")
+def research_sustained_cycle_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    offline: bool = typer.Option(False, "--offline"),
+    dry_submit: bool = typer.Option(False, "--dry-submit", help="Record backend submissions without launching jobs."),
+    real_submit: bool = typer.Option(False, "--real-submit", help="Explicitly allow real backend submission."),
+    max_steps: int = typer.Option(30, "--max-steps"),
+) -> None:
+    """Advance sustained research until submit/manual/block with dry submission by default."""
+
+    for line in run_auto_cycle(paths(target), offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit), max_steps=max_steps):
+        console.print(line)
 
 
 @research_app.command("answer")
@@ -1425,23 +1455,25 @@ def scheduler_explain_cmd(target: Path = typer.Option(Path("."), "--target", "-t
 def auto_next_cmd(
     target: Path = typer.Option(Path("."), "--target", "-t"),
     offline: bool = typer.Option(False, "--offline"),
-    dry_submit: bool = typer.Option(True, "--dry-submit/--real-submit"),
+    dry_submit: bool = typer.Option(False, "--dry-submit", help="Record backend submissions without launching jobs."),
+    real_submit: bool = typer.Option(False, "--real-submit", help="Explicitly allow real backend submission."),
 ) -> None:
     """Execute one safe next step from the local state machine."""
 
-    console.print(run_auto_next(paths(target), offline=offline, dry_submit=dry_submit))
+    console.print(run_auto_next(paths(target), offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit)))
 
 
 @app.command("auto-cycle")
 def auto_cycle_cmd(
     target: Path = typer.Option(Path("."), "--target", "-t"),
     offline: bool = typer.Option(False, "--offline"),
-    dry_submit: bool = typer.Option(True, "--dry-submit/--real-submit"),
+    dry_submit: bool = typer.Option(False, "--dry-submit", help="Record backend submissions without launching jobs."),
+    real_submit: bool = typer.Option(False, "--real-submit", help="Explicitly allow real backend submission."),
     max_steps: int = typer.Option(30, "--max-steps"),
 ) -> None:
     """Advance one portfolio cycle until submit/manual/block."""
 
-    for line in run_auto_cycle(paths(target), offline=offline, dry_submit=dry_submit, max_steps=max_steps):
+    for line in run_auto_cycle(paths(target), offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit), max_steps=max_steps):
         console.print(line)
 
 
@@ -1927,12 +1959,13 @@ def daemon_start_cmd(
     auto_next: bool = typer.Option(True, "--auto-next/--no-auto-next"),
     mode: str = typer.Option("auto-cycle", "--mode", help="Daemon loop mode: auto-cycle or monitor."),
     offline: bool = typer.Option(False, "--offline/--online", help="Disable or allow external search calls inside auto-cycle."),
-    dry_submit: bool = typer.Option(True, "--dry-submit/--real-submit", help="Record submissions or allow real backend submission."),
+    dry_submit: bool = typer.Option(False, "--dry-submit", help="Record submissions without launching backend jobs."),
+    real_submit: bool = typer.Option(False, "--real-submit", help="Explicitly allow real backend submission."),
     max_steps: int = typer.Option(30, "--max-steps", help="Maximum auto-next steps per auto-cycle iteration."),
 ) -> None:
     """Start a tmux supervisor running an autonomous or monitor-only loop."""
 
-    console.print(daemon_start(paths(target), interval=interval, auto_next=auto_next, mode=mode, offline=offline, dry_submit=dry_submit, max_steps=max_steps))
+    console.print(daemon_start(paths(target), interval=interval, auto_next=auto_next, mode=mode, offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit), max_steps=max_steps))
 
 
 @daemon_app.command("stop")

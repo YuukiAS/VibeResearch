@@ -246,7 +246,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.41" in show.output
+    assert "0.8.42" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2581,6 +2581,38 @@ def test_v0823_auto_cycle_stops_after_single_monitor(monkeypatch, tmp_path: Path
     monkeypatch.setattr("vibe_research.automation.auto_next", fake_auto_next)
     assert auto_cycle(VibePaths(tmp_path), max_steps=10) == ["monitored"]
     assert calls["count"] == 1
+
+
+def test_v0842_research_sustained_next_dry_submit_fails_closed(monkeypatch, tmp_path: Path):
+    calls = []
+
+    def fake_auto_next(paths, *, offline=False, dry_submit=True):
+        calls.append(dry_submit)
+        return f"dry_submit={dry_submit}"
+
+    monkeypatch.setattr("vibe_research.cli.run_auto_next", fake_auto_next)
+    dry = invoke("research", "sustained-next", "--dry-submit", "--target", str(tmp_path))
+    assert dry.exit_code == 0
+    assert calls[-1] is True
+    real = invoke("research", "sustained-next", "--real-submit", "--target", str(tmp_path))
+    assert real.exit_code == 0
+    assert calls[-1] is False
+
+
+def test_v0842_research_sustained_cycle_real_submit_is_explicit(monkeypatch, tmp_path: Path):
+    calls = []
+
+    def fake_auto_cycle(paths, *, offline=False, dry_submit=True, max_steps=30):
+        calls.append({"dry_submit": dry_submit, "max_steps": max_steps})
+        return [f"dry_submit={dry_submit}"]
+
+    monkeypatch.setattr("vibe_research.cli.run_auto_cycle", fake_auto_cycle)
+    dry = invoke("research", "sustained-cycle", "--dry-submit", "--max-steps", "2", "--target", str(tmp_path))
+    assert dry.exit_code == 0
+    assert calls[-1] == {"dry_submit": True, "max_steps": 2}
+    real = invoke("research", "sustained-cycle", "--real-submit", "--max-steps", "2", "--target", str(tmp_path))
+    assert real.exit_code == 0
+    assert calls[-1] == {"dry_submit": False, "max_steps": 2}
 
 
 def test_v0825_online_monitor_triggers_method_search_once(monkeypatch, tmp_path: Path):
