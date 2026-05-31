@@ -15,6 +15,7 @@ from .config import load_config
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text, write_yaml
 from .paths import VibePaths
 from .promotion import select_executable_decision_for_capability
+from .real_experiments import summarize_real_experiment_progress
 from .timeline import record_event
 
 
@@ -565,6 +566,14 @@ def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_route
     method_marker = read_json(paths.research / "auto_method_search.json", {})
     if not source_rows and not external_repo_rows and not method_marker:
         issues.append("no_external_resource_provenance_recorded")
+    real_progress = summarize_real_experiment_progress(paths)
+    real_repair_blockers = [
+        row
+        for row in real_progress.get("non_counting_real_experiment_runs", [])
+        if row.get("requires_repair") and row.get("status") in {"failed", "timeout", "cancelled", "dryrun_failed"}
+    ]
+    if real_repair_blockers:
+        issues.append("real_experiment_repair_required")
 
     result = {
         "created_at": utc_now(),
@@ -580,6 +589,12 @@ def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_route
             "external_search_contexts": sorted((method_marker.get("searches") or {}).keys()) if isinstance(method_marker.get("searches"), dict) else [],
             "external_source_records": len(source_rows),
             "external_repo_records": len(external_repo_rows),
+        },
+        "real_experiment_progress": {
+            "observed_count": real_progress.get("observed_count", 0),
+            "target_count": real_progress.get("target_count", 0),
+            "repair_blockers": real_repair_blockers,
+            "next_action": real_progress.get("next_action", ""),
         },
         "active_jobs_by_cycle": dict(sorted(active_cycle_counts.items())),
         "cycles": cycle_rows,
@@ -627,6 +642,8 @@ def audit_cycle_round(paths: VibePaths, cycle_id: str, runs: dict[str, Any], min
 def sustained_round_next_action(completed_count: int, target_rounds: int, issues: list[str], active_jobs: list[dict[str, Any]]) -> str:
     if completed_count >= target_rounds and not issues:
         return "sustained round target met"
+    if "real_experiment_repair_required" in issues:
+        return "repair or classify non-counting real experiment failures before planning another round"
     if active_jobs:
         return "monitor active jobs, then collect metrics and run cycle reflection/revision before planning the next round"
     if "default_portfolio_generates_too_few_routes" in issues:

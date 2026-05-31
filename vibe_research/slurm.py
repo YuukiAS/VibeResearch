@@ -105,23 +105,152 @@ def choose_partition(manifest: dict[str, Any], config: dict[str, Any]) -> tuple[
     if resources.get("strict_preferred_partition") or resources.get("prefer_configured_partition"):
         if not preferred:
             return "", "strict_preferred_partition_missing"
+        compatibility = partition_compatibility(preferred[0], {"resource_request": resources}, config)
+        if compatibility.get("compatible") is False:
+            return "", "strict_preferred_partition_incompatible: " + ",".join(compatibility.get("reasons", []))
         return preferred[0], "strict_preferred_partition"
     candidates = preferred + [p for p in fallback if p not in preferred]
     if not candidates:
         return "", "no_partition_configured"
+    compatible_candidates, skipped = compatible_partition_candidates(candidates, {"resource_request": resources}, config)
+    if not compatible_candidates:
+        return "", "no_compatible_partition: " + ";".join(f"{row['partition']}={','.join(row.get('reasons', []))}" for row in skipped)
     available, reason = probe_available_partitions()
     if available:
-        for name in candidates:
+        for name in compatible_candidates:
             if name in available:
-                return name, "preferred_available" if name in preferred else f"fallback_available: {reason}"
+                selected_reason = "preferred_available" if name in preferred else f"fallback_available: {reason}"
+                return name, append_compatibility_skip_reason(selected_reason, skipped)
     profiles = {row.get("name"): row for row in execution_slurm.get("partitions", []) if row.get("name")}
     if not profiles:
-        return candidates[0], reason or "no_partition_profiles"
-    ranked = sorted(candidates, key=lambda name: profiles.get(name, {}).get("priority", 0), reverse=True)
+        return compatible_candidates[0], append_compatibility_skip_reason(reason or "no_partition_profiles", skipped)
+    ranked = sorted(compatible_candidates, key=lambda name: profiles.get(name, {}).get("priority", 0), reverse=True)
     selected = ranked[0]
     if selected not in preferred:
-        return selected, "fallback_by_config_priority"
-    return selected, reason or "selected_by_config_priority"
+        return selected, append_compatibility_skip_reason("fallback_by_config_priority", skipped)
+    return selected, append_compatibility_skip_reason(reason or "selected_by_config_priority", skipped)
+
+
+def compatible_partition_candidates(candidates: list[str], launch: dict[str, Any], config: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
+    compatible: list[str] = []
+    skipped: list[dict[str, Any]] = []
+    for partition in candidates:
+        check = partition_compatibility(partition, launch, config)
+        if check.get("compatible") is False:
+            skipped.append(check)
+        else:
+            compatible.append(partition)
+    return compatible, skipped
+
+
+def append_compatibility_skip_reason(reason: str, skipped: list[dict[str, Any]]) -> str:
+    if not skipped:
+        return reason
+    summary = ";".join(f"{row['partition']}={','.join(row.get('reasons', []))}" for row in skipped)
+    return f"{reason}; skipped_incompatible={summary}"
+
+
+def partition_compatibility(partition: str, launch: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """Evaluate declared Slurm partition/runtime compatibility.
+
+    The framework does not infer GPU architecture from partition names. It only
+    uses metadata declared by a project profile or a run resource request.
+    """
+
+    resource = launch.get("resource_request") or launch.get("resources") or {}
+    slurm = config.get("execution", {}).get("slurm", {}) if isinstance(config.get("execution"), dict) else {}
+    legacy_slurm = config.get("slurm", {}) if isinstance(config.get("slurm"), dict) else {}
+    profile = partition_profile(partition, config)
+    metadata = partition_gpu_metadata(partition, config)
+    runtime = {}
+    for source in [
+        legacy_slurm.get("runtime_requirements", {}),
+        slurm.get("runtime_requirements", {}),
+        resource.get("runtime_requirements", {}),
+    ]:
+        if isinstance(source, dict):
+            runtime.update(source)
+    if resource.get("min_cuda_compute_capability") is not None:
+        runtime["min_cuda_compute_capability"] = resource.get("min_cuda_compute_capability")
+    allowed_partitions = set(normalize_string_list(resource.get("allowed_partitions") or runtime.get("allowed_partitions") or slurm.get("allowed_partitions")))
+    excluded_partitions = set(normalize_string_list(resource.get("excluded_partitions") or runtime.get("excluded_partitions") or slurm.get("excluded_partitions")))
+    allowed_families = set(normalize_string_list(resource.get("allowed_gpu_families") or runtime.get("allowed_gpu_families") or slurm.get("allowed_gpu_families")))
+    excluded_families = set(normalize_string_list(resource.get("excluded_gpu_families") or runtime.get("excluded_gpu_families") or slurm.get("excluded_gpu_families")))
+    reasons: list[str] = []
+    partition_key = partition.strip().lower()
+    if allowed_partitions and partition_key not in allowed_partitions:
+        reasons.append("partition_not_allowed")
+    if partition_key in excluded_partitions:
+        reasons.append("partition_excluded")
+    family = str(metadata.get("gpu_family") or metadata.get("family") or profile.get("gpu_family") or profile.get("gpu_model") or "").strip().lower()
+    if allowed_families and (not family or family not in allowed_families):
+        reasons.append("gpu_family_not_allowed")
+    if family and family in excluded_families:
+        reasons.append("gpu_family_excluded")
+    min_cc = parse_float(runtime.get("min_cuda_compute_capability"))
+    cc = parse_float(
+        metadata.get("cuda_compute_capability")
+        or metadata.get("compute_capability")
+        or profile.get("cuda_compute_capability")
+        or profile.get("compute_capability")
+    )
+    if min_cc is not None:
+        if cc is None:
+            reasons.append("partition_compute_capability_unknown_for_requirement")
+        elif cc < min_cc:
+            reasons.append("cuda_compute_capability_below_requirement")
+    checked = bool(runtime or allowed_partitions or excluded_partitions or allowed_families or excluded_families or metadata or profile)
+    return {
+        "partition": partition,
+        "compatible": not reasons,
+        "checked": checked,
+        "reasons": reasons,
+        "requirements": runtime,
+        "metadata": {
+            "gpu_family": family,
+            "cuda_compute_capability": cc,
+            **{k: v for k, v in metadata.items() if k not in {"gpu_family", "family", "cuda_compute_capability", "compute_capability"}},
+        },
+    }
+
+
+def partition_profile(partition: str, config: dict[str, Any]) -> dict[str, Any]:
+    slurm = config.get("execution", {}).get("slurm", {}) if isinstance(config.get("execution"), dict) else {}
+    for row in slurm.get("partitions", []):
+        if isinstance(row, dict) and row.get("name") == partition:
+            return row
+    return {}
+
+
+def partition_gpu_metadata(partition: str, config: dict[str, Any]) -> dict[str, Any]:
+    slurm = config.get("execution", {}).get("slurm", {}) if isinstance(config.get("execution"), dict) else {}
+    legacy_slurm = config.get("slurm", {}) if isinstance(config.get("slurm"), dict) else {}
+    metadata: dict[str, Any] = {}
+    for slurm_source in [legacy_slurm, slurm]:
+        for key in ["partition_gpu_metadata", "gpu_metadata_by_partition", "partition_gpu_capabilities"]:
+            source = slurm_source.get(key, {})
+            if isinstance(source, dict) and isinstance(source.get(partition), dict):
+                metadata.update(source[partition])
+            elif isinstance(source, dict) and source.get(partition) is not None:
+                metadata["cuda_compute_capability"] = source[partition]
+    return metadata
+
+
+def normalize_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip().lower()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip().lower() for item in value if str(item).strip()]
+    return []
+
+
+def parse_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def probe_available_partitions() -> tuple[set[str], str]:

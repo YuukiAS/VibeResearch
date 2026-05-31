@@ -16,7 +16,7 @@ from .config import load_config
 from .io import ensure_dir, utc_now, write_text
 from .manifest import load_manifest
 from .paths import VibePaths
-from .slurm import choose_partition, classify_failure, render_sbatch, slurm_gres_for_partition
+from .slurm import choose_partition, classify_failure, partition_compatibility, render_sbatch, slurm_gres_for_partition
 
 
 @dataclass
@@ -304,10 +304,11 @@ def evaluate_wait_policy(launch: dict[str, Any], config: dict[str, Any], wait_po
     current_proxy = next((row for row in fallback_evidence if row.get("partition") == current_partition and row.get("estimated_start_plus_run_hours") is not None), None)
     if current_hours is None and current_proxy:
         current_hours = current_proxy.get("estimated_start_plus_run_hours")
+    viable_fallback_evidence = [row for row in fallback_evidence if row.get("compatible", True) is not False]
     if current_hours is None:
         within = [
             row
-            for row in fallback_evidence
+            for row in viable_fallback_evidence
             if row.get("partition") != current_partition
             and row.get("estimated_start_plus_run_hours") is not None
             and (not max_hours or float(row["estimated_start_plus_run_hours"]) <= max_hours)
@@ -339,7 +340,7 @@ def evaluate_wait_policy(launch: dict[str, Any], config: dict[str, Any], wait_po
         }
     better = [
         row
-        for row in fallback_evidence
+        for row in viable_fallback_evidence
         if row.get("estimated_start_plus_run_hours") is not None
         and row.get("partition") != current_partition
         and float(row["estimated_start_plus_run_hours"]) < float(current_hours)
@@ -347,7 +348,7 @@ def evaluate_wait_policy(launch: dict[str, Any], config: dict[str, Any], wait_po
     ]
     materially_better = [
         row
-        for row in fallback_evidence
+        for row in viable_fallback_evidence
         if row.get("estimated_start_plus_run_hours") is not None
         and row.get("partition") != current_partition
         and float(row["estimated_start_plus_run_hours"]) + 1.0 < float(current_hours)
@@ -410,7 +411,18 @@ def fallback_completion_estimates(launch: dict[str, Any], config: dict[str, Any]
         except (TypeError, ValueError):
             hours = None
             source = "invalid_estimate"
-        rows.append({"partition": partition, "estimated_start_plus_run_hours": hours, "source": source})
+        row = {"partition": partition, "estimated_start_plus_run_hours": hours, "source": source}
+        compatibility = partition_compatibility(partition, launch, config)
+        if compatibility.get("checked"):
+            row.update(
+                {
+                    "compatible": compatibility.get("compatible", True),
+                    "compatibility_reasons": compatibility.get("reasons", []),
+                    "compatibility_requirements": compatibility.get("requirements", {}),
+                    "partition_metadata": compatibility.get("metadata", {}),
+                }
+            )
+        rows.append(row)
     return rows
 
 

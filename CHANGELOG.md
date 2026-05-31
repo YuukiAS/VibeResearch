@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.8.41 - 2026-05-31
+
+- Add generic Slurm partition/runtime compatibility checks driven by declared
+  partition metadata, runtime requirements, and resource-level allow/exclude
+  lists, without hard-coding cluster-specific GPU partition names.
+- Filter Slurm fallback recommendations through compatibility checks while
+  preserving skipped incompatible candidates and reasons in wait evidence.
+- Make `vibe next` and sustained round audits block on unrepaired real
+  experiment failures before planning another round or recommending unrelated
+  metric collection.
+
 ## 0.8.40 - 2026-05-31
 
 - Add generic downstream adapter dependency readiness checks for declared

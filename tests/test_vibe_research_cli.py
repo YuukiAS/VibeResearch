@@ -246,7 +246,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.40" in show.output
+    assert "0.8.41" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1662,6 +1662,113 @@ def test_v0836_real_progress_treats_superseded_failures_as_classified(tmp_path: 
     assert failed["classification"] == "non_counting_superseded_by:r002_replacement"
     assert failed["requires_repair"] is False
     assert progress["next_action"] == "monitor active replacement real experiments; collect trusted metrics when they finish"
+
+
+def test_v0841_choose_partition_skips_incompatible_gpu_runtime(monkeypatch):
+    monkeypatch.setattr("vibe_research.slurm.probe_available_partitions", lambda: ({"volta-gpu", "a100-gpu"}, "sinfo"))
+    manifest = {
+        "resources": {
+            "gpu": 1,
+            "preferred_partitions": ["volta-gpu"],
+            "fallback_partitions": ["a100-gpu"],
+        }
+    }
+    config = {
+        "execution": {
+            "slurm": {
+                "runtime_requirements": {"min_cuda_compute_capability": 7.5},
+                "partitions": [
+                    {"name": "volta-gpu", "gpu_family": "v100", "cuda_compute_capability": 7.0},
+                    {"name": "a100-gpu", "gpu_family": "a100", "cuda_compute_capability": 8.0},
+                ],
+            }
+        }
+    }
+    partition, reason = choose_partition(manifest, config)
+    assert partition == "a100-gpu"
+    assert reason.startswith("fallback_available: sinfo")
+    assert "skipped_incompatible=volta-gpu=cuda_compute_capability_below_requirement" in reason
+
+
+def test_v0841_fallback_wait_ignores_incompatible_partition_but_records_evidence():
+    import vibe_research.backends as backends
+
+    launch = {
+        "partition": "htzhulab",
+        "resource_request": {
+            "gpu": 1,
+            "time": "04:00:00",
+            "fallback_partitions": ["volta-gpu", "a100-gpu"],
+        },
+    }
+    config = {
+        "execution": {
+            "slurm": {
+                "max_pending_start_plus_run_hours": 24,
+                "runtime_requirements": {"min_cuda_compute_capability": 7.5},
+                "fallback_partition_estimates": {"volta-gpu": 4, "a100-gpu": 10},
+                "partitions": [
+                    {"name": "volta-gpu", "gpu_family": "v100", "cuda_compute_capability": 7.0},
+                    {"name": "a100-gpu", "gpu_family": "a100", "cuda_compute_capability": 8.0},
+                ],
+            }
+        }
+    }
+    verdict = backends.evaluate_wait_policy(
+        launch,
+        config,
+        {"max_start_plus_run_hours": 24, "estimated_start_plus_run_hours": 30},
+        ["htzhulab", "volta-gpu", "a100-gpu"],
+    )
+    assert verdict["recommended_partition"] == "a100-gpu"
+    by_partition = {row["partition"]: row for row in verdict["fallback_checked"]}
+    assert by_partition["volta-gpu"]["compatible"] is False
+    assert "cuda_compute_capability_below_requirement" in by_partition["volta-gpu"]["compatibility_reasons"]
+    assert by_partition["a100-gpu"]["compatible"] is True
+
+
+def test_v0841_next_blocks_on_unrepaired_real_experiment_failure(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {
+        "r001_failed": {
+            "run_id": "r001_failed",
+            "cycle_id": "c001",
+            "status": "failed",
+            "run_kind": "real_experiment",
+            "backend": "slurm",
+            "adapter_metadata": {"task_type": "train_smoke", "capability_id": "train-smoke"},
+        }
+    }
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "Blocked: real_experiment_repair_required" in result.output
+    assert "vibe experiment real-progress" in result.output
+
+
+def test_v0841_sustained_audit_blocks_on_unrepaired_real_experiment_failure(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {
+        "r001_failed": {
+            "run_id": "r001_failed",
+            "cycle_id": "c001",
+            "status": "failed",
+            "run_kind": "real_experiment",
+            "backend": "slurm",
+            "adapter_metadata": {"task_type": "train_smoke", "capability_id": "train-smoke"},
+        }
+    }
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    result = invoke("research", "sustained-audit", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
+    assert "real_experiment_repair_required" in audit["issues"]
+    assert audit["real_experiment_progress"]["repair_blockers"][0]["run_id"] == "r001_failed"
+    assert audit["next_action"] == "repair or classify non-counting real experiment failures before planning another round"
 
 
 def test_v0833_render_sbatch_uses_explicit_partition_specific_gres(tmp_path: Path):

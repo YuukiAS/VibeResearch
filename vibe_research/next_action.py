@@ -6,6 +6,7 @@ from .adapter_onboarding import adapter_readiness, apply_project_adapter_profile
 from .config import load_config
 from .io import read_json, read_jsonl, read_yaml
 from .paths import VibePaths
+from .real_experiments import summarize_real_experiment_progress
 from .scheduler import active_gpu_count
 
 
@@ -62,6 +63,9 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     for request in read_jsonl(paths.research / "deep_requests" / "registry.jsonl"):
         if request.get("blocking") and request.get("status") != "ingested":
             return "vibe ingest-deep-research " + request.get("request_id", "<request_id>"), "blocked_waiting_deep_research"
+    progress = summarize_real_experiment_progress(paths)
+    if blocking_real_experiment_repairs(progress):
+        return "vibe experiment real-progress", "real_experiment_repair_required"
     cycle_id = state.get("current_cycle_id", "")
     if cycle_id:
         cycle = state.get("cycles", {}).get(cycle_id, {})
@@ -109,6 +113,15 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     if active and fallback == "vibe monitor":
         return "vibe plan-cycle", ""
     return fallback, ""
+
+
+def blocking_real_experiment_repairs(progress: dict) -> list[dict]:
+    blocking_statuses = {"failed", "timeout", "cancelled", "dryrun_failed"}
+    return [
+        row
+        for row in progress.get("non_counting_real_experiment_runs", [])
+        if row.get("requires_repair") and row.get("status") in blocking_statuses
+    ]
 
 
 def has_text(path) -> bool:
