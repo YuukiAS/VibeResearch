@@ -31,10 +31,8 @@ def load_config(paths: VibePaths, *, include_local: bool = True) -> dict[str, An
     default = ProjectConfig(project_name=paths.root.name).model_dump()
     json_config = read_json(paths.vibe / "config.json", {})
     yaml_config = read_yaml(paths.vibe / "config.yaml", {})
-    config = deep_merge(
-        default,
-        deep_merge(yaml_config if isinstance(yaml_config, dict) else {}, json_config if isinstance(json_config, dict) else {}),
-    )
+    config = deep_merge(default, json_config if isinstance(json_config, dict) else {})
+    config = deep_merge(config, yaml_config if isinstance(yaml_config, dict) else {})
     if include_local:
         local_config = read_yaml(paths.vibe / "config.local.yaml", {})
         config = deep_merge(config, local_config if isinstance(local_config, dict) else {})

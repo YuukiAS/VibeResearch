@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.35 - 2026-05-30
+
+- Treat `.vibe/config.json` as a generated mirror/fill source and let human
+  `.vibe/config.yaml` edits override stale JSON values during `load_config`.
+- Add a regression test proving Slurm partition edits in YAML take precedence
+  over stale JSON mirror values.
+
 ## 0.8.34 - 2026-05-30
 
 - Promote initialization policy decisions into the default research question

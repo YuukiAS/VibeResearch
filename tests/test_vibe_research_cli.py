@@ -15,7 +15,7 @@ from vibe_research.adapter_schema import AdapterCapability, AdapterManifest, Art
 from vibe_research.automation import auto_cycle, auto_next
 from vibe_research.codex_adapter import run_codex
 from vibe_research.cli import app
-from vibe_research.config import detect_config
+from vibe_research.config import detect_config, load_config
 from vibe_research.daemon import daemon_start
 from vibe_research.decisions import make_decision, write_decision
 from vibe_research.ideas import create_idea
@@ -236,7 +236,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.34" in show.output
+    assert "0.8.35" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -266,6 +266,25 @@ def test_config_detect_with_fake_slurm_and_gpu_commands(tmp_path: Path, monkeypa
     assert (tmp_path / ".vibe" / "config.detected.yaml").exists()
     written = read_yaml(tmp_path / ".vibe" / "config.detected.yaml", {})
     assert written["suggested_config"]["execution"]["backend"] == "slurm"
+
+
+def test_v0835_yaml_config_overrides_stale_json_mirror(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    config_yaml = read_yaml(tmp_path / ".vibe" / "config.yaml", {})
+    config_json = read_json(tmp_path / ".vibe" / "config.json", {})
+    config_yaml.setdefault("execution", {}).setdefault("slurm", {})["default_partition"] = "htzhulab"
+    config_yaml["execution"]["slurm"]["preferred_partitions"] = ["htzhulab"]
+    config_yaml["execution"]["slurm"]["fallback_partitions"] = ["a100-gpu", "volta-gpu"]
+    config_json.setdefault("execution", {}).setdefault("slurm", {})["default_partition"] = "gpu_short"
+    config_json["execution"]["slurm"]["preferred_partitions"] = ["gpu_short"]
+    config_json["execution"]["slurm"]["fallback_partitions"] = ["gpu"]
+    write_yaml(tmp_path / ".vibe" / "config.yaml", config_yaml)
+    write_json(tmp_path / ".vibe" / "config.json", config_json)
+
+    loaded = load_config(VibePaths(tmp_path), include_local=False)
+    assert loaded["execution"]["slurm"]["default_partition"] == "htzhulab"
+    assert loaded["execution"]["slurm"]["preferred_partitions"] == ["htzhulab"]
+    assert loaded["execution"]["slurm"]["fallback_partitions"] == ["a100-gpu", "volta-gpu"]
 
 
 def test_default_portal_creation_and_rebuild(tmp_path: Path):
