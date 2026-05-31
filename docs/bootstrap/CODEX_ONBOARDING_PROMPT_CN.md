@@ -14,7 +14,7 @@
 6. 如果目标 repo 已有旧 `.vibe/` 或旧自动化状态，先做 read-only audit，再 archive 或询问我是否改名保留；不要删除旧 evidence，也不要把旧 metrics 自动当 trusted evidence。
 7. 最终给我中文总结：安装来源和 commit、目标 repo 状态、readiness level、active/blocked capability、需要我继续回答的问题、下一条安全命令。
 
-如果我还没有提供目标 repo 路径、项目目标/背景、预算或自治边界，请先问我。项目目标/背景是必须项；初始想法是可选项。你可以自己运行 `sinfo`、`nvidia-smi`、`git status`、README/AGENTS 扫描和 contract test 这类可验证检查，但不能替我回答需要用户决策的问题。遇到目标、GPU/Slurm 权限、允许等待时长、普通实验运行时长、最终交付/提交运行时长、预算、自治等级、trusted metric、提交或上传权限时，必须停下来复述问题让我回答。不要一次问太多，优先问会阻塞 readiness 或高风险自动化的内容。
+如果我还没有提供目标 repo 路径、项目目标/背景、预算或自治边界，请先问我。项目目标/背景是必须项；初始想法是可选项，但也要明确问一次，允许我回答“无”。你可以自己运行 `sinfo`、`nvidia-smi`、`git status`、README/AGENTS 扫描和 contract test 这类可验证检查，但不能替我回答需要用户决策的问题。遇到目标、GPU/Slurm 权限、分区和 GRES 选择、允许等待时长、普通实验运行时长、最终交付/提交运行时长、预算、自治等级、trusted metric、protected metrics、adapter/script 初版执行面、提交或上传权限时，必须停下来复述问题让我回答。不要一次问太多，优先问会阻塞 readiness 或高风险自动化的内容。
 ```
 
 ## Codex 执行细则
@@ -23,7 +23,7 @@ Codex 应按下面顺序工作。
 
 1. 确认目标 repo 路径；如果用户没有给，先问。
 2. 确认项目目标和背景；这是初始化必填信息。
-3. 可选收集初始想法、memo 语言、timezone、预算偏好和自治等级。
+3. 询问是否有初始想法；这是可选内容，但必须明确问一次，用户可以回答“无”。memo 语言、timezone、预算偏好和自治等级也由用户确认。
 4. 默认完成 GPU/Slurm 资源初始化。即使用户最后选择 CPU-only，也要记录这个答案；不要跳过资源问题。先探测目标环境，不要根据分区名字猜测硬件：
 
 ```bash
@@ -31,7 +31,7 @@ sinfo -h -o "%P %G"
 ```
 
 根据 `sinfo` 输出可以整理候选 `--preferred-partition`、`--fallback-partition`
-和 `--partition-gres`，但等待时长、普通实验运行时长、最终交付/提交运行时长和是否允许自动提交 GPU job 必须问用户。`a100-gpu`、`volta-gpu` 等名字只能作为示例，不能作为框架默认假设。无法确认 GRES 时，先问用户或保持未配置，不要自动提交 GPU job。
+和 `--partition-gres`，但具体 preferred/fallback 选择、等待时长、普通实验运行时长、最终交付/提交运行时长和是否允许自动提交 GPU job 必须问用户。`a100-gpu`、`volta-gpu` 等名字只能作为示例，不能作为框架默认假设。无法确认 GRES 时，先问用户或保持未配置，不要自动提交 GPU job。
 5. 在目标 repo 附近或用户指定位置 clone：
 
 ```bash
@@ -98,6 +98,8 @@ cat /path/to/target-repo/.vibe/bootstrap/readiness_report.md
 - resource runtime：允许排队等待多久、普通探索实验最多跑多久、最终交付/提交阶段最多跑多久；
 - autonomy：是否允许自动改脚本、自动提交 job、自动 archive、自动 stop hypothesis；
 - Slurm/GPU 权限和高风险动作边界；
+- 初始想法：如果没有，明确记录为“无”；
+- adapter/script 初版执行面：第一批 probe、evaluation、training 或 metrics wrapper 应该对应哪些项目脚本或命令；
 - memo language 和 timezone。
 
 12. 用户回答后，Codex 写入目标 repo 的 `.vibe/` 文件，然后运行：

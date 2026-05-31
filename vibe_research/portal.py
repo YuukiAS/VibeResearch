@@ -72,7 +72,7 @@ def build_portal(paths: VibePaths, *, mode: str | None = None, force: bool = Fal
         if not force and not root_mirror_is_managed(target):
             continue
         if target.exists() or target.is_symlink():
-            target.unlink()
+            target.unlink(missing_ok=True)
         if selected == "symlink":
             target.symlink_to(source.relative_to(paths.root))
         else:

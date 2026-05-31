@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.8.38 - 2026-05-31
+
+- Promote semantic onboarding decisions into the default initialization question
+  flow: required project goal, project background, optional initial ideas,
+  preferred/fallback Slurm partitions, GRES templates, and the first
+  adapter/script execution surface.
+- Update Codex onboarding instructions so agents must stop and ask users for
+  these subjective decisions instead of filling them in from heuristics.
+- Harden daemon status for tmux-managed shell loops by recording a
+  `VIBE_DAEMON_TARGET` sentinel, prefer dry-run contract outputs over real
+  experiment outputs, and tolerate root portal rebuild races.
+
 ## 0.8.37 - 2026-05-30
 
 - Expand Slurm wait-policy comparisons to include the current launch partition,

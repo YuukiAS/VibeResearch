@@ -190,20 +190,20 @@ def research_init(
     policies = write_default_policies(paths, memo_language=memo_language, timezone=timezone, autonomy_level=autonomy_level, force=force)
     blockers = []
     if not goal or "Define the research objective" in goal or goal.startswith("MISSING"):
-        blockers.append("missing_project_goal")
+        blockers.append("q_init_project_goal")
     if not background or "not been supplied" in background or background.startswith("MISSING"):
-        blockers.append("missing_project_background")
+        blockers.append("q_init_project_background")
     existing_questions = read_jsonl(files["questions"])
     if existing_questions:
         write_text(files["questions"], "")
         for row in existing_questions:
-            if row.get("question_id") in {"missing_project_goal", "missing_project_background"} and row.get("question_id") not in blockers:
+            if row.get("question_id") in blockers:
+                row["status"] = "open"
+                row["updated_at"] = now
+            elif row.get("question_id") in {"missing_project_goal", "missing_project_background", "q_init_project_goal", "q_init_project_background"}:
                 row["status"] = "resolved"
                 row["resolved_at"] = now
             append_jsonl(files["questions"], row)
-    for blocker in blockers:
-        if not any(row.get("question_id") == blocker and row.get("status", "open") == "open" for row in read_jsonl(files["questions"])):
-            append_jsonl(files["questions"], {"question_id": blocker, "status": "open", "question": blocker.replace("_", " "), "created_at": now})
     ensure_initial_policy_questions(paths, policies)
     append_research_event(paths, "research_initialized", {"goal": goal, "background_present": bool(background), "blockers": blockers, "constraints": constraints})
     status = research_readiness(paths)
@@ -231,13 +231,58 @@ def default_initial_policy_questions(paths: VibePaths, policies: dict[str, Any])
     autonomy = policies.get("autonomy") or read_yaml(paths.vibe / "policies" / "autonomy.yaml", {})
     resource_questions = read_yaml(paths.vibe / "resources" / "policy_questions.yaml", {}) or {}
     resource_by_id = {row.get("id"): row for row in resource_questions.get("questions", []) if isinstance(row, dict)}
+    project_brief = read_project_brief(paths)
     return [
+        {
+            "question_id": "q_init_project_goal",
+            "question": "What is the required project research goal?",
+            "why_needed": "the research objective is mandatory context for planning and stopping criteria",
+            "blocks": ["project_brief", "portfolio_planning", "bounded_autonomy"],
+            "current_goal": project_brief.get("goal", ""),
+            "requires_user_answer": True,
+        },
+        {
+            "question_id": "q_init_project_background",
+            "question": "What project background, constraints, datasets, evaluation context, and current baseline should guide initialization?",
+            "why_needed": "background and constraints are mandatory context before adapter, metrics, or resource choices can be trusted",
+            "blocks": ["project_brief", "adapter_mapping", "metrics_schema", "resource_policy"],
+            "current_background": project_brief.get("background", ""),
+            "requires_user_answer": True,
+        },
+        {
+            "question_id": "q_init_initial_ideas",
+            "question": "Do you have any initial research ideas to seed the idea pool? Answer 'none' if not.",
+            "why_needed": "initial ideas are optional, but Codex should explicitly ask instead of assuming the seed pool is empty",
+            "blocks": ["idea_pool_seed_confirmation"],
+            "answer_can_be": "none",
+            "requires_user_answer": True,
+        },
         {
             "question_id": "q_init_resource_mode",
             "question": "Should this project use GPU/Slurm execution, local CPU execution, or both?",
             "why_needed": "resource mode must be a user policy decision before execution planning",
             "blocks": ["resource_policy", "automatic_execution"],
             "default": resource_by_id.get("q_resource_mode", {}).get("default", "gpu_slurm_if_available"),
+        },
+        {
+            "question_id": "q_init_slurm_partitions",
+            "question": "Which Slurm partitions should be preferred and which should be fallback?",
+            "why_needed": "partition selection is a target-cluster policy decision; sinfo can provide candidates but cannot choose for the user",
+            "blocks": ["partition_selection", "fallback_requeue_policy"],
+            "detected_candidates": resource_by_id.get("q_slurm_partitions", {}).get("detected_candidates", []),
+            "configured_preferred": resource_by_id.get("q_slurm_partitions", {}).get("configured_preferred", []),
+            "configured_fallback": resource_by_id.get("q_slurm_partitions", {}).get("configured_fallback", []),
+            "requires_user_answer": True,
+        },
+        {
+            "question_id": "q_init_slurm_gres",
+            "question": "What exact GRES template should be used for each GPU partition?",
+            "why_needed": "GPU names in partition labels are examples only; Slurm submission must use confirmed target-cluster GRES",
+            "blocks": ["gpu_sbatch_rendering", "automatic_gpu_submission"],
+            "detected_suggestions": resource_by_id.get("q_slurm_gres", {}).get("detected_suggestions", {}),
+            "configured_gres_by_partition": resource_by_id.get("q_slurm_gres", {}).get("configured_gres_by_partition", {}),
+            "example_format": resource_by_id.get("q_slurm_gres", {}).get("example_format", "partition-name=gpu:gpu_type:{gpu}"),
+            "requires_user_answer": True,
         },
         {
             "question_id": "q_init_queue_wait_limit",
@@ -304,6 +349,14 @@ def default_initial_policy_questions(paths: VibePaths, policies: dict[str, Any])
             "why_needed": "promotion must block harmful regressions even when the primary metric improves",
             "blocks": ["stage_gate_policy", "promotion_policy"],
             "configured_protected_metrics": stage.get("protected_metrics", {}),
+        },
+        {
+            "question_id": "q_init_adapter_execution_surface",
+            "question": "Which project scripts, commands, or wrappers should form the first adapter/script execution surface?",
+            "why_needed": "adapter and script drafts are required before VibeResearch can run experiment iterations",
+            "blocks": ["adapter_script_bootstrap", "contract_tests", "real_experiment_readiness"],
+            "expected_answer": "name the first low-risk probe/evaluation/training command, or state what wrapper Codex should draft first",
+            "requires_user_answer": True,
         },
     ]
 

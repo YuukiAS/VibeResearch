@@ -51,9 +51,11 @@ def daemon_status(paths: VibePaths) -> dict[str, Any]:
     pane_current_command = tmux_output(["tmux", "display-message", "-p", "-t", session, "#{pane_current_command}"])
     pane_text = tmux_output(["tmux", "capture-pane", "-pt", session, "-S", "-20"])
     command_target_root = parse_command_target(pane_text)
+    sentinel_target_root = parse_daemon_sentinel(pane_text)
     pane_match = not pane_current_path or same_path(pane_current_path, target_root)
     recorded_match = not recorded_target_root or same_path(recorded_target_root, target_root)
     command_match = not command_target_root or same_path(command_target_root, target_root)
+    sentinel_match = not sentinel_target_root or same_path(sentinel_target_root, target_root)
     return {
         **base,
         "available": True,
@@ -61,7 +63,9 @@ def daemon_status(paths: VibePaths) -> dict[str, Any]:
         "pane_current_path": pane_current_path,
         "pane_current_command": pane_current_command,
         "command_target_root": command_target_root,
-        "target_match": pane_match and recorded_match and command_match,
+        "sentinel_target_root": sentinel_target_root,
+        "managed_loop": bool(sentinel_target_root and sentinel_match),
+        "target_match": pane_match and recorded_match and command_match and sentinel_match,
     }
 
 
@@ -94,11 +98,12 @@ def daemon_start(
     python = shlex.quote(sys.executable)
     framework_root = Path(__file__).resolve().parent.parent
     pythonpath = f"PYTHONPATH={shlex.quote(str(framework_root))}:$PYTHONPATH"
+    sentinel = f"echo VIBE_DAEMON_TARGET={target}"
     if mode == "monitor":
-        loop_command = f"{pythonpath} {python} -m vibe_research.cli monitor --target {target} --loop --interval {interval}" + (" --auto-next" if auto_next else "")
+        loop_command = f"{sentinel}; {pythonpath} {python} -m vibe_research.cli monitor --target {target} --loop --interval {interval}" + (" --auto-next" if auto_next else "")
     else:
         loop_command = (
-            "while true; do "
+            f"{sentinel}; while true; do "
             f"{pythonpath} {python} -m vibe_research.cli auto-cycle --target {target} --max-steps {max_steps}"
             + (" --offline" if offline else "")
             + (" --dry-submit" if dry_submit else " --real-submit")
@@ -139,6 +144,14 @@ def parse_command_target(text: str) -> str:
     for index, token in enumerate(tokens[:-1]):
         if token == "--target":
             return tokens[index + 1]
+    return ""
+
+
+def parse_daemon_sentinel(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if "VIBE_DAEMON_TARGET=" in stripped:
+            return stripped.split("VIBE_DAEMON_TARGET=", 1)[1].strip().strip("'\"")
     return ""
 
 

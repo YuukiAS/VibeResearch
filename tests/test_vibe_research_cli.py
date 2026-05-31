@@ -16,7 +16,7 @@ from vibe_research.automation import auto_cycle, auto_next
 from vibe_research.codex_adapter import run_codex
 from vibe_research.cli import app
 from vibe_research.config import detect_config, load_config
-from vibe_research.daemon import daemon_start
+from vibe_research.daemon import daemon_start, daemon_status
 from vibe_research.decisions import make_decision, write_decision
 from vibe_research.ideas import create_idea
 from vibe_research.io import read_json, read_jsonl, read_yaml, write_json, write_yaml
@@ -215,7 +215,12 @@ def test_init_always_creates_resource_onboarding(tmp_path: Path):
     assert (tmp_path / ".vibe" / "config.detected.yaml").exists()
     research_questions = {row["question_id"] for row in read_jsonl(tmp_path / ".vibe" / "research" / "questions.jsonl")}
     assert {
+        "q_init_project_goal",
+        "q_init_project_background",
+        "q_init_initial_ideas",
         "q_init_resource_mode",
+        "q_init_slurm_partitions",
+        "q_init_slurm_gres",
         "q_init_queue_wait_limit",
         "q_init_experiment_runtime_cap",
         "q_init_delivery_runtime_cap",
@@ -224,7 +229,12 @@ def test_init_always_creates_resource_onboarding(tmp_path: Path):
         "q_init_autonomy_level",
         "q_init_primary_metric",
         "q_init_protected_metrics",
+        "q_init_adapter_execution_surface",
     } <= research_questions
+    by_id = {row["question_id"]: row for row in read_jsonl(tmp_path / ".vibe" / "research" / "questions.jsonl")}
+    assert by_id["q_init_project_goal"]["requires_user_answer"] is True
+    assert by_id["q_init_initial_ideas"]["answer_can_be"] == "none"
+    assert by_id["q_init_slurm_gres"]["requires_user_answer"] is True
     answered = invoke("research", "answer", "q_init_budget_caps", "--answer", "daily 4 jobs, 8 gpu hours", "--target", str(tmp_path))
     assert answered.exit_code == 0
     assert any(row.get("question_id") == "q_init_budget_caps" and row.get("status") == "answered" for row in read_jsonl(tmp_path / ".vibe" / "research" / "questions.jsonl"))
@@ -236,7 +246,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.37" in show.output
+    assert "0.8.38" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -293,6 +303,25 @@ def test_default_portal_creation_and_rebuild(tmp_path: Path):
     assert invoke("portal", "build", "--target", str(tmp_path)).exit_code == 0
     assert (tmp_path / "VIBE_STATUS.md").exists()
     assert (tmp_path / "VIBE_STATUS.md").read_text().startswith(GENERATED_NOTICE)
+
+
+def test_v0838_portal_rebuild_tolerates_disappearing_root_mirror(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    original_unlink = Path.unlink
+    calls = []
+
+    def racing_unlink(self, missing_ok=False):
+        if self == tmp_path / "RUN.md":
+            calls.append(missing_ok)
+            original_unlink(self, missing_ok=True)
+            return original_unlink(self, missing_ok=missing_ok)
+        return original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", racing_unlink)
+    result = invoke("portal", "build", "--target", str(tmp_path), "--force")
+    assert result.exit_code == 0
+    assert True in calls
+    assert (tmp_path / "RUN.md").exists()
 
 
 def test_init_minimal_no_root_portal_creates_only_vibe_root(tmp_path: Path):
@@ -800,6 +829,41 @@ def test_v071_contract_test_and_activation_unlock_config_planner(tmp_path: Path)
     assert metadata["capability_id"] == "metrics_export"
     assert metadata["adapter_revision"]
     assert metadata["metrics_schema_version"] == "test-v1"
+
+
+def test_v0838_contract_test_prefers_dryrun_expected_output(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    manifest = load_adapter_manifest(VibePaths(tmp_path))
+    command = (
+        "python3 -c 'import json, pathlib; "
+        "p=pathlib.Path(\".vibe/contract_metrics/train.json\"); "
+        "p.parent.mkdir(parents=True, exist_ok=True); "
+        "p.write_text(json.dumps({\"primary\": 1.0})+\"\\n\")'"
+    )
+    manifest.capabilities = [
+        AdapterCapability(
+            id="train-contract",
+            version="test",
+            status="draft",
+            task_type="train_smoke",
+            supported_decisions=["launch_gpu_gate"],
+            dryrun={"command": command, "expected_output_path": ".vibe/contract_metrics/train.json"},
+            entrypoint={"type": "slurm", "command": "python train.py"},
+            outputs={"expected_output_path": ".vibe/real_metrics/train.json", "metrics_file_path": ".vibe/real_metrics/train.json"},
+            metrics_schema=MetricsSchema(required=["primary"], types={"primary": "number"}, primary_metric="primary", version="test"),
+            artifact_rules=ArtifactRules(expected_outputs=[".vibe/real_metrics/train.json"], trusted_path_patterns=[".vibe/real_metrics/*.json"], version="test"),
+            resources=ResourcePolicy(automatic_submission_allowed=False, user_confirmation_required=True),
+            contract_tests=["train-contract"],
+        )
+    ]
+    write_adapter_manifest(VibePaths(tmp_path), manifest)
+    result = invoke("adapter", "contract-test", "train-contract", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    contract = read_json(tmp_path / ".vibe" / "contract_tests" / "train-contract.json", {})
+    assert contract["status"] == "passed"
+    assert contract["validated_output_path"] == ".vibe/contract_metrics/train.json"
+    assert (tmp_path / ".vibe" / "contract_metrics" / "train.json").exists()
+    assert not (tmp_path / ".vibe" / "real_metrics" / "train.json").exists()
 
 
 def test_v071_direct_yaml_active_cannot_bypass_contract_test(tmp_path: Path):
@@ -1800,10 +1864,33 @@ def test_v0812_daemon_launches_command_through_explicit_shell(tmp_path: Path, mo
     assert launch_args[-2] == "-lc"
     assert "auto-cycle" in launch_args[-1]
     assert "PYTHONPATH=" in launch_args[-1]
+    assert "VIBE_DAEMON_TARGET=" in launch_args[-1]
     assert str(Path(__file__).resolve().parents[1]) in launch_args[-1]
     daemon = read_json(tmp_path / ".vibe" / "state" / "daemon.json", {})
     assert daemon["shell"] == launch_args[-3]
     assert daemon["framework_root"] == str(Path(__file__).resolve().parents[1])
+
+
+def test_v0838_daemon_bash_loop_with_matching_sentinel_is_managed(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["tmux", "has-session"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:3] == ["tmux", "display-message", "-p"] and args[-1] == "#{pane_current_path}":
+            return subprocess.CompletedProcess(args, 0, stdout=f"{tmp_path}\n", stderr="")
+        if args[:3] == ["tmux", "display-message", "-p"] and args[-1] == "#{pane_current_command}":
+            return subprocess.CompletedProcess(args, 0, stdout="bash\n", stderr="")
+        if args[:2] == ["tmux", "capture-pane"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"VIBE_DAEMON_TARGET={tmp_path}\nsleep 300\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.daemon.shutil.which", lambda name: "/usr/bin/tmux" if name == "tmux" else None)
+    monkeypatch.setattr("vibe_research.daemon.subprocess.run", fake_run)
+    status = daemon_status(VibePaths(tmp_path))
+    assert status["running"] is True
+    assert status["managed_loop"] is True
+    assert status["target_match"] is True
 
 
 def test_v0813_daemon_rejects_existing_session_bound_to_other_target(tmp_path: Path, monkeypatch):

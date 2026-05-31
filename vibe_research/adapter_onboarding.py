@@ -610,7 +610,12 @@ def run_contract_test(paths: VibePaths, capability_id: str) -> dict[str, Any]:
         errors.append("entrypoint.command is missing")
     if not (cap.metrics_schema.required or cap.metrics_schema.types):
         errors.append("metrics schema is missing")
-    output_path = cap.outputs.get("expected_output_path") or (cap.artifact_rules.expected_outputs[0] if cap.artifact_rules.expected_outputs else "")
+    output_path = (
+        cap.dryrun.get("expected_output_path")
+        or cap.dryrun.get("metrics_file_path")
+        or cap.outputs.get("expected_output_path")
+        or (cap.artifact_rules.expected_outputs[0] if cap.artifact_rules.expected_outputs else "")
+    )
     if not output_path:
         errors.append("expected output is missing")
     if not errors:
@@ -637,6 +642,7 @@ def run_contract_test(paths: VibePaths, capability_id: str) -> dict[str, Any]:
         "command_template_hash": hash_string(cap.entrypoint.get("command", "")),
         "metrics_schema_hash": hash_dict(cap.metrics_schema.model_dump()),
         "artifact_rule_hash": hash_dict(cap.artifact_rules.model_dump()),
+        "validated_output_path": output_path,
     }
     write_contract_result(paths, capability_id, result)
     append_jsonl(paths.vibe / "adapter_history.jsonl", {"event": "adapter_contract_test", **result})
