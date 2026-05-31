@@ -275,6 +275,7 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
     for job in active.get("active", []):
         backend = get_backend(paths, job.get("backend") or backend_name)
         poll = backend.poll(job)
+        poll.details = carry_forward_wait_evidence(paths, job, poll.status, poll.details)
         if poll.finished:
             job["finished_at"] = utc_now()
             job["status"] = poll.status
@@ -337,6 +338,8 @@ def should_requeue_to_fallback(config: dict[str, Any], job: dict[str, Any], deta
     slurm = config.get("execution", {}).get("slurm", {}) if isinstance(config.get("execution"), dict) else {}
     if not slurm.get("auto_requeue_to_better_fallback", False):
         return False
+    if details.get("carried_forward_wait_verdict") and not slurm.get("allow_requeue_from_carried_forward_wait_verdict", False):
+        return False
     if job.get("backend") != "slurm":
         return False
     verdict = details.get("wait_verdict", {}) if isinstance(details.get("wait_verdict"), dict) else {}
@@ -358,6 +361,45 @@ def should_requeue_to_fallback(config: dict[str, Any], job: dict[str, Any], deta
         return float(estimate) <= max_wait_hours
     except (TypeError, ValueError):
         return False
+
+
+def carry_forward_wait_evidence(paths: VibePaths, job: dict[str, Any], status: str, details: dict[str, Any]) -> dict[str, Any]:
+    if status != "unknown" or details.get("wait_verdict"):
+        return details
+    if not transient_scheduler_unknown(details):
+        return details
+    previous = previous_wait_evidence(paths, job)
+    if not previous:
+        return details
+    merged = dict(details)
+    for key in ["wait_verdict", "wait_policy"]:
+        if previous.get(key):
+            merged[key] = previous[key]
+    if "wait_verdict" in merged:
+        merged["carried_forward_wait_verdict"] = True
+        merged["carried_forward_wait_source"] = previous.get("_source", "previous_poll")
+    return merged
+
+
+def transient_scheduler_unknown(details: dict[str, Any]) -> bool:
+    reason = str(details.get("reason", ""))
+    return bool(
+        details.get("poll_timeout")
+        or details.get("squeue_start_timeout")
+        or reason in {"slurm_query_unavailable", "slurm_accounting_record_unavailable"}
+    )
+
+
+def previous_wait_evidence(paths: VibePaths, job: dict[str, Any]) -> dict[str, Any]:
+    prior = job.get("poll_details", {}) if isinstance(job.get("poll_details"), dict) else {}
+    if prior.get("wait_verdict"):
+        return {**prior, "_source": "active_jobs_previous_poll_details"}
+    run_id = str(job.get("run_id", ""))
+    rows = read_jsonl(paths.runs / run_id / "monitor.jsonl") if run_id else []
+    for row in reversed(rows):
+        if row.get("wait_verdict"):
+            return {**row, "_source": "run_monitor_jsonl"}
+    return {}
 
 
 def force_run_partition(paths: VibePaths, run_id: str, run: dict[str, Any], partition: str) -> None:

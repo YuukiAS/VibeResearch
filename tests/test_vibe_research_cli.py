@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.55" in show.output
+    assert "0.8.56" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1846,6 +1846,65 @@ def test_v0853_sustained_audit_flags_outside_wait_fallback(tmp_path: Path):
     audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
     assert "fallback_better_but_outside_wait_policy" in audit["issues"]
     assert audit["next_action"] == "review Slurm fallback wait policy or keep monitoring with explicit queue-policy awareness"
+
+
+def test_v0856_monitor_carries_forward_wait_verdict_after_transient_unknown(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    run_id = "r001_wait"
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {run_id: {"run_id": run_id, "cycle_id": "c001", "status": "submitted"}}
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    run_dir = tmp_path / ".vibe" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    prior = {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "htzhulab", "recommended_estimated_start_plus_run_hours": 20}
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {"active": [{"run_id": run_id, "cycle_id": "c001", "backend": "slurm", "job_id": "111", "poll_details": {"wait_verdict": prior}}]},
+    )
+
+    class FakeBackend:
+        name = "slurm"
+
+        def poll(self, launch):
+            return PollResult("unknown", False, {"poll_timeout": True, "command": "squeue"})
+
+        def cancel(self, launch):
+            raise AssertionError("carried-forward wait evidence must not auto-cancel")
+
+    monkeypatch.setattr("vibe_research.scheduler.get_backend", lambda paths, backend_name=None: FakeBackend())
+    assert invoke("monitor", "--target", str(tmp_path)).exit_code == 0
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    details = active["active"][0]["poll_details"]
+    assert details["wait_verdict"] == prior
+    assert details["carried_forward_wait_verdict"] is True
+    assert details["carried_forward_wait_source"] == "active_jobs_previous_poll_details"
+
+
+def test_v0856_monitor_carries_forward_wait_verdict_from_monitor_jsonl(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    run_id = "r001_wait"
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {run_id: {"run_id": run_id, "cycle_id": "c001", "status": "submitted"}}
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    run_dir = tmp_path / ".vibe" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    prior = {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "htzhulab"}
+    append_jsonl(run_dir / "monitor.jsonl", {"checked_at": "test", "wait_verdict": prior, "wait_policy": {"max_start_plus_run_hours": 12}})
+    write_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {"active": [{"run_id": run_id, "cycle_id": "c001", "backend": "slurm", "job_id": "111"}]})
+
+    class FakeBackend:
+        name = "slurm"
+
+        def poll(self, launch):
+            return PollResult("unknown", False, {"reason": "slurm_query_unavailable"})
+
+    monkeypatch.setattr("vibe_research.scheduler.get_backend", lambda paths, backend_name=None: FakeBackend())
+    assert invoke("monitor", "--target", str(tmp_path)).exit_code == 0
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    details = active["active"][0]["poll_details"]
+    assert details["wait_verdict"] == prior
+    assert details["wait_policy"]["max_start_plus_run_hours"] == 12
+    assert details["carried_forward_wait_source"] == "run_monitor_jsonl"
 
 
 def test_v0844_next_clears_stale_noncounting_run_block_after_cycle_revision(tmp_path: Path):

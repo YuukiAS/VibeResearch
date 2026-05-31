@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.56 - 2026-05-31
+
+- Preserve the last valid Slurm wait verdict and wait policy across transient
+  unknown monitor polls caused by timeouts, socket errors, or unavailable
+  accounting records.
+- Recover carried-forward wait evidence from both active job state and per-run
+  `monitor.jsonl`, mark it with provenance, and prevent it from triggering
+  automatic requeue unless explicitly enabled.
+
 ## 0.8.55 - 2026-05-31
 
 - Let `vibe next` surface finished, dry-submitted, collected, or reflected
