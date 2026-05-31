@@ -31,7 +31,11 @@ def daemon_status(paths: VibePaths) -> dict[str, Any]:
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
     completed = read_jsonl(paths.scheduler / "completed_jobs.jsonl")
     state = read_json(paths.state / "state.json", {})
-    next_collect = [run_id for run_id, run in state.get("runs", {}).items() if run.get("status") in {"finished", "submitted_dry"}]
+    next_collect = [
+        run_id
+        for run_id, run in state.get("runs", {}).items()
+        if run.get("status") in {"finished", "submitted_dry"} and not non_counting_run(run)
+    ]
     base = {
         "session": session,
         "target_root": target_root,
@@ -160,6 +164,10 @@ def same_path(left: str, right: str) -> bool:
         return Path(left).resolve() == Path(right).resolve()
     except Exception:
         return left == right
+
+
+def non_counting_run(run: dict[str, Any]) -> bool:
+    return bool(run.get("non_counting_classification") or run.get("classification"))
 
 
 def daemon_stop(paths: VibePaths) -> dict[str, Any]:

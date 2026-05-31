@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.12" in show.output
+    assert "0.10.13" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -490,6 +490,23 @@ def test_v01011_compatible_preferred_partition_remains_ahead_of_available_fallba
     partition, reason = choose_partition(manifest, config)
     assert partition == "lab-gpu"
     assert reason.startswith("preferred_partition_selected: fallback_requires_wait_policy_evidence")
+
+
+def test_v01013_scheduler_status_ignores_noncounting_finished_collect_noise(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {
+        "r001_noncounting": {
+            "run_id": "r001_noncounting",
+            "status": "finished",
+            "non_counting_classification": "superseded",
+        },
+        "r002_collect": {"run_id": "r002_collect", "status": "finished"},
+    }
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+
+    status = daemon_status(VibePaths(tmp_path))
+    assert status["next_collection_runs"] == ["r002_collect"]
 
 
 def test_v080_portfolio_blocks_budget_and_duplicate_but_allows_changed_repeat(tmp_path: Path):

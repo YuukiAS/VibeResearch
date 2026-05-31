@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.10.13 - 2026-05-31
+
+- Exclude non-counting classified runs from daemon status next-collection
+  candidates so old explained failures do not appear actionable.
+
 ## 0.10.12 - 2026-05-31
 
 - Add regression coverage proving repaired project briefs synchronize stale
