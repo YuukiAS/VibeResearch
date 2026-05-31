@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import shlex
 import subprocess
@@ -424,6 +425,11 @@ def adapter_doctor(paths: VibePaths) -> dict[str, Any]:
     lines.extend(f"- {item}" for item in readiness["missing_scripts"]) if readiness["missing_scripts"] else lines.append("- none")
     lines.extend(["", "## Missing Metrics Schemas", ""])
     lines.extend(f"- {item}" for item in readiness["missing_metrics_schemas"]) if readiness["missing_metrics_schemas"] else lines.append("- none")
+    lines.extend(["", "## Missing Downstream Adapter Dependencies", ""])
+    if readiness.get("dependency_issues"):
+        lines.extend(f"- `{item['capability_id']}` {item['message']}" for item in readiness["dependency_issues"])
+    else:
+        lines.append("- none")
     lines.extend(["", "## Missing User Answers", ""])
     lines.extend(f"- `{item['id']}` {item['question']}" for item in readiness["missing_user_answers"]) if readiness["missing_user_answers"] else lines.append("- none")
     lines.extend(["", "## Latest Lint", "", f"Status: `{readiness.get('last_lint_status', 'not_run')}`"])
@@ -462,6 +468,7 @@ def adapter_readiness(paths: VibePaths) -> dict[str, Any]:
     missing_metrics = []
     draft_missing_metrics = []
     contract_failures = []
+    dependency_issues = []
     for cap in manifest.capabilities:
         command = cap.entrypoint.get("command", "")
         if command and command.split():
@@ -473,6 +480,7 @@ def adapter_readiness(paths: VibePaths) -> dict[str, Any]:
         elif cap.status == "draft" and not (cap.metrics_schema.required or cap.metrics_schema.types):
             draft_missing_metrics.append(cap.id)
         if cap.status == "active":
+            dependency_issues.extend(capability_dependency_issues(paths, cap))
             contract = contract_by_cap.get(cap.id, {})
             if contract.get("status") != "passed" or cap.activation.get("contract_status") != "passed":
                 contract_failures.append(cap.id)
@@ -485,6 +493,7 @@ def adapter_readiness(paths: VibePaths) -> dict[str, Any]:
         and not missing_scripts
         and not missing_metrics
         and not contract_failures
+        and not dependency_issues
     )
     active_tasks = set(active_by_task)
     ready_for_instrumentation = readiness_base and bool(active_tasks & INSTRUMENTATION_TASKS)
@@ -499,6 +508,7 @@ def adapter_readiness(paths: VibePaths) -> dict[str, Any]:
     blockers.extend(f"answer {q['id']}" for q in missing_answers[:5])
     blockers.extend(f"fix script {item}" for item in missing_scripts[:5])
     blockers.extend(f"define metrics schema for active capability {item}" for item in missing_metrics[:5])
+    blockers.extend(f"resolve downstream adapter dependency for {item['capability_id']}: {item['message']}" for item in dependency_issues[:5])
     if not active:
         blockers.extend(f"define metrics schema for draft capability {item}" for item in draft_missing_metrics[:3])
     blockers.extend(f"rerun contract test for {item}" for item in contract_failures[:5])
@@ -528,6 +538,7 @@ def adapter_readiness(paths: VibePaths) -> dict[str, Any]:
         "lint": lint,
         "contract_tests": contract_tests,
         "contract_failures": contract_failures,
+        "dependency_issues": dependency_issues,
         "next_blockers": blockers,
         "updated_at": utc_now(),
     }
@@ -610,6 +621,8 @@ def run_contract_test(paths: VibePaths, capability_id: str) -> dict[str, Any]:
         errors.append("entrypoint.command is missing")
     if not (cap.metrics_schema.required or cap.metrics_schema.types):
         errors.append("metrics schema is missing")
+    dependency_errors = capability_dependency_issues(paths, cap)
+    errors.extend(f"downstream adapter dependency missing: {item['message']}" for item in dependency_errors)
     output_path = (
         cap.dryrun.get("expected_output_path")
         or cap.dryrun.get("metrics_file_path")
@@ -687,6 +700,9 @@ def activate_capability(paths: VibePaths, capability_id: str, *, user_confirmati
     blockers = [q.id for q in manifest.open_questions if q.severity == "blocker" and not q.confirmed and (not q.blocks_capability or q.blocks_capability == capability_id)]
     if blockers:
         raise RuntimeError(f"Capability {capability_id} has unanswered blocker questions: {', '.join(blockers)}")
+    dependency_errors = capability_dependency_issues(paths, cap)
+    if dependency_errors:
+        raise RuntimeError("Capability {capability_id} has missing downstream adapter dependencies: ".format(capability_id=capability_id) + "; ".join(item["message"] for item in dependency_errors[:5]))
     if cap.task_type in {"train_smoke", "train_gate", "long_run_submit"} and not has_active_task(manifest, {"evaluation_smoke", "metrics_export"}):
         raise RuntimeError("Training capability requires active evaluation or metrics export capability")
     if cap.task_type == "baseline_compare" and not has_active_task(manifest, {"baseline_inventory"}):
@@ -714,6 +730,101 @@ def find_capability(manifest: AdapterManifest, capability_id: str) -> AdapterCap
         if cap.id == capability_id:
             return cap
     return None
+
+
+def capability_dependency_issues(paths: VibePaths, capability: AdapterCapability, *, include_optional: bool = False) -> list[dict[str, Any]]:
+    """Check generic downstream data/model dependency declarations for a capability."""
+
+    inputs = capability.inputs if isinstance(capability.inputs, dict) else {}
+    if dependency_override_enabled(inputs):
+        return []
+    issues: list[dict[str, Any]] = []
+    for key in ["required_paths", "required_path", "dependency_paths", "required_metrics_caches", "required_dataset_manifests"]:
+        for value in values_from_inputs(inputs, key):
+            check_required_path(paths, capability, issues, "path", value, must_be="")
+    for key in ["required_files", "required_file"]:
+        for value in values_from_inputs(inputs, key):
+            check_required_path(paths, capability, issues, "file", value, must_be="file")
+    for key in ["required_dirs", "required_directories", "required_dir"]:
+        for value in values_from_inputs(inputs, key):
+            check_required_path(paths, capability, issues, "directory", value, must_be="dir")
+    for key in ["required_repos", "required_external_repos", "required_local_repos"]:
+        for value in values_from_inputs(inputs, key):
+            check_required_repo(paths, capability, issues, value)
+    for key in ["required_modules", "required_python_modules", "python_modules"]:
+        for value in values_from_inputs(inputs, key):
+            module = dependency_value(value, "module") or dependency_value(value, "name")
+            if module and importlib.util.find_spec(str(module)) is None:
+                issues.append(dependency_issue(capability, "python_module", str(module), f"python module `{module}` is not importable"))
+    if include_optional:
+        for key in ["optional_paths", "optional_files", "optional_dirs"]:
+            for value in values_from_inputs(inputs, key):
+                check_required_path(paths, capability, issues, "optional_path", value, must_be="")
+    return issues
+
+
+def dependency_override_enabled(inputs: dict[str, Any]) -> bool:
+    override = inputs.get("dependency_override") or inputs.get("dependency_override_confirmed") or inputs.get("allow_missing_dependencies")
+    if isinstance(override, bool):
+        return override
+    if isinstance(override, dict):
+        return bool(override.get("confirmed") or override.get("allowed"))
+    return str(override).lower() in {"true", "yes", "confirmed", "override"}
+
+
+def values_from_inputs(inputs: dict[str, Any], key: str) -> list[Any]:
+    value = inputs.get(key)
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def dependency_value(value: Any, preferred_key: str = "path") -> str:
+    if isinstance(value, dict):
+        raw = value.get(preferred_key) or value.get("path") or value.get("module") or value.get("name") or value.get("repo")
+        return str(raw).strip() if raw is not None else ""
+    return str(value).strip()
+
+
+def resolve_dependency_path(paths: VibePaths, value: Any) -> tuple[str, Path]:
+    raw = dependency_value(value, "path")
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = paths.root / path
+    return raw, path
+
+
+def check_required_path(paths: VibePaths, capability: AdapterCapability, issues: list[dict[str, Any]], kind: str, value: Any, *, must_be: str) -> None:
+    raw, path = resolve_dependency_path(paths, value)
+    if not raw:
+        return
+    ok = path.exists()
+    if must_be == "file":
+        ok = path.is_file()
+    elif must_be == "dir":
+        ok = path.is_dir()
+    if not ok:
+        issues.append(dependency_issue(capability, kind, raw, f"{kind} `{raw}` is missing under the downstream target repo"))
+
+
+def check_required_repo(paths: VibePaths, capability: AdapterCapability, issues: list[dict[str, Any]], value: Any) -> None:
+    raw, path = resolve_dependency_path(paths, value)
+    if not raw:
+        return
+    if not path.is_dir() or not (path / ".git").exists():
+        issues.append(dependency_issue(capability, "local_repo", raw, f"local repo `{raw}` is missing or has no .git directory under the downstream target repo"))
+
+
+def dependency_issue(capability: AdapterCapability, kind: str, value: str, message: str) -> dict[str, Any]:
+    return {
+        "capability_id": capability.id,
+        "kind": kind,
+        "value": value,
+        "message": message,
+        "scope": "downstream_adapter_dependency",
+    }
 
 
 def has_active_task(manifest: AdapterManifest, tasks: set[str]) -> bool:

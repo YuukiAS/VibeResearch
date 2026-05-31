@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import is_placeholder_command
+from .adapter_onboarding import capability_dependency_issues, find_capability
+from .adapter_schema import load_adapter_manifest
 from .backends import get_backend
 from .config import load_config
 from .dashboard import sync_dashboard
@@ -207,6 +209,12 @@ def submit_queue(paths: VibePaths, *, dry: bool = False, backend_name: str | Non
             item["reason"] = "run_after dependency is not collected/reflected/revised/merged"
             remaining.append(item)
             continue
+        dependency_errors = run_downstream_dependency_issues(paths, run)
+        if backend.name == "slurm" and dependency_errors and not run_dependency_override_enabled(run):
+            item["status"] = "waiting_on_downstream_dependency"
+            item["reason"] = "; ".join(error["message"] for error in dependency_errors[:3])
+            remaining.append(item)
+            continue
         candidate_gpu = int((run.get("resources") or {}).get("gpu", 0) or 0)
         if len(active["active"]) >= max_parallel:
             item["status"] = "waiting_on_budget"
@@ -364,6 +372,32 @@ def cancel_run(paths: VibePaths, run_id: str) -> dict[str, Any]:
 def dependencies_blocked(state: dict[str, Any], run: dict[str, Any]) -> bool:
     for dep in run.get("dependencies", {}).get("run_after", []):
         if state.get("runs", {}).get(dep, {}).get("status") not in {"collected", "reflected", "revised", "merged"}:
+            return True
+    return False
+
+
+def run_downstream_dependency_issues(paths: VibePaths, run: dict[str, Any]) -> list[dict[str, Any]]:
+    metadata = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}
+    capability_id = metadata.get("capability_id", "")
+    if not capability_id:
+        return []
+    manifest = load_adapter_manifest(paths)
+    capability = find_capability(manifest, capability_id)
+    if not capability:
+        return []
+    return capability_dependency_issues(paths, capability)
+
+
+def run_dependency_override_enabled(run: dict[str, Any]) -> bool:
+    metadata = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}
+    resources = run.get("resources", {}) if isinstance(run.get("resources"), dict) else {}
+    for source in [metadata, resources, run]:
+        override = source.get("dependency_override") or source.get("dependency_override_confirmed") or source.get("allow_missing_dependencies")
+        if isinstance(override, bool) and override:
+            return True
+        if isinstance(override, dict) and (override.get("confirmed") or override.get("allowed")):
+            return True
+        if str(override).lower() in {"true", "yes", "confirmed", "override"}:
             return True
     return False
 

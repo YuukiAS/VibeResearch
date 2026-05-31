@@ -246,7 +246,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.39" in show.output
+    assert "0.8.40" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -721,6 +721,47 @@ def test_v083_instrumentation_readiness_does_not_unlock_real_experiments(tmp_pat
     planned = invoke("plan-cycle", "--offline", "--target", str(tmp_path))
     assert planned.exit_code == 1
     assert "real-experiment adapter readiness is incomplete" in planned.output
+
+
+def test_v0840_adapter_required_paths_are_downstream_dependency_readiness(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    paths = VibePaths(tmp_path)
+    manifest = load_adapter_manifest(paths)
+    manifest.capabilities[0].inputs = {"required_paths": ["data/manifest.json"]}
+    write_adapter_manifest(paths, manifest)
+
+    result = invoke("adapter", "doctor", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    readiness = read_json(tmp_path / ".vibe" / "adapter_readiness.json", {})
+    assert readiness["ready_for_real_experiments"] is False
+    assert readiness["dependency_issues"][0]["scope"] == "downstream_adapter_dependency"
+    assert "downstream adapter dependency" in (tmp_path / ".vibe" / "adapter_doctor.md").read_text()
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "manifest.json").write_text("{}\n")
+    result = invoke("adapter", "doctor", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    readiness = read_json(tmp_path / ".vibe" / "adapter_readiness.json", {})
+    assert readiness["dependency_issues"] == []
+    assert readiness["ready_for_real_experiments"] is True
+
+
+def test_v0840_contract_test_fails_missing_downstream_dependencies(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    paths = VibePaths(tmp_path)
+    manifest = load_adapter_manifest(paths)
+    cap = manifest.capabilities[0]
+    cap.status = "draft"
+    cap.inputs = {"required_files": ["data/splits_final.json"]}
+    write_adapter_manifest(paths, manifest)
+
+    result = invoke("adapter", "contract-test", "train-smoke", "--target", str(tmp_path))
+    assert result.exit_code == 1
+    contract = read_json(tmp_path / ".vibe" / "contract_tests" / "train-smoke.json", {})
+    assert contract["status"] == "failed"
+    assert any("downstream adapter dependency missing" in error for error in contract["errors"])
 
 
 def test_v083_real_experiment_progress_counts_only_backend_submitted_interpretable_runs(tmp_path: Path):
@@ -2224,6 +2265,46 @@ def test_v0818_submit_queue_uses_run_entrypoint_backend_when_not_overridden(tmp_
     assert launch["backend"] == "slurm"
     assert state["runs"][run_id]["backend"] == "slurm"
     assert "#SBATCH --qos=gpu_access" in Path(launch["sbatch_path"]).read_text()
+
+
+def test_v0840_slurm_submit_blocks_missing_downstream_dependencies_until_override(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    paths = VibePaths(tmp_path)
+    manifest = load_adapter_manifest(paths)
+    manifest.capabilities[0].inputs = {"required_dirs": ["data/nnunet_raw"]}
+    write_adapter_manifest(paths, manifest)
+    run = {
+        "run_id": "r001_dep",
+        "cycle_id": "c001",
+        "direction_id": "train-smoke",
+        "branch": "",
+        "hypothesis": "dependency gated run",
+        "status": "queued",
+        "entrypoint": {"type": "slurm", "command": "python3 -c 'print(1)'"},
+        "dryrun": {"command": "python3 -c 'print(1)'"},
+        "resources": {"gpu": 1, "cpus": 1, "mem_gb": 1, "time": "00:10:00"},
+        "outputs": {"expected_output_path": ".vibe/train_metrics.json"},
+        "evaluation": {"metrics_file_path": ".vibe/train_metrics.json", "metrics_schema": {"primary": "number"}},
+        "adapter_metadata": {"capability_id": "train-smoke", "task_type": "train_smoke"},
+    }
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["cycles"] = {"c001": {"status": "reviewed"}}
+    state["runs"] = {"r001_dep": run}
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    write_json(tmp_path / ".vibe" / "scheduler" / "queue.json", {"queued": [{"run_id": "r001_dep", "priority": 1, "status": "queued"}]})
+    result = invoke("submit-queue", "--target", str(tmp_path), "--backend", "slurm", "--dry")
+    assert result.exit_code == 0
+    queue = read_json(tmp_path / ".vibe" / "scheduler" / "queue.json", {})
+    assert queue["queued"][0]["status"] == "waiting_on_downstream_dependency"
+
+    state["runs"]["r001_dep"]["adapter_metadata"]["dependency_override_confirmed"] = True
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    write_json(tmp_path / ".vibe" / "scheduler" / "queue.json", {"queued": [{"run_id": "r001_dep", "priority": 1, "status": "queued"}]})
+    result = invoke("submit-queue", "--target", str(tmp_path), "--backend", "slurm", "--dry")
+    assert result.exit_code == 0
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    assert active["active"][0]["run_id"] == "r001_dep"
 
 
 def test_v0821_active_jobs_only_monitor_when_prequeue_disabled(tmp_path: Path):

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.8.40 - 2026-05-31
+
+- Add generic downstream adapter dependency readiness checks for declared
+  required files, directories, paths, local repositories, Python modules,
+  dataset manifests, and metrics caches.
+- Surface missing dependency issues in adapter readiness and contract-test
+  results using downstream-adapter wording, without introducing any
+  project-specific model integration.
+- Block Slurm queue submission when the selected adapter capability has missing
+  declared downstream dependencies unless the run or capability explicitly
+  records a dependency override.
+
 ## 0.8.39 - 2026-05-31
 
 - Add sustained multi-route round support: default portfolio candidates now
