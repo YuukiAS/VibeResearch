@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.32 - 2026-05-30
+
+- Normalize null adapter capability mapping/list fields during partial manifest
+  recovery so blank YAML fields such as `entrypoint:` or `trust_checks:` cannot
+  crash adapter readiness, dashboard, or status commands.
+
 ## 0.8.31 - 2026-05-30
 
 - Render Slurm `--gres` with partition-specific GPU names for known A100 and

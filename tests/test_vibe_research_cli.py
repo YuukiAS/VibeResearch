@@ -202,7 +202,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.31" in show.output
+    assert "0.8.32" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -459,6 +459,34 @@ def test_v082_discovery_prunes_heavy_dirs_and_reports_limits(tmp_path: Path):
     context = read_json(out, {})["readiness"]["context"]
     assert "scripts/eval.py" in context["candidate_scripts"]
     assert all("data/" not in path and "results/" not in path for path in context["candidate_scripts"])
+
+
+def test_v0832_blank_yaml_adapter_fields_do_not_crash_status(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    (tmp_path / ".vibe" / "adapter.yaml").write_text(
+        "adapter_version: test\n"
+        "project_id: blank\n"
+        "project_name: blank\n"
+        "capabilities:\n"
+        "  - id: blank-cap\n"
+        "    status: draft\n"
+        "    task_type: metrics_export\n"
+        "    entrypoint:\n"
+        "    inputs:\n"
+        "    outputs:\n"
+        "    activation:\n"
+        "    trust_checks:\n"
+        "open_questions: []\n"
+    )
+    manifest = load_adapter_manifest(VibePaths(tmp_path))
+    cap = manifest.capabilities[0]
+    assert cap.entrypoint == {}
+    assert cap.inputs == {}
+    assert cap.outputs == {}
+    assert cap.activation == {}
+    assert cap.trust_checks == []
+    assert invoke("status", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("adapter", "doctor", "--target", str(tmp_path)).exit_code == 0
 
 
 def test_v082_resume_clears_stale_question_block_after_answers(tmp_path: Path):

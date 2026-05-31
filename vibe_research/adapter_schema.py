@@ -190,7 +190,7 @@ def partial_capability(data: dict[str, Any]) -> AdapterCapability:
         return AdapterCapability.model_validate(data)
     except ValidationError:
         base = AdapterCapability(id=cap_id).model_dump()
-        merged = {**base, **data}
+        merged = {**base, **normalize_null_adapter_fields(data)}
         if isinstance(merged.get("metrics_schema"), dict):
             merged["metrics_schema"] = partial_model(MetricsSchema, merged["metrics_schema"])
         if isinstance(merged.get("artifact_rules"), dict):
@@ -198,6 +198,27 @@ def partial_capability(data: dict[str, Any]) -> AdapterCapability:
         if isinstance(merged.get("resources"), dict):
             merged["resources"] = partial_model(ResourcePolicy, merged["resources"])
         return AdapterCapability.model_construct(**merged)
+
+
+def normalize_null_adapter_fields(data: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+    for key in [
+        "dryrun",
+        "entrypoint",
+        "inputs",
+        "outputs",
+        "metrics_schema",
+        "artifact_rules",
+        "resources",
+        "provenance",
+        "activation",
+    ]:
+        if normalized.get(key) is None:
+            normalized[key] = {}
+    for key in ["supported_decisions", "trust_checks", "contract_tests", "failure_modes", "block_conditions"]:
+        if normalized.get(key) is None or normalized.get(key) == {}:
+            normalized[key] = []
+    return normalized
 
 
 def partial_question(data: dict[str, Any]) -> AdapterQuestion:
