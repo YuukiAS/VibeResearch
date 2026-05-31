@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.8.46 - 2026-05-31
+
+- Filter scheduler queue rows in `vibe next` through current run state so
+  abandoned, missing, or otherwise non-queued runs no longer trigger
+  `vibe submit-queue`.
+- Make `submit_queue()` drop stale queue rows whose run is missing or no
+  longer in `queued` state before attempting backend selection or submission.
+
 ## 0.8.45 - 2026-05-31
 
 - Add a multi-route repeat guard to deterministic cycle synthesis: if the

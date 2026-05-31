@@ -184,6 +184,8 @@ def submit_queue(paths: VibePaths, *, dry: bool = False, backend_name: str | Non
     for item in sorted(queue.get("queued", []), key=lambda row: row.get("priority", 100)):
         run_id = item["run_id"]
         run = state.get("runs", {}).get(run_id, {})
+        if not run or run.get("status") != "queued":
+            continue
         run_backend_name = backend_name or (run.get("entrypoint", {}) if isinstance(run.get("entrypoint"), dict) else {}).get("type")
         backend = get_backend(paths, run_backend_name)
         cycle = state.get("cycles", {}).get(run.get("cycle_id", ""), {})

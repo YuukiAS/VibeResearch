@@ -23,7 +23,7 @@ RECOVERABLE_RESOURCE_BLOCKS = {
 def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     state = read_json(paths.state / "state.json", {})
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
-    queue = read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued", [])
+    queue = actionable_queue_rows(state, read_json(paths.scheduler / "queue.json", {"queued": []}).get("queued", []))
     readiness = adapter_readiness(paths)
     if state.get("project_brief_missing"):
         return "add project goal/background with vibe init --goal ... --background ...", "project_brief_missing"
@@ -130,6 +130,18 @@ def blocking_real_experiment_repairs(progress: dict) -> list[dict]:
         for row in progress.get("non_counting_real_experiment_runs", [])
         if row.get("requires_repair") and row.get("status") in blocking_statuses
     ]
+
+
+def actionable_queue_rows(state: dict, queue: list[dict]) -> list[dict]:
+    runs = state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}
+    actionable = []
+    for item in queue:
+        run = runs.get(item.get("run_id", ""))
+        if not isinstance(run, dict):
+            continue
+        if run.get("status") == "queued" and item.get("status", "queued") == "queued":
+            actionable.append(item)
+    return actionable
 
 
 def clear_stale_terminal_decision_block(paths: VibePaths, state: dict) -> bool:

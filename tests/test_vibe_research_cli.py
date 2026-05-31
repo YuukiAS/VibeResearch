@@ -246,7 +246,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.45" in show.output
+    assert "0.8.46" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2510,6 +2510,24 @@ def test_v0843_collect_ignores_stale_metrics_for_dry_submitted_launch(tmp_path: 
     assert metrics["primary_metric"] == 0.0
     assert metrics["provenance"]["dry_launch_metrics_ignored"] is True
     assert metrics["provenance"]["ignored_metrics_file_path"] == ".vibe/real_metrics/stale.json"
+
+
+def test_v0846_next_and_submit_queue_ignore_abandoned_stale_queue_item(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {"r001_abandoned": {"run_id": "r001_abandoned", "cycle_id": "c001", "status": "abandoned"}}
+    state["next_action"] = "vibe submit-queue"
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    write_json(tmp_path / ".vibe" / "scheduler" / "queue.json", {"queued": [{"run_id": "r001_abandoned", "priority": 1, "status": "queued"}]})
+
+    next_result = invoke("next", "--target", str(tmp_path))
+    assert next_result.exit_code == 0
+    assert "vibe submit-queue" not in next_result.output
+    submit_result = invoke("submit-queue", "--target", str(tmp_path), "--dry")
+    assert submit_result.exit_code == 0
+    queue = read_json(tmp_path / ".vibe" / "scheduler" / "queue.json", {})
+    assert queue["queued"] == []
 
 
 def test_v0821_active_jobs_only_monitor_when_prequeue_disabled(tmp_path: Path):
