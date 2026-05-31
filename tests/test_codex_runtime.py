@@ -6,8 +6,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from vibe_research.cli import app
-from vibe_research.codex_adapter import codex_exec_command, codex_exec_help, codex_sandbox_for, run_codex
-from vibe_research.io import write_json
+from vibe_research.codex_adapter import codex_exec_command, codex_exec_help, codex_sandbox_for, prompt_packet, run_codex
+from vibe_research.io import read_yaml, write_json, write_yaml
 from vibe_research.paths import VibePaths
 
 
@@ -62,3 +62,28 @@ def test_v0102_failed_codex_empty_output_replaces_stale_artifact_with_current_fa
     assert result.exit_code == 2
     assert "collect_more_metrics" in (run_dir / "revised_plan.md").read_text()
     assert "blocked_missing_decision" not in (run_dir / "revised_plan.md").read_text()
+
+
+def test_v01012_repaired_brief_sync_removes_stale_project_context_from_prompt_packet(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    stale = read_yaml(tmp_path / ".vibe" / "config.yaml", {})
+    stale.setdefault("project", {})["goal"] = "Define the research objective for stale target."
+    stale["project"]["background"] = "Project background has not been supplied yet; update .vibe/project/brief.md before serious planning."
+    write_yaml(tmp_path / ".vibe" / "config.yaml", stale)
+    write_json(tmp_path / ".vibe" / "config.json", stale)
+    (tmp_path / ".vibe" / "project" / "brief.md").write_text(
+        "# Project Brief\n\n"
+        "## Goal\n"
+        "Run a generic synced context workflow.\n\n"
+        "## Background\n"
+        "Use concrete baseline and metric context.\n"
+    )
+
+    result = invoke("research", "init", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    synced = read_yaml(tmp_path / ".vibe" / "config.yaml", {})
+    assert synced["project"]["goal"] == "Run a generic synced context workflow."
+    packet = prompt_packet(paths, "revised_plan", "r001")
+    assert "Run a generic synced context workflow." in packet
+    assert "Define the research objective" not in packet
+    assert "Project background has not been supplied" not in packet

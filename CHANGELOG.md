@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.10.12 - 2026-05-31
+
+- Add regression coverage proving repaired project briefs synchronize stale
+  config project context before future prompt packets are built.
+
 ## 0.10.11 - 2026-05-31
 
 - Let current-cycle finished, collected, and reflected runs complete their
