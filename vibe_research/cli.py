@@ -94,6 +94,7 @@ from .research_manager import (
 from .real_experiments import summarize_real_experiment_progress
 from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
+from .scheduler import operator_fallback_requeue
 from .scheduler import queue_run, review_cycle, review_run, run_dryrun, submit_queue
 from .timeline import render_timeline_markdown, sync_timeline_files
 
@@ -1457,6 +1458,19 @@ def scheduler_explain_cmd(target: Path = typer.Option(Path("."), "--target", "-t
     """Explain scheduler decisions and current waits."""
 
     console.print(render_scheduler_explain(paths(target)))
+
+
+@app.command("fallback-requeue")
+def fallback_requeue_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    execute: bool = typer.Option(False, "--execute", help="Actually cancel and resubmit eligible jobs."),
+    allow_outside_policy: bool = typer.Option(False, "--allow-outside-policy", help="Allow outside-wait-policy fallback requeues."),
+    allow_carried_forward: bool = typer.Option(False, "--allow-carried-forward", help="Allow requeue from carried-forward wait evidence."),
+) -> None:
+    """List or explicitly execute scheduler fallback requeue recommendations."""
+
+    result = operator_fallback_requeue(paths(target), execute=execute, allow_outside_policy=allow_outside_policy, allow_carried_forward=allow_carried_forward)
+    console.print_json(data=result)
 
 
 @app.command("auto-next")

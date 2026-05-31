@@ -334,6 +334,72 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
     sync_dashboard(paths)
 
 
+def operator_fallback_requeue(
+    paths: VibePaths,
+    *,
+    execute: bool = False,
+    allow_outside_policy: bool = False,
+    allow_carried_forward: bool = False,
+    backend_name: str | None = None,
+) -> dict[str, Any]:
+    active = read_json(paths.scheduler / "active_jobs.json", {"active": []})
+    state = read_json(paths.state / "state.json", {})
+    rows = []
+    still_active = []
+    executed = []
+    for job in active.get("active", []):
+        details = job.get("poll_details", {}) if isinstance(job.get("poll_details"), dict) else {}
+        verdict = details.get("wait_verdict", {}) if isinstance(details.get("wait_verdict"), dict) else {}
+        recommended = verdict.get("recommended_partition", "")
+        verdict_name = verdict.get("verdict", "")
+        eligible = bool(recommended and verdict_name in {"fallback_better_available", "fallback_better_but_outside_wait_policy"})
+        blocked_reason = ""
+        if verdict_name == "fallback_better_but_outside_wait_policy" and not allow_outside_policy:
+            eligible = False
+            blocked_reason = "outside_wait_policy_requires_allow_outside_policy"
+        if details.get("carried_forward_wait_verdict") and not allow_carried_forward:
+            eligible = False
+            blocked_reason = "carried_forward_wait_verdict_requires_allow_carried_forward"
+        row = {
+            "run_id": job.get("run_id", ""),
+            "job_id": job.get("job_id", ""),
+            "current_partition": job.get("partition", ""),
+            "recommended_partition": recommended,
+            "verdict": verdict_name,
+            "eligible": eligible,
+            "blocked_reason": blocked_reason,
+            "execute": execute,
+        }
+        rows.append(row)
+        if not execute or not eligible:
+            still_active.append(job)
+            continue
+        backend = get_backend(paths, job.get("backend") or backend_name)
+        cancel_result = backend.cancel(job)
+        old = {**job, "cancelled_at": utc_now(), "status": "cancelled_for_fallback", "cancel_result": cancel_result, "operator_requeue": True}
+        append_jsonl(paths.scheduler / "completed_jobs.jsonl", old)
+        run = state.get("runs", {}).get(job["run_id"], {})
+        force_run_partition(paths, job["run_id"], run, recommended)
+        launch = submit_run(paths, job["run_id"], dry=False, backend_name=backend.name)
+        launch["requeued_from_job_id"] = job.get("job_id", "")
+        launch["requeue_reason"] = verdict_name
+        launch["operator_requeue"] = True
+        still_active.append(launch)
+        executed.append({"old_job": old, "new_launch": launch})
+        record_event(paths, "operator_fallback_requeue", f"Requeued {job['run_id']} to {recommended}", cycle_id=job.get("cycle_id", ""), run_id=job["run_id"], status="requeued", payload={"old_job": old, "new_launch": launch, "verdict": verdict})
+    if execute:
+        write_json(paths.scheduler / "active_jobs.json", {"active": still_active})
+        state = read_json(paths.state / "state.json", state)
+        for item in executed:
+            run_id = item["new_launch"].get("run_id", "")
+            state.setdefault("runs", {}).setdefault(run_id, {})["status"] = "submitted"
+        state["next_action"] = "vibe monitor"
+        state["updated_at"] = utc_now()
+        write_json(paths.state / "state.json", state)
+        sync_dashboard(paths)
+    return {"execute": execute, "allow_outside_policy": allow_outside_policy, "allow_carried_forward": allow_carried_forward, "candidates": rows, "executed": executed}
+
+
 def should_requeue_to_fallback(config: dict[str, Any], job: dict[str, Any], details: dict[str, Any]) -> bool:
     slurm = config.get("execution", {}).get("slurm", {}) if isinstance(config.get("execution"), dict) else {}
     if not slurm.get("auto_requeue_to_better_fallback", False):

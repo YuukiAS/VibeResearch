@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.8.57 - 2026-05-31
+
+- Add `vibe fallback-requeue` as a provenance-preserving operator surface for
+  Slurm fallback recommendations. It is dry-run by default and lists
+  eligibility plus blocked reasons.
+- Require `--execute` before cancelling/resubmitting jobs, require
+  `--allow-outside-policy` for outside-window fallback verdicts, and require
+  `--allow-carried-forward` for carried-forward wait evidence.
+- Record completed old jobs, new launches, state updates, and timeline events
+  when an explicit operator requeue is executed.
+
 ## 0.8.56 - 2026-05-31
 
 - Preserve the last valid Slurm wait verdict and wait policy across transient

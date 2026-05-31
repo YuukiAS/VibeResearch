@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.56" in show.output
+    assert "0.8.57" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1905,6 +1905,68 @@ def test_v0856_monitor_carries_forward_wait_verdict_from_monitor_jsonl(tmp_path:
     assert details["wait_verdict"] == prior
     assert details["wait_policy"]["max_start_plus_run_hours"] == 12
     assert details["carried_forward_wait_source"] == "run_monitor_jsonl"
+
+
+def test_v0857_fallback_requeue_dry_run_blocks_outside_policy_without_allow(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {"active": [{"run_id": "r001", "job_id": "111", "backend": "slurm", "partition": "a100", "poll_details": {"wait_verdict": {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "lab"}}}]},
+    )
+    result = invoke("fallback-requeue", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["candidates"][0]["eligible"] is False
+    assert data["candidates"][0]["blocked_reason"] == "outside_wait_policy_requires_allow_outside_policy"
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    assert active["active"][0]["job_id"] == "111"
+
+
+def test_v0857_fallback_requeue_execute_with_outside_policy_records_provenance(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    run_id = "r001"
+    run = {
+        "run_id": run_id,
+        "cycle_id": "c001",
+        "direction_id": "d001",
+        "branch": "",
+        "hypothesis": "fallback requeue",
+        "status": "submitted",
+        "entrypoint": {"type": "slurm", "command": "python train.py"},
+        "dryrun": {"command": "python -c 'print(1)'"},
+        "resources": {"gpu": 1, "cpus": 1, "mem_gb": 1, "time": "00:10:00"},
+    }
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {run_id: run}
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    run_dir = tmp_path / ".vibe" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    write_json(run_dir / "manifest.json", run)
+    write_yaml(run_dir / "manifest.yaml", run)
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {"active": [{"run_id": run_id, "cycle_id": "c001", "job_id": "111", "backend": "slurm", "partition": "a100", "poll_details": {"wait_verdict": {"verdict": "fallback_better_but_outside_wait_policy", "recommended_partition": "lab"}}}]},
+    )
+
+    class FakeBackend:
+        name = "slurm"
+
+        def cancel(self, launch):
+            return {"returncode": 0, "job_id": launch.get("job_id")}
+
+        def submit(self, submitted_run_id, *, dry=False):
+            manifest = read_json(tmp_path / ".vibe" / "runs" / submitted_run_id / "manifest.json", {})
+            return {"run_id": submitted_run_id, "cycle_id": "c001", "backend": "slurm", "job_id": "222", "status": "submitted", "partition": manifest["resources"]["force_partition"], "resource_request": manifest["resources"]}
+
+    monkeypatch.setattr("vibe_research.scheduler.get_backend", lambda paths, backend_name=None: FakeBackend())
+    result = invoke("fallback-requeue", "--target", str(tmp_path), "--execute", "--allow-outside-policy")
+    assert result.exit_code == 0
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    assert active["active"][0]["job_id"] == "222"
+    assert active["active"][0]["partition"] == "lab"
+    completed = read_jsonl(tmp_path / ".vibe" / "scheduler" / "completed_jobs.jsonl")
+    assert completed[-1]["status"] == "cancelled_for_fallback"
+    assert completed[-1]["operator_requeue"] is True
 
 
 def test_v0844_next_clears_stale_noncounting_run_block_after_cycle_revision(tmp_path: Path):
