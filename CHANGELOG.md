@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.47 - 2026-05-31
+
+- Add bounded timeouts to Slurm polling calls (`scontrol`, `squeue`, `sacct`,
+  and `squeue --start`) so monitor loops return unknown evidence instead of
+  hanging indefinitely.
+- Enforce `max_wait_hours_for_fallback` before automatic fallback requeue;
+  unknown or out-of-window fallback estimates no longer requeue unless
+  `allow_fallback_outside_wait_policy` is explicitly enabled.
+
 ## 0.8.46 - 2026-05-31
 
 - Filter scheduler queue rows in `vibe next` through current run state so

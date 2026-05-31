@@ -328,7 +328,24 @@ def should_requeue_to_fallback(config: dict[str, Any], job: dict[str, Any], deta
     if job.get("backend") != "slurm":
         return False
     verdict = details.get("wait_verdict", {}) if isinstance(details.get("wait_verdict"), dict) else {}
-    return verdict.get("verdict") == "fallback_better_available" and bool(verdict.get("recommended_partition"))
+    if verdict.get("verdict") != "fallback_better_available" or not verdict.get("recommended_partition"):
+        return False
+    if slurm.get("allow_fallback_outside_wait_policy", False):
+        return True
+    max_wait = slurm.get("max_wait_hours_for_fallback", slurm.get("max_pending_start_plus_run_hours"))
+    try:
+        max_wait_hours = float(max_wait or 0)
+    except (TypeError, ValueError):
+        max_wait_hours = 0.0
+    if not max_wait_hours:
+        return True
+    estimate = verdict.get("recommended_estimated_start_plus_run_hours")
+    if estimate is None:
+        return False
+    try:
+        return float(estimate) <= max_wait_hours
+    except (TypeError, ValueError):
+        return False
 
 
 def force_run_partition(paths: VibePaths, run_id: str, run: dict[str, Any], partition: str) -> None:

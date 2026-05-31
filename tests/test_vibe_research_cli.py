@@ -29,6 +29,7 @@ from vibe_research.promotion import compile_decision, ensure_executable_resource
 from vibe_research.research_manager import default_candidates
 from vibe_research.resource_policy import normalize_run_resources
 from vibe_research.scheduler import collect as collect_run
+from vibe_research.scheduler import should_requeue_to_fallback
 from vibe_research.backends import PollResult, SlurmBackend, fallback_completion_estimates, start_plus_run_hours
 from vibe_research.slurm import choose_partition, render_sbatch
 
@@ -246,7 +247,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.46" in show.output
+    assert "0.8.47" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1903,7 +1904,7 @@ def test_v0831_monitor_requeues_to_better_fallback_when_opted_in(tmp_path: Path,
             return PollResult(
                 "pending",
                 False,
-                {"wait_verdict": {"verdict": "fallback_better_available", "recommended_partition": "fallback"}},
+                {"wait_verdict": {"verdict": "fallback_better_available", "recommended_partition": "fallback", "recommended_estimated_start_plus_run_hours": 8}},
             )
 
         def cancel(self, launch):
@@ -2101,6 +2102,49 @@ def test_v0837_fallback_comparison_keeps_original_preferred_and_excludes_self():
     verdict = backends.evaluate_wait_policy(launch, config, {"max_start_plus_run_hours": 12, "estimated_start_plus_run_hours": 20}, ["volta-gpu", "htzhulab", "a100-gpu"])
     assert verdict["recommended_partition"] == "htzhulab"
     assert verdict["recommended_partition"] != "volta-gpu"
+
+
+def test_v0847_missing_squeue_start_does_not_requeue_outside_wait_policy():
+    config = {"execution": {"slurm": {"auto_requeue_to_better_fallback": True, "max_wait_hours_for_fallback": 12}}}
+    job = {"backend": "slurm", "partition": "preferred"}
+    assert not should_requeue_to_fallback(
+        config,
+        job,
+        {"wait_verdict": {"verdict": "fallback_better_available", "recommended_partition": "a100-gpu", "recommended_estimated_start_plus_run_hours": None}},
+    )
+    assert not should_requeue_to_fallback(
+        config,
+        job,
+        {"wait_verdict": {"verdict": "fallback_better_available", "recommended_partition": "a100-gpu", "recommended_estimated_start_plus_run_hours": 20}},
+    )
+    assert should_requeue_to_fallback(
+        config,
+        job,
+        {"wait_verdict": {"verdict": "fallback_better_available", "recommended_partition": "a100-gpu", "recommended_estimated_start_plus_run_hours": 8}},
+    )
+    override = {"execution": {"slurm": {"auto_requeue_to_better_fallback": True, "max_wait_hours_for_fallback": 12, "allow_fallback_outside_wait_policy": True}}}
+    assert should_requeue_to_fallback(
+        override,
+        job,
+        {"wait_verdict": {"verdict": "fallback_better_available", "recommended_partition": "a100-gpu", "recommended_estimated_start_plus_run_hours": None}},
+    )
+
+
+def test_v0847_slurm_poll_timeout_returns_unknown_not_hang(tmp_path: Path, monkeypatch):
+    def fake_run(args, **kwargs):
+        if args[:3] == ["scontrol", "show", "job"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"JobId=123 WorkDir={tmp_path}\n", stderr="")
+        if args[:2] == ["squeue", "-j"]:
+            raise subprocess.TimeoutExpired(args, timeout=10)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    backend = SlurmBackend(VibePaths(tmp_path), {"execution": {"slurm": {}}})
+    poll = backend.poll({"job_id": "123", "backend": "slurm", "launch_workdir": str(tmp_path), "resource_request": {"time": "01:00:00"}})
+    assert poll.status == "unknown"
+    assert poll.finished is False
+    assert poll.details["poll_timeout"] is True
+    assert poll.details["command"] == "squeue"
 
 
 def test_v0824_slurm_wait_policy_defaults_and_naive_start_is_local(tmp_path: Path, monkeypatch):

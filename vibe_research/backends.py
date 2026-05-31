@@ -174,13 +174,19 @@ class SlurmBackend(ExecutionBackend):
             return PollResult("unsafe_stale", True, workdir_check)
         if launch.get("status") == "dry_submitted" or job_id.startswith("slurm-dry-"):
             return PollResult("finished", True, {"dry": True})
-        sq = subprocess.run(["squeue", "-j", job_id, "-h", "-o", "%T|%R"], text=True, capture_output=True, check=False)
+        try:
+            sq = subprocess.run(["squeue", "-j", job_id, "-h", "-o", "%T|%R"], text=True, capture_output=True, check=False, timeout=10)
+        except subprocess.TimeoutExpired as exc:
+            return PollResult("unknown", False, {"poll_timeout": True, "command": "squeue", "error": str(exc), **workdir_check})
         if sq.returncode == 0 and sq.stdout.strip():
             state, _, reason = sq.stdout.strip().partition("|")
             details = {"squeue_state": state, "reason": reason}
             details.update(slurm_wait_evidence(job_id, launch, self.config))
             return PollResult(state.lower(), False, details)
-        sacct = subprocess.run(["sacct", "-j", job_id, "-n", "-P", "-o", "State,ExitCode"], text=True, capture_output=True, check=False)
+        try:
+            sacct = subprocess.run(["sacct", "-j", job_id, "-n", "-P", "-o", "State,ExitCode"], text=True, capture_output=True, check=False, timeout=10)
+        except subprocess.TimeoutExpired as exc:
+            return PollResult("unknown", False, {"poll_timeout": True, "command": "sacct", "error": str(exc), **workdir_check})
         details = {"sacct_stdout": sacct.stdout, "sacct_stderr": sacct.stderr}
         status = "finished"
         if "FAILED" in sacct.stdout:
@@ -228,7 +234,16 @@ def slurm_workdir_check(job_id: str, launch: dict[str, Any], target_root: Path) 
         }
     if not job_id or job_id.startswith("slurm-dry-"):
         return {"expected_workdir": expected, "launch_workdir": launch_workdir}
-    result = subprocess.run(["scontrol", "show", "job", job_id], text=True, capture_output=True, check=False)
+    try:
+        result = subprocess.run(["scontrol", "show", "job", job_id], text=True, capture_output=True, check=False, timeout=10)
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "expected_workdir": expected,
+            "launch_workdir": launch_workdir,
+            "slurm_workdir": "",
+            "scontrol_timeout": True,
+            "scontrol_stderr": str(exc),
+        }
     workdir = parse_slurm_workdir(result.stdout)
     details = {
         "expected_workdir": expected,
@@ -260,9 +275,14 @@ def slurm_wait_evidence(job_id: str, launch: dict[str, Any], config: dict[str, A
         "fallback_partitions": fallback_partitions,
         "candidate_partitions": candidates,
     }
-    start = subprocess.run(["squeue", "--start", "-j", job_id, "-h", "-o", "%S"], text=True, capture_output=True, check=False)
-    evidence["squeue_start_stdout"] = start.stdout.strip()
-    evidence["squeue_start_stderr"] = start.stderr.strip()
+    try:
+        start = subprocess.run(["squeue", "--start", "-j", job_id, "-h", "-o", "%S"], text=True, capture_output=True, check=False, timeout=10)
+        evidence["squeue_start_stdout"] = start.stdout.strip()
+        evidence["squeue_start_stderr"] = start.stderr.strip()
+    except subprocess.TimeoutExpired as exc:
+        evidence["squeue_start_stdout"] = ""
+        evidence["squeue_start_stderr"] = str(exc)
+        evidence["squeue_start_timeout"] = True
     max_hours = wait_policy_hours(launch, config)
     if max_hours:
         total_hours = start_plus_run_hours(evidence["squeue_start_stdout"], evidence["requested_walltime"])
