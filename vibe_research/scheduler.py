@@ -13,7 +13,7 @@ from typing import Any
 from .adapters import is_placeholder_command
 from .adapter_onboarding import capability_dependency_issues, find_capability
 from .adapter_schema import load_adapter_manifest
-from .backends import get_backend
+from .backends import PollResult, get_backend
 from .config import load_config
 from .dashboard import sync_dashboard
 from .directions import latest_direction_record
@@ -276,6 +276,9 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
     for job in active.get("active", []):
         backend = get_backend(paths, job.get("backend") or backend_name)
         poll = backend.poll(job)
+        stale_status = stale_active_terminal_status(paths, state, job, poll)
+        if stale_status:
+            poll = PollResult(stale_status, True, {"reason": "stale_active_terminal_artifact", "previous_poll": poll.details})
         poll.details = carry_forward_wait_evidence(paths, job, poll.status, poll.details)
         if poll.finished:
             job["finished_at"] = utc_now()
@@ -333,6 +336,22 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
     write_json(paths.state / "state.json", state)
     summarize_real_experiment_progress(paths, write=True)
     sync_dashboard(paths)
+
+
+def stale_active_terminal_status(paths: VibePaths, state: dict[str, Any], job: dict[str, Any], poll: PollResult) -> str:
+    if poll.finished or poll.status != "unknown":
+        return ""
+    run_id = str(job.get("run_id", ""))
+    run = state.get("runs", {}).get(run_id, {}) if isinstance(state.get("runs"), dict) else {}
+    status = str(run.get("status", ""))
+    if status in {"collected", "reflected", "revised", "merged", "finished", "failed", "timeout", "cancelled"}:
+        return status
+    run_dir = paths.runs / run_id
+    for name in ["metrics.json", "analysis.json", "collect.json"]:
+        data = read_json(run_dir / name, {})
+        if isinstance(data, dict) and (data.get("schema_valid") is True or data.get("trusted") is True or data.get("metrics")):
+            return "collected"
+    return ""
 
 
 def operator_fallback_requeue(

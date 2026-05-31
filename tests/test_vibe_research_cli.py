@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.2" in show.output
+    assert "0.10.3" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2531,6 +2531,8 @@ def test_v0851_squeue_socket_error_returns_unknown_without_sacct(tmp_path: Path,
             return subprocess.CompletedProcess(args, 0, stdout=f"JobId=123 WorkDir={tmp_path}\n", stderr="")
         if args[:2] == ["squeue", "-j"]:
             return subprocess.CompletedProcess(args, 1, stdout="", stderr="Error creating slurm stream socket: Operation not permitted\n")
+        if args[:2] == ["sacct", "-j"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="accounting unavailable\n")
         raise AssertionError(f"unexpected call: {args}")
 
     monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
@@ -2538,8 +2540,8 @@ def test_v0851_squeue_socket_error_returns_unknown_without_sacct(tmp_path: Path,
     poll = backend.poll({"job_id": "123", "backend": "slurm", "launch_workdir": str(tmp_path), "resource_request": {"time": "01:00:00"}})
     assert poll.status == "unknown"
     assert poll.finished is False
-    assert poll.details["reason"] == "slurm_query_unavailable"
-    assert calls == ["scontrol", "squeue"]
+    assert poll.details["reason"] == "slurm_accounting_record_unavailable"
+    assert calls == ["scontrol", "squeue", "sacct"]
 
 
 def test_v0851_empty_sacct_record_returns_unknown_not_finished(tmp_path: Path, monkeypatch):

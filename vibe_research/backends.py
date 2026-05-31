@@ -177,40 +177,29 @@ class SlurmBackend(ExecutionBackend):
         try:
             sq = subprocess.run(["squeue", "-j", job_id, "-h", "-o", "%T|%R"], text=True, capture_output=True, check=False, timeout=10)
         except subprocess.TimeoutExpired as exc:
-            return PollResult("unknown", False, {"poll_timeout": True, "command": "squeue", "error": str(exc), **workdir_check})
+            return self.poll_sacct(job_id, workdir_check, {"poll_timeout": True, "command": "squeue", "error": str(exc)})
         if sq.returncode != 0 and slurm_query_unavailable(sq.stderr + "\n" + sq.stdout):
-            return PollResult(
-                "unknown",
-                False,
-                {
-                    "reason": "slurm_query_unavailable",
-                    "squeue_stdout": sq.stdout.strip(),
-                    "squeue_stderr": sq.stderr.strip(),
-                    **workdir_check,
-                },
-            )
+            return self.poll_sacct(job_id, workdir_check, {"reason": "slurm_query_unavailable", "squeue_stdout": sq.stdout.strip(), "squeue_stderr": sq.stderr.strip()})
         if sq.returncode == 0 and sq.stdout.strip():
             state, _, reason = sq.stdout.strip().partition("|")
             details = {"squeue_state": state, "reason": reason}
             details.update(slurm_wait_evidence(job_id, launch, self.config))
             return PollResult(state.lower(), False, details)
+        return self.poll_sacct(job_id, workdir_check, {})
+
+    def poll_sacct(self, job_id: str, workdir_check: dict[str, Any], prior_details: dict[str, Any]) -> PollResult:
         try:
             sacct = subprocess.run(["sacct", "-j", job_id, "-n", "-P", "-o", "State,ExitCode"], text=True, capture_output=True, check=False, timeout=10)
         except subprocess.TimeoutExpired as exc:
-            return PollResult("unknown", False, {"poll_timeout": True, "command": "sacct", "error": str(exc), **workdir_check})
-        details = {"sacct_stdout": sacct.stdout, "sacct_stderr": sacct.stderr}
+            return PollResult("unknown", False, {**prior_details, "poll_timeout": True, "command": "sacct", "error": str(exc), **workdir_check})
+        details = {**prior_details, "sacct_stdout": sacct.stdout, "sacct_stderr": sacct.stderr}
         if sacct.returncode != 0 or not sacct.stdout.strip():
             details["reason"] = "slurm_accounting_record_unavailable"
             details.update(workdir_check)
             return PollResult("unknown", False, details)
-        status = "finished"
-        if "FAILED" in sacct.stdout:
-            status = "failed"
-        elif "CANCELLED" in sacct.stdout:
-            status = "cancelled"
-        elif "TIMEOUT" in sacct.stdout:
-            status = "timeout"
-        return PollResult(status, True, details)
+        status, finished = parse_sacct_status(sacct.stdout)
+        details.update(workdir_check)
+        return PollResult(status, finished, details)
 
     def cancel(self, launch: dict[str, Any]) -> dict[str, Any]:
         job_id = str(launch.get("job_id", ""))
@@ -245,6 +234,27 @@ def slurm_query_unavailable(text: str) -> bool:
         or "connect failure" in lowered
         or "error creating slurm stream socket" in lowered
     )
+
+
+def parse_sacct_status(stdout: str) -> tuple[str, bool]:
+    states = []
+    for line in stdout.splitlines():
+        state = line.strip().split("|", 1)[0].split()[0] if line.strip() else ""
+        if state:
+            states.append(state.upper())
+    if any(state.startswith("RUNNING") or state.startswith("PENDING") or state.startswith("CONFIGURING") for state in states):
+        return "running", False
+    if any(state.startswith("FAILED") for state in states):
+        return "failed", True
+    if any(state.startswith("CANCELLED") for state in states):
+        return "cancelled", True
+    if any(state.startswith("TIMEOUT") for state in states):
+        return "timeout", True
+    if any(state.startswith("COMPLETED") for state in states):
+        return "finished", True
+    if states:
+        return states[0].lower(), True
+    return "unknown", False
 
 
 def slurm_workdir_check(job_id: str, launch: dict[str, Any], target_root: Path) -> dict[str, Any]:

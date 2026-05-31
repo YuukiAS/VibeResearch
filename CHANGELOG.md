@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.10.3 - 2026-05-31
+
+- Fall back from `squeue` timeout/socket/controller failures to `sacct` when
+  monitoring Slurm jobs.
+- Parse `sacct` conservatively so running/pending jobs remain active while
+  completed, failed, cancelled, and timed-out jobs become terminal.
+- Archive stale active jobs when scheduler accounting is unavailable but the
+  run already has terminal state or collected/schema-valid metric artifacts,
+  preserving carried-forward wait diagnostics only as diagnostic context.
+
 ## 0.10.2 - 2026-05-31
 
 - Probe `codex exec --help` before constructing non-interactive Codex commands
