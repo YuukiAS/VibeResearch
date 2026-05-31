@@ -16,9 +16,16 @@ def set_direction_status(paths: VibePaths, direction_id: str, status: str, reaso
 
 
 def latest_direction_status(paths: VibePaths, direction_id: str) -> str:
+    return latest_direction_record(paths, direction_id).get("status", "")
+
+
+def latest_direction_record(paths: VibePaths, direction_id: str) -> dict:
+    record = {}
     status = ""
     for row in read_jsonl(paths.directions / "registry.jsonl"):
         if row.get("direction_id") == direction_id:
             status = row.get("status", "")
-    return status
-
+            record = row
+    if status and "status" not in record:
+        record["status"] = status
+    return record

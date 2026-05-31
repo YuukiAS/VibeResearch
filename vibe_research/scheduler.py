@@ -16,6 +16,7 @@ from .adapter_schema import load_adapter_manifest
 from .backends import get_backend
 from .config import load_config
 from .dashboard import sync_dashboard
+from .directions import latest_direction_record
 from .io import append_jsonl, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text, write_yaml
 from .manifest import validate_manifest
 from .paths import VibePaths
@@ -201,9 +202,12 @@ def submit_queue(paths: VibePaths, *, dry: bool = False, backend_name: str | Non
             item["reason"] = "; ".join(errors[:3])
             remaining.append(item)
             continue
-        if paused_direction(paths, run.get("direction_id", "")):
+        direction_id = run.get("direction_id", "")
+        if paused_direction(paths, direction_id) and auto_resume_direction_after_required_input_repair(paths, state, run):
+            direction_id = run.get("direction_id", "")
+        if paused_direction(paths, direction_id):
             item["status"] = "paused_direction"
-            item["reason"] = f"direction {run.get('direction_id', '')} is paused/stopped"
+            item["reason"] = f"direction {direction_id} is paused/stopped"
             remaining.append(item)
             continue
         if dependencies_blocked(state, run):
@@ -228,7 +232,15 @@ def submit_queue(paths: VibePaths, *, dry: bool = False, backend_name: str | Non
             item["reason"] = f"max_gpu_jobs={max_gpu}"
             remaining.append(item)
             continue
-        launch = submit_run(paths, run_id, dry=dry, backend_name=backend.name)
+        try:
+            launch = submit_run(paths, run_id, dry=dry, backend_name=backend.name)
+        except RuntimeError as exc:
+            if backend.name == "slurm" and slurm_execution_environment_error(str(exc)):
+                item["status"] = "execution_environment_error"
+                item["reason"] = f"Slurm command failed in the current execution environment: {exc}"
+                remaining.append(item)
+                continue
+            raise
         active["active"].append(launch)
         run["status"] = "submitted_dry" if dry else "submitted"
         run["backend"] = backend.name
@@ -544,10 +556,64 @@ def parse_verdict(text: str) -> str:
 def paused_direction(paths: VibePaths, direction_id: str) -> bool:
     if not direction_id:
         return False
-    for row in read_jsonl(paths.directions / "registry.jsonl"):
-        if row.get("direction_id") == direction_id and row.get("status") in {"paused", "stopped"}:
+    return latest_direction_record(paths, direction_id).get("status") in {"paused", "stopped"}
+
+
+def auto_resume_direction_after_required_input_repair(paths: VibePaths, state: dict[str, Any], run: dict[str, Any]) -> bool:
+    direction_id = run.get("direction_id", "")
+    if not direction_id:
+        return False
+    latest = latest_direction_record(paths, direction_id)
+    if latest.get("status") != "paused" or latest.get("reason") != "max failed runs reached":
+        return False
+    if not same_direction_missing_required_input_history(state, run):
+        return False
+    required = required_input_paths(run)
+    if not required or not all(Path(resolve_project_path(paths, path)).exists() for path in required):
+        return False
+    row = {
+        "direction_id": direction_id,
+        "status": "promoted",
+        "reason": "auto-resumed after required input repair",
+        "updated_at": utc_now(),
+        "provenance": {"source": "submit_queue_required_input_repair", "run_id": run.get("run_id", ""), "required_inputs": required},
+    }
+    append_jsonl(paths.directions / "registry.jsonl", row)
+    record_event(paths, "direction_promoted", row["reason"], direction_id=direction_id, status="promoted", payload=row)
+    return True
+
+
+def same_direction_missing_required_input_history(state: dict[str, Any], run: dict[str, Any]) -> bool:
+    direction_id = run.get("direction_id", "")
+    run_id = run.get("run_id", "")
+    for other_id, other in state.get("runs", {}).items():
+        if other_id == run_id or other.get("direction_id") != direction_id:
+            continue
+        text = " ".join(
+            str(other.get(key, ""))
+            for key in ["non_counting_classification", "classification", "blocked_reason", "failure_type", "failure_reason"]
+        )
+        if "missing_required_input" in text:
             return True
     return False
+
+
+def required_input_paths(run: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    inputs = run.get("inputs", {}) if isinstance(run.get("inputs"), dict) else {}
+    for source in [inputs, run.get("resources", {}) if isinstance(run.get("resources"), dict) else {}, run]:
+        for key in ["required_files", "required_paths", "required_input_files", "dependency_paths"]:
+            value = source.get(key)
+            if isinstance(value, str):
+                paths.append(value)
+            elif isinstance(value, list):
+                paths.extend(str(item) for item in value if str(item))
+    return list(dict.fromkeys(paths))
+
+
+def slurm_execution_environment_error(text: str) -> bool:
+    lowered = text.lower()
+    return "operation not permitted" in lowered and ("slurm" in lowered or "socket" in lowered or "stream" in lowered)
 
 
 def apply_failure_rules(paths: VibePaths, state: dict[str, Any], failed_run_id: str, run: dict[str, Any]) -> None:

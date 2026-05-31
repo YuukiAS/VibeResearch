@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.8.49 - 2026-05-31
+
+- Make direction pause checks use the latest direction registry row, so later
+  promoted/resumed records clear historical pauses.
+- Auto-resume only `max failed runs reached` pauses when the same direction has
+  prior `missing_required_input` non-counting evidence and the queued
+  replacement run's required input files now exist.
+- Keep manual stops and unrelated pauses blocked, and surface Slurm sandbox
+  socket failures as execution-environment queue issues instead of route
+  failures.
+
 ## 0.8.48 - 2026-05-31
 
 - Update sustained round audit semantics so blocked runs with non-counting

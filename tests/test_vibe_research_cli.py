@@ -19,7 +19,7 @@ from vibe_research.config import detect_config, load_config
 from vibe_research.daemon import daemon_start, daemon_status
 from vibe_research.decisions import make_decision, write_decision
 from vibe_research.ideas import create_idea
-from vibe_research.io import read_json, read_jsonl, read_yaml, write_json, write_yaml
+from vibe_research.io import append_jsonl, read_json, read_jsonl, read_yaml, write_json, write_yaml
 from vibe_research.loop_guard import apply_loop_guard
 from vibe_research.models import ProjectConfig
 from vibe_research.paths import VibePaths
@@ -29,6 +29,7 @@ from vibe_research.promotion import compile_decision, ensure_executable_resource
 from vibe_research.research_manager import default_candidates
 from vibe_research.resource_policy import normalize_run_resources
 from vibe_research.scheduler import collect as collect_run
+from vibe_research.scheduler import paused_direction
 from vibe_research.scheduler import should_requeue_to_fallback
 from vibe_research.backends import PollResult, SlurmBackend, fallback_completion_estimates, start_plus_run_hours
 from vibe_research.slurm import choose_partition, render_sbatch
@@ -247,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.48" in show.output
+    assert "0.8.49" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2623,6 +2624,59 @@ def test_v0846_next_and_submit_queue_ignore_abandoned_stale_queue_item(tmp_path:
     assert submit_result.exit_code == 0
     queue = read_json(tmp_path / ".vibe" / "scheduler" / "queue.json", {})
     assert queue["queued"] == []
+
+
+def test_v0849_paused_direction_uses_latest_registry_status(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    append_jsonl(tmp_path / ".vibe" / "directions" / "registry.jsonl", {"direction_id": "d001", "status": "paused", "reason": "max failed runs reached"})
+    assert paused_direction(VibePaths(tmp_path), "d001") is True
+    append_jsonl(tmp_path / ".vibe" / "directions" / "registry.jsonl", {"direction_id": "d001", "status": "promoted", "reason": "manual resume"})
+    assert paused_direction(VibePaths(tmp_path), "d001") is False
+
+
+def test_v0849_submit_queue_auto_resumes_required_input_repair(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    required = tmp_path / "data" / "required.csv"
+    required.parent.mkdir(parents=True, exist_ok=True)
+    required.write_text("ok\n")
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {
+        "r001_failed": {
+            "run_id": "r001_failed",
+            "cycle_id": "c001",
+            "direction_id": "d001",
+            "status": "blocked",
+            "non_counting_classification": "missing_required_input:data/required.csv",
+        },
+        "r002_repair": {
+            "run_id": "r002_repair",
+            "cycle_id": "c002",
+            "direction_id": "d001",
+            "branch": "",
+            "hypothesis": "replacement after required input repair",
+            "status": "queued",
+            "entrypoint": {"type": "local", "command": "python -c 'print(1)'"},
+            "dryrun": {"command": "python -c 'print(1)'"},
+            "resources": {"gpu": 0, "cpus": 1, "mem_gb": 1, "time": "00:01:00", "required_files": ["data/required.csv"]},
+            "outputs": {},
+            "evaluation": {},
+        },
+    }
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    run_dir = tmp_path / ".vibe" / "runs" / "r002_repair"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    write_json(run_dir / "manifest.json", state["runs"]["r002_repair"])
+    write_yaml(run_dir / "manifest.yaml", state["runs"]["r002_repair"])
+    write_json(tmp_path / ".vibe" / "scheduler" / "queue.json", {"queued": [{"run_id": "r002_repair", "priority": 1, "status": "queued"}]})
+    append_jsonl(tmp_path / ".vibe" / "directions" / "registry.jsonl", {"direction_id": "d001", "status": "paused", "reason": "max failed runs reached"})
+
+    result = invoke("submit-queue", "--target", str(tmp_path), "--dry")
+    assert result.exit_code == 0
+    active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
+    assert active["active"][0]["run_id"] == "r002_repair"
+    directions = read_jsonl(tmp_path / ".vibe" / "directions" / "registry.jsonl")
+    assert directions[-1]["status"] == "promoted"
+    assert directions[-1]["reason"] == "auto-resumed after required input repair"
 
 
 def test_v0821_active_jobs_only_monitor_when_prequeue_disabled(tmp_path: Path):
