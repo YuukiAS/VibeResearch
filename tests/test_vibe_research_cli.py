@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.17" in show.output
+    assert "0.10.18" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -534,6 +534,41 @@ def test_v01017_real_progress_counts_nested_baseline_metrics(tmp_path: Path):
     assert row["has_baseline_comparison"] is True
     assert row["classification"] == "counted"
     assert progress["non_counting_real_experiment_runs"] == []
+
+
+def test_v01018_offline_revise_preserves_completed_trusted_candidate_run(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    run_id = "r001_real"
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state.setdefault("runs", {})[run_id] = {
+        "run_id": run_id,
+        "cycle_id": "c001",
+        "status": "collected",
+        "run_kind": "real_experiment",
+        "backend": "slurm",
+    }
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    run_dir = tmp_path / ".vibe" / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "reflect.md").write_text("# Reflect\n\nschema-valid metrics collected\n")
+    write_json(
+        run_dir / "metrics.json",
+        {
+            "schema_status": "valid",
+            "missing_metrics": False,
+            "trusted_candidate": True,
+            "trusted": False,
+            "metrics": {"primary": 1.0},
+        },
+    )
+
+    result = invoke("revise-plan", run_id, "--offline", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    updated = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    assert updated["runs"][run_id]["status"] == "revised"
+    decision = read_json(run_dir / "decision.json", {})
+    assert decision["decision_type"] == "collect_more_metrics"
+    assert decision["decision_type"] != "blocked_missing_decision"
 
 
 def test_v01011_compatible_preferred_partition_remains_ahead_of_available_fallback(monkeypatch):

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.18 - 2026-05-31
+
+- Prevent offline run-level revise from converting completed runs with
+  schema-valid trusted-candidate metrics into `blocked_missing_decision`; it now
+  records a conservative non-blocking `collect_more_metrics` decision.
+
 ## 0.10.17 - 2026-05-31
 
 - Count real-experiment runs with baseline comparison evidence stored either at

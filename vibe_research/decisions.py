@@ -225,6 +225,19 @@ def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text
     if existing_path.exists() and existing_path.read_text().strip():
         return load_decision(paths, target_id)
     if offline:
+        if offline_run_has_trusted_candidate_metrics(paths, target_id):
+            decision = make_decision(
+                paths,
+                target_id,
+                "collect_more_metrics",
+                rationale="Offline revised-plan fallback preserved trusted candidate metrics without inventing a promotion or stop decision.",
+                required_action="hand schema-valid metrics to run and cycle reflection",
+                metrics_requirements={"required": []},
+                provenance={"source": "offline_revise_trusted_candidate_guard"},
+                confidence="low",
+            )
+            write_decision(paths, decision)
+            return decision
         return write_block_decision(paths, target_id, "offline fallback cannot make a structured research decision", decision_type="blocked_missing_decision")
     decision_type = infer_decision_type(markdown_text)
     if decision_type in BLOCK_DECISIONS:
@@ -242,6 +255,17 @@ def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text
     )
     write_decision(paths, decision)
     return decision
+
+
+def offline_run_has_trusted_candidate_metrics(paths: VibePaths, target_id: str) -> bool:
+    if not target_id.startswith("r"):
+        return False
+    metrics = read_json(paths.runs / target_id / "metrics.json", {})
+    return bool(
+        metrics.get("schema_status") == "valid"
+        and not metrics.get("missing_metrics")
+        and (metrics.get("trusted_candidate") or metrics.get("trusted") or metrics.get("schema_valid"))
+    )
 
 
 def infer_decision_type(text: str) -> DecisionType:
