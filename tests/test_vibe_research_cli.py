@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.14" in show.output
+    assert "0.10.15" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2971,6 +2971,42 @@ def test_v0813_daemon_rejects_existing_session_bound_to_other_target(tmp_path: P
         assert "target_mismatch" in str(exc)
     else:
         raise AssertionError("expected target mismatch")
+
+
+def test_v01015_daemon_rejects_mode_change_without_stop(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(
+        tmp_path / ".vibe" / "state" / "daemon.json",
+        {
+            "target_root": str(tmp_path.resolve()),
+            "mode": "auto-cycle",
+            "interval": 300,
+            "auto_next": True,
+            "offline": False,
+            "dry_submit": False,
+            "max_steps": 30,
+        },
+    )
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["tmux", "has-session"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:3] == ["tmux", "display-message", "-p"] and args[-1] == "#{pane_current_path}":
+            return subprocess.CompletedProcess(args, 0, stdout=f"{tmp_path}\n", stderr="")
+        if args[:3] == ["tmux", "display-message", "-p"] and args[-1] == "#{pane_current_command}":
+            return subprocess.CompletedProcess(args, 0, stdout="bash\n", stderr="")
+        if args[:2] == ["tmux", "capture-pane"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"VIBE_DAEMON_TARGET={tmp_path}\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.daemon.shutil.which", lambda name: "/usr/bin/tmux" if name == "tmux" else None)
+    monkeypatch.setattr("vibe_research.daemon.subprocess.run", fake_run)
+    result = invoke("daemon", "start", "--target", str(tmp_path), "--mode", "monitor", "--interval", "300", "--no-auto-next")
+    assert result.exit_code != 0
+    assert "daemon_option_mismatch" in result.output
+    status = daemon_status(VibePaths(tmp_path))
+    assert status["mode"] == "auto-cycle"
+    assert status["auto_next"] is True
 
 
 def test_v0813_slurm_poll_marks_mismatched_workdir_unsafe(tmp_path: Path, monkeypatch):

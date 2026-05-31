@@ -2526,7 +2526,11 @@ def daemon_start_cmd(
 ) -> None:
     """Start a tmux supervisor running an autonomous or monitor-only loop."""
 
-    console.print(daemon_start(paths(target), interval=interval, auto_next=auto_next, mode=mode, offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit), max_steps=max_steps))
+    try:
+        console.print(daemon_start(paths(target), interval=interval, auto_next=auto_next, mode=mode, offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit), max_steps=max_steps))
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
 
 @daemon_app.command("stop")

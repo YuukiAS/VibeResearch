@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.10.15 - 2026-05-31
+
+- Report recorded daemon options in daemon status and reject attempts to reuse
+  an already-running daemon when requested mode, interval, auto-next, offline,
+  dry-submit, or max-step settings differ.
+
 ## 0.10.14 - 2026-05-31
 
 - Suppress executable fallback requeue commands when scheduler wait evidence

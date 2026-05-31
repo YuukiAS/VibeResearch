@@ -40,6 +40,12 @@ def daemon_status(paths: VibePaths) -> dict[str, Any]:
         "session": session,
         "target_root": target_root,
         "recorded_target_root": recorded_target_root,
+        "mode": daemon_state.get("mode", ""),
+        "interval": daemon_state.get("interval"),
+        "auto_next": daemon_state.get("auto_next"),
+        "offline": daemon_state.get("offline"),
+        "dry_submit": daemon_state.get("dry_submit"),
+        "max_steps": daemon_state.get("max_steps"),
         "queued_jobs": len(queue),
         "active_jobs": len(active),
         "completed_jobs": len(completed),
@@ -83,6 +89,8 @@ def daemon_start(
     dry_submit: bool = True,
     max_steps: int = 30,
 ) -> dict[str, Any]:
+    config = load_config(paths)
+    interval = interval or int(config.get("monitor", {}).get("loop_interval_seconds", 300))
     status = daemon_status(paths)
     if not status["available"]:
         raise RuntimeError(status["reason"])
@@ -92,11 +100,13 @@ def daemon_start(
                 "target_mismatch: existing daemon session "
                 f"{status['session']} is not bound to {paths.root.resolve()}"
             )
+        requested = {"mode": mode, "interval": interval, "auto_next": auto_next, "offline": offline, "dry_submit": dry_submit, "max_steps": max_steps}
+        mismatch = daemon_option_mismatch(status, requested)
+        if mismatch:
+            raise RuntimeError("daemon_option_mismatch: stop the existing daemon before changing " + ", ".join(mismatch))
         return status
     if mode not in {"auto-cycle", "monitor"}:
         raise ValueError("mode must be auto-cycle or monitor")
-    config = load_config(paths)
-    interval = interval or int(config.get("monitor", {}).get("loop_interval_seconds", 300))
     log_path = paths.dashboard / "daemon.log"
     target = shlex.quote(str(paths.root))
     python = shlex.quote(sys.executable)
@@ -168,6 +178,17 @@ def same_path(left: str, right: str) -> bool:
 
 def non_counting_run(run: dict[str, Any]) -> bool:
     return bool(run.get("non_counting_classification") or run.get("classification"))
+
+
+def daemon_option_mismatch(status: dict[str, Any], requested: dict[str, Any]) -> list[str]:
+    mismatch = []
+    for key, value in requested.items():
+        recorded = status.get(key)
+        if recorded in {"", None}:
+            continue
+        if recorded != value:
+            mismatch.append(key)
+    return mismatch
 
 
 def daemon_stop(paths: VibePaths) -> dict[str, Any]:
