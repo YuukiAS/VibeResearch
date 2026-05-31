@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.10.19 - 2026-05-31
+
+- Prefer actionable current-cycle run lifecycle steps over stale
+  real-experiment repair prompts from older cycles.
+
 ## 0.10.18 - 2026-05-31
 
 - Prevent offline run-level revise from converting completed runs with

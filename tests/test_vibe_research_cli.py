@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.18" in show.output
+    assert "0.10.19" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -569,6 +569,43 @@ def test_v01018_offline_revise_preserves_completed_trusted_candidate_run(tmp_pat
     decision = read_json(run_dir / "decision.json", {})
     assert decision["decision_type"] == "collect_more_metrics"
     assert decision["decision_type"] != "blocked_missing_decision"
+
+
+def test_v01019_current_cycle_run_step_preempts_stale_real_repair(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    write_json(
+        tmp_path / ".vibe" / "research" / "real_experiment_progress.json",
+        {
+            "non_counting_real_experiment_runs": [
+                {
+                    "run_id": "r001_old",
+                    "status": "failed",
+                    "requires_repair": True,
+                }
+            ]
+        },
+    )
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state.update(
+        {
+            "current_cycle_id": "c002",
+            "cycles": {
+                "c001": {"status": "reviewed"},
+                "c002": {"status": "reviewed"},
+            },
+            "runs": {
+                "r001_old": {"run_id": "r001_old", "cycle_id": "c001", "status": "failed", "run_kind": "real_experiment"},
+                "r002_new": {"run_id": "r002_new", "cycle_id": "c002", "status": "generated"},
+            },
+        }
+    )
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "vibe review r002_new" in result.output
+    assert "vibe experiment real-progress" not in result.output
 
 
 def test_v01011_compatible_preferred_partition_remains_ahead_of_available_fallback(monkeypatch):

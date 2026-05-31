@@ -86,6 +86,9 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     for request in read_jsonl(paths.research / "deep_requests" / "registry.jsonl"):
         if request.get("blocking") and request.get("status") != "ingested":
             return "vibe ingest-deep-research " + request.get("request_id", "<request_id>"), "blocked_waiting_deep_research"
+    current_run_step = current_cycle_run_lifecycle_step(paths, state)
+    if current_run_step:
+        return current_run_step, ""
     progress = summarize_real_experiment_progress(paths)
     if blocking_real_experiment_repairs(progress):
         return "vibe experiment real-progress", "real_experiment_repair_required"
@@ -197,6 +200,36 @@ def pending_current_cycle_output_step(state: dict) -> str:
             return f"vibe reflect {run_id}"
         if status == "reflected":
             return f"vibe revise-plan {run_id}"
+    return ""
+
+
+def current_cycle_run_lifecycle_step(paths: VibePaths, state: dict) -> str:
+    cycle_id = str(state.get("current_cycle_id") or "")
+    if not cycle_id:
+        return ""
+    runs = sorted((state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}).items())
+    for run_id, run in runs:
+        if run.get("cycle_id") != cycle_id or terminal_inactive_run(run):
+            continue
+        status = str(run.get("status", ""))
+        if status == "generated":
+            return f"vibe review {run_id}"
+        if status == "reviewed":
+            return f"vibe branch {run_id}"
+        if status in {"branched", "branch_recorded_no_git"}:
+            return f"vibe patch {run_id}"
+        if status == "patched":
+            return f"vibe dryrun {run_id}"
+        if status == "dryrun_passed":
+            return f"vibe queue {run_id}"
+        if status in {"finished", "submitted_dry"}:
+            return f"vibe collect {run_id}"
+        if status == "collected":
+            return f"vibe reflect {run_id}"
+        if status == "reflected":
+            return f"vibe revise-plan {run_id}"
+        if status and not has_text(paths.runs / run_id / "review.md") and status not in {"queued", "submitted", "pending", "running", "dry_submitted"}:
+            return f"vibe review {run_id}"
     return ""
 
 
