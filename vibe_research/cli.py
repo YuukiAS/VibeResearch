@@ -57,6 +57,14 @@ from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
 from .io import read_json, read_jsonl, read_yaml
+from .internalization import (
+    add_external_asset,
+    add_lineage_relation,
+    build_lineage_memory,
+    create_framework_proposal,
+    internalization_readiness,
+    record_internalization_decision,
+)
 from .manifest import validate_manifest
 from .meeting import export_meeting_report
 from .next_action import compute_next_action
@@ -119,6 +127,8 @@ policy_app = typer.Typer(help="Inspect and lint research policies.")
 budget_app = typer.Typer(help="Reserve, reconcile, and inspect research budget.")
 memo_app = typer.Typer(help="Generate daily research memos.")
 external_app = typer.Typer(help="Acquire external repositories and method resources with provenance.")
+lineage_app = typer.Typer(help="Manage generic research lineage records.")
+internalization_app = typer.Typer(help="Plan and audit generic internalization readiness.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -138,6 +148,8 @@ app.add_typer(policy_app, name="policy")
 app.add_typer(budget_app, name="budget")
 app.add_typer(memo_app, name="memo")
 app.add_typer(external_app, name="external")
+app.add_typer(lineage_app, name="lineage")
+app.add_typer(internalization_app, name="internalization")
 console = Console()
 
 
@@ -800,6 +812,158 @@ def external_analyze_repo_cmd(name: str, target: Path = typer.Option(Path("."), 
 
     result = analyze_external_repo(paths(target), name)
     console.print_json(data=result)
+
+
+@lineage_app.command("add-external-asset")
+def lineage_add_external_asset_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    source: str = typer.Option(..., "--source"),
+    title: str = typer.Option("", "--title"),
+    asset_type: str = typer.Option("external_repo", "--asset-type"),
+    purpose: str = typer.Option("reference_implementation", "--purpose"),
+    credibility: str = typer.Option("unknown", "--credibility"),
+    license_or_restrictions: str = typer.Option("", "--license"),
+    dependency_mode: str = typer.Option("unknown", "--dependency-mode"),
+    replacement_plan: str = typer.Option("", "--replacement-plan"),
+) -> None:
+    """Register an external asset with purpose, restrictions, and dependency mode."""
+
+    result = add_external_asset(
+        paths(target),
+        source=source,
+        title=title,
+        asset_type=asset_type,
+        purpose=purpose,
+        credibility=credibility,
+        license_or_restrictions=license_or_restrictions,
+        dependency_mode=dependency_mode,
+        replacement_plan=replacement_plan,
+    )
+    console.print_json(data=result)
+
+
+@lineage_app.command("link")
+def lineage_link_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    source_id: str = typer.Option(..., "--source-id"),
+    target_id: str = typer.Option(..., "--target-id"),
+    relation_type: str = typer.Option(..., "--relation-type"),
+    rationale: str = typer.Option("", "--rationale"),
+) -> None:
+    """Create a generic lineage relation between assets, ideas, proposals, and evidence."""
+
+    console.print_json(data=add_lineage_relation(paths(target), source_id=source_id, target_id=target_id, relation_type=relation_type, rationale=rationale))
+
+
+@internalization_app.command("decision")
+def internalization_decision_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    internalize_what: str = typer.Option(..., "--internalize-what"),
+    why_now: str = typer.Option(..., "--why-now"),
+    expected_benefit: str = typer.Option(..., "--expected-benefit"),
+    downstream_src_target: str = typer.Option(..., "--downstream-src-target"),
+    baseline_comparison: str = typer.Option(..., "--baseline-comparison"),
+    rollback_plan: str = typer.Option(..., "--rollback-plan"),
+    proposal_id: str = typer.Option("", "--proposal-id"),
+    hypothesis_id: str = typer.Option("", "--hypothesis-id"),
+    asset_id: str = typer.Option("", "--asset-id"),
+    risk: list[str] = typer.Option([], "--risk"),
+    new_script: list[str] = typer.Option([], "--new-script"),
+    adapter_capability_impact: str = typer.Option("", "--adapter-capability-impact"),
+    evidence_id: list[str] = typer.Option([], "--evidence-id"),
+    status: str = typer.Option("proposed", "--status"),
+) -> None:
+    """Record a structured internalization decision argument."""
+
+    result = record_internalization_decision(
+        paths(target),
+        internalize_what=internalize_what,
+        why_now=why_now,
+        expected_benefit=expected_benefit,
+        downstream_src_target=downstream_src_target,
+        baseline_comparison=baseline_comparison,
+        rollback_plan=rollback_plan,
+        proposal_id=proposal_id,
+        hypothesis_id=hypothesis_id,
+        asset_id=asset_id,
+        risks=risk,
+        new_scripts_needed=new_script,
+        adapter_capability_impact=adapter_capability_impact,
+        evidence_ids=evidence_id,
+        status=status,
+    )
+    console.print_json(data=result)
+
+
+@internalization_app.command("propose")
+def internalization_propose_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    title: str = typer.Option(..., "--title"),
+    hypothesis_id: str = typer.Option(..., "--hypothesis-id"),
+    asset_id: str = typer.Option(..., "--asset-id"),
+    design_summary: str = typer.Option(..., "--design-summary"),
+    module_design: str = typer.Option(..., "--module-design"),
+    data_flow: str = typer.Option(..., "--data-flow"),
+    metrics_schema_ref: str = typer.Option(..., "--metrics-schema-ref"),
+    external_baseline_asset_id: str = typer.Option(..., "--external-baseline-asset-id"),
+    rollback_strategy: str = typer.Option(..., "--rollback-strategy"),
+    minimal_scope: str = typer.Option(..., "--minimal-scope"),
+    downstream_src_target: str = typer.Option(..., "--downstream-src-target"),
+    remaining_upside: str = typer.Option(..., "--remaining-upside"),
+    interface: list[str] = typer.Option([], "--interface"),
+    training_entrypoint: str = typer.Option("", "--training-entrypoint"),
+    evaluation_entrypoint: str = typer.Option("", "--evaluation-entrypoint"),
+    expected_ablation: list[str] = typer.Option([], "--expected-ablation"),
+    trusted_evidence_id: list[str] = typer.Option([], "--trusted-evidence-id"),
+    scout_evidence_id: list[str] = typer.Option([], "--scout-evidence-id"),
+    status: str = typer.Option("proposed", "--status"),
+) -> None:
+    """Create a framework proposal for review before any owned implementation."""
+
+    result = create_framework_proposal(
+        paths(target),
+        title=title,
+        hypothesis_id=hypothesis_id,
+        asset_id=asset_id,
+        design_summary=design_summary,
+        module_design=module_design,
+        data_flow=data_flow,
+        metrics_schema_ref=metrics_schema_ref,
+        external_baseline_asset_id=external_baseline_asset_id,
+        rollback_strategy=rollback_strategy,
+        minimal_scope=minimal_scope,
+        downstream_src_target=downstream_src_target,
+        remaining_upside=remaining_upside,
+        interfaces=interface,
+        training_entrypoint=training_entrypoint,
+        evaluation_entrypoint=evaluation_entrypoint,
+        expected_ablations=expected_ablation,
+        trusted_evidence_ids=trusted_evidence_id,
+        scout_evidence_ids=scout_evidence_id,
+        status=status,
+    )
+    console.print_json(data=result)
+
+
+@internalization_app.command("readiness")
+def internalization_readiness_cmd(
+    proposal_id: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    target_level: str = typer.Option("shadow_internal", "--target-level"),
+) -> None:
+    """Evaluate whether a framework proposal can move to the requested internalization level."""
+
+    result = internalization_readiness(paths(target), proposal_id, target_level=target_level)
+    console.print_json(data=result)
+    if not result.get("can_transition"):
+        raise typer.Exit(1)
+
+
+@internalization_app.command("memory")
+def internalization_memory_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Render lineage-aware planning memory for future agent context."""
+
+    console.print_json(data=build_lineage_memory(paths(target)))
 
 
 @policy_app.command("lint")

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-05-31
+
+- Add generic research lineage registries for external assets, lineage
+  relations, internalization decisions, framework proposals, readiness audits,
+  and lineage-aware memory under `.vibe/research/lineage/`.
+- Add `vibe lineage` and `vibe internalization` commands to register external
+  baselines/references, record structured internalization decisions, create
+  framework proposals, evaluate readiness for `shadow_internal`, and render
+  planning memory.
+- Gate internalization readiness on trusted schema-valid evidence, external
+  baseline provenance, downstream source targets, metrics schema references,
+  minimal internal module scope, remaining upside, and no skipped
+  internalization levels.
+
 ## 0.8.60 - 2026-05-31
 
 - Add `vibe research sustained-selftest` as an operator-visible end-to-end
