@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-05-31
+
+- Add `vibe owned` commands for proposal-bound owned-framework alpha scaffold
+  generation, contract checks, shadow execution plans, and design-to-code
+  audits.
+- Generate downstream `src/<framework>/`, config, tests, docs, metrics export,
+  artifact output, and baseline comparison hooks only from approved framework
+  proposals, without overwriting user code or violating `AGENTS.md` path
+  constraints.
+- Add internal capability draft records for owned alpha scaffolds and audit
+  hidden external-core calls as `wrapped_external` instead of owned core.
+
 ## 0.9.2 - 2026-05-31
 
 - Add dual-track portfolio records for `external`, `internal`, and `hybrid`

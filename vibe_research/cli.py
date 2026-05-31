@@ -69,6 +69,7 @@ from .internalization import (
 from .manifest import validate_manifest
 from .meeting import export_meeting_report
 from .next_action import compute_next_action
+from .owned import owned_contract, owned_design_audit, owned_shadow_plan, scaffold_owned_framework
 from .papers import add_paper, auto_method_search, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
 from .portal import build_portal
@@ -132,6 +133,7 @@ external_app = typer.Typer(help="Acquire external repositories and method resour
 lineage_app = typer.Typer(help="Manage generic research lineage records.")
 internalization_app = typer.Typer(help="Plan and audit generic internalization readiness.")
 scout_app = typer.Typer(help="Triage scout findings into evidence-grade research inputs.")
+owned_app = typer.Typer(help="Generate and audit downstream owned framework alpha scaffolds.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -154,6 +156,7 @@ app.add_typer(external_app, name="external")
 app.add_typer(lineage_app, name="lineage")
 app.add_typer(internalization_app, name="internalization")
 app.add_typer(scout_app, name="scout")
+app.add_typer(owned_app, name="owned")
 console = Console()
 
 
@@ -1153,6 +1156,59 @@ def scout_audit_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) ->
     """Summarize scout quality, actionable evidence, claims, and negative evidence."""
 
     console.print_json(data=scout_audit(paths(target)))
+
+
+@owned_app.command("scaffold")
+def owned_scaffold_cmd(
+    proposal_id: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    framework_name: str = typer.Option("", "--framework-name"),
+    allow_overwrite: bool = typer.Option(False, "--allow-overwrite"),
+) -> None:
+    """Generate a downstream owned-framework alpha scaffold from an approved proposal."""
+
+    result = scaffold_owned_framework(paths(target), proposal_id, framework_name=framework_name, allow_overwrite=allow_overwrite)
+    console.print_json(data=result)
+    if result.get("status") != "created":
+        raise typer.Exit(1)
+
+
+@owned_app.command("contract")
+def owned_contract_cmd(
+    framework_name: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Run owned-framework alpha contract checks."""
+
+    result = owned_contract(paths(target), framework_name)
+    console.print_json(data=result)
+    if not result.get("passed"):
+        raise typer.Exit(1)
+
+
+@owned_app.command("shadow-plan")
+def owned_shadow_plan_cmd(
+    proposal_id: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    sample_scope: str = typer.Option("small_sample", "--sample-scope"),
+) -> None:
+    """Create a shadow execution plan that keeps the external baseline."""
+
+    console.print_json(data=owned_shadow_plan(paths(target), proposal_id, sample_scope=sample_scope))
+
+
+@owned_app.command("audit")
+def owned_audit_cmd(
+    framework_name: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    proposal_id: str = typer.Option("", "--proposal-id"),
+) -> None:
+    """Audit owned code against proposal, dependency, schema, and external-call rules."""
+
+    result = owned_design_audit(paths(target), framework_name, proposal_id=proposal_id)
+    console.print_json(data=result)
+    if not result.get("owned_core_allowed"):
+        raise typer.Exit(1)
 
 
 @policy_app.command("lint")
