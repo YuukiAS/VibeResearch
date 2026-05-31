@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.50" in show.output
+    assert "0.8.51" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -2197,6 +2197,44 @@ def test_v0847_slurm_poll_timeout_returns_unknown_not_hang(tmp_path: Path, monke
     assert poll.finished is False
     assert poll.details["poll_timeout"] is True
     assert poll.details["command"] == "squeue"
+
+
+def test_v0851_squeue_socket_error_returns_unknown_without_sacct(tmp_path: Path, monkeypatch):
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args[0])
+        if args[:3] == ["scontrol", "show", "job"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"JobId=123 WorkDir={tmp_path}\n", stderr="")
+        if args[:2] == ["squeue", "-j"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="Error creating slurm stream socket: Operation not permitted\n")
+        raise AssertionError(f"unexpected call: {args}")
+
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    backend = SlurmBackend(VibePaths(tmp_path), {"execution": {"slurm": {}}})
+    poll = backend.poll({"job_id": "123", "backend": "slurm", "launch_workdir": str(tmp_path), "resource_request": {"time": "01:00:00"}})
+    assert poll.status == "unknown"
+    assert poll.finished is False
+    assert poll.details["reason"] == "slurm_query_unavailable"
+    assert calls == ["scontrol", "squeue"]
+
+
+def test_v0851_empty_sacct_record_returns_unknown_not_finished(tmp_path: Path, monkeypatch):
+    def fake_run(args, **kwargs):
+        if args[:3] == ["scontrol", "show", "job"]:
+            return subprocess.CompletedProcess(args, 0, stdout=f"JobId=123 WorkDir={tmp_path}\n", stderr="")
+        if args[:2] == ["squeue", "-j"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:2] == ["sacct", "-j"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("vibe_research.backends.subprocess.run", fake_run)
+    backend = SlurmBackend(VibePaths(tmp_path), {"execution": {"slurm": {}}})
+    poll = backend.poll({"job_id": "123", "backend": "slurm", "launch_workdir": str(tmp_path), "resource_request": {"time": "01:00:00"}})
+    assert poll.status == "unknown"
+    assert poll.finished is False
+    assert poll.details["reason"] == "slurm_accounting_record_unavailable"
 
 
 def test_v0824_slurm_wait_policy_defaults_and_naive_start_is_local(tmp_path: Path, monkeypatch):

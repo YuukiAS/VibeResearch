@@ -178,6 +178,17 @@ class SlurmBackend(ExecutionBackend):
             sq = subprocess.run(["squeue", "-j", job_id, "-h", "-o", "%T|%R"], text=True, capture_output=True, check=False, timeout=10)
         except subprocess.TimeoutExpired as exc:
             return PollResult("unknown", False, {"poll_timeout": True, "command": "squeue", "error": str(exc), **workdir_check})
+        if sq.returncode != 0 and slurm_query_unavailable(sq.stderr + "\n" + sq.stdout):
+            return PollResult(
+                "unknown",
+                False,
+                {
+                    "reason": "slurm_query_unavailable",
+                    "squeue_stdout": sq.stdout.strip(),
+                    "squeue_stderr": sq.stderr.strip(),
+                    **workdir_check,
+                },
+            )
         if sq.returncode == 0 and sq.stdout.strip():
             state, _, reason = sq.stdout.strip().partition("|")
             details = {"squeue_state": state, "reason": reason}
@@ -188,6 +199,10 @@ class SlurmBackend(ExecutionBackend):
         except subprocess.TimeoutExpired as exc:
             return PollResult("unknown", False, {"poll_timeout": True, "command": "sacct", "error": str(exc), **workdir_check})
         details = {"sacct_stdout": sacct.stdout, "sacct_stderr": sacct.stderr}
+        if sacct.returncode != 0 or not sacct.stdout.strip():
+            details["reason"] = "slurm_accounting_record_unavailable"
+            details.update(workdir_check)
+            return PollResult("unknown", False, details)
         status = "finished"
         if "FAILED" in sacct.stdout:
             status = "failed"
@@ -220,6 +235,16 @@ def parse_sbatch_job_id(stdout: str) -> str:
         if token.isdigit():
             return token
     return stdout.strip().splitlines()[-1].strip() if stdout.strip() else ""
+
+
+def slurm_query_unavailable(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        "operation not permitted" in lowered
+        or "unable to contact slurm controller" in lowered
+        or "connect failure" in lowered
+        or "error creating slurm stream socket" in lowered
+    )
 
 
 def slurm_workdir_check(job_id: str, launch: dict[str, Any], target_root: Path) -> dict[str, Any]:

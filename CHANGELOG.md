@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.51 - 2026-05-31
+
+- Treat Slurm socket/controller query failures as non-terminal
+  `status=unknown` poll results, preserving query stdout/stderr and avoiding
+  fall-through to accounting.
+- When a job is absent from `squeue` and `sacct` has no record or fails,
+  return non-terminal `slurm_accounting_record_unavailable` instead of marking
+  the job finished.
+
 ## 0.8.50 - 2026-05-31
 
 - Add a next-action guard for empty preplanned cycles: when all active jobs
