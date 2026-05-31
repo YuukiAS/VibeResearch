@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.8.44 - 2026-05-31
+
+- Clear stale `blocked_missing_decision` next-action blocks when the referenced
+  run or cycle belongs to a cycle that already has reflection and revision
+  artifacts.
+- Treat blocked runs with a non-counting classification as terminal for this
+  stale-block cleanup path, and let abandoned closed cycles continue to the
+  next planning cycle.
+
 ## 0.8.43 - 2026-05-31
 
 - Guard metric collection for dry-submitted launches: `collect` now ignores

@@ -246,7 +246,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.43" in show.output
+    assert "0.8.44" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1769,6 +1769,66 @@ def test_v0841_sustained_audit_blocks_on_unrepaired_real_experiment_failure(tmp_
     assert "real_experiment_repair_required" in audit["issues"]
     assert audit["real_experiment_progress"]["repair_blockers"][0]["run_id"] == "r001_failed"
     assert audit["next_action"] == "repair or classify non-counting real experiment failures before planning another round"
+
+
+def test_v0844_next_clears_stale_noncounting_run_block_after_cycle_revision(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    cycle_dir = tmp_path / ".vibe" / "cycles" / "c001"
+    cycle_dir.mkdir(parents=True, exist_ok=True)
+    (cycle_dir / "cycle_reflect.md").write_text("reflected\n")
+    (cycle_dir / "cycle_revised_plan.md").write_text("revised\n")
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state.update(
+        {
+            "status": "blocked_missing_decision",
+            "blocked_reason": "same decision repeated 2 times: blocked_missing_decision",
+            "next_action": "vibe decision show r001_noncounting",
+            "current_cycle_id": "c001",
+            "cycles": {"c001": {"status": "reviewed"}},
+            "runs": {
+                "r001_noncounting": {
+                    "run_id": "r001_noncounting",
+                    "cycle_id": "c001",
+                    "status": "blocked",
+                    "non_counting_classification": "non_counting_execution_failure:failed",
+                }
+            },
+        }
+    )
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "Blocked:" not in result.output
+    assert "vibe plan-cycle" in result.output
+
+
+def test_v0844_next_clears_stale_cycle_block_after_abandoned_cycle_revision(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    cycle_dir = tmp_path / ".vibe" / "cycles" / "c009"
+    cycle_dir.mkdir(parents=True, exist_ok=True)
+    (cycle_dir / "cycle_reflect.md").write_text("reflected\n")
+    (cycle_dir / "cycle_revised_plan.md").write_text("revised\n")
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state.update(
+        {
+            "status": "blocked_missing_decision",
+            "blocked_reason": "same decision repeated 2 times: blocked_missing_decision",
+            "next_action": "vibe decision show c009",
+            "current_cycle_id": "c009",
+            "cycles": {"c009": {"status": "reviewed"}},
+            "runs": {
+                "r001_abandoned": {"run_id": "r001_abandoned", "cycle_id": "c009", "status": "abandoned"},
+                "r002_abandoned": {"run_id": "r002_abandoned", "cycle_id": "c009", "status": "abandoned"},
+            },
+        }
+    )
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "Blocked:" not in result.output
+    assert "vibe plan-cycle" in result.output
 
 
 def test_v0833_render_sbatch_uses_explicit_partition_specific_gres(tmp_path: Path):
