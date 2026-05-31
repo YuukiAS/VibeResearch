@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.3" in show.output
+    assert "0.10.4" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1140,6 +1140,27 @@ def test_v070_anti_loop_detects_repeated_decisions_and_zero_metrics(tmp_path: Pa
     assert apply_loop_guard(paths, run_id)
     decision = read_json(second / ".vibe" / "runs" / run_id / "decision.json", {})
     assert decision["decision_type"] == "blocked_repeating_evidence"
+
+
+def test_v0104_loop_guard_scopes_repeated_decisions_to_same_run(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    paths = VibePaths(tmp_path)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["runs"] = {"r001": {"run_id": "r001", "status": "revised"}, "r002": {"run_id": "r002", "status": "revised"}}
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    for run_id in ["r001", "r002"]:
+        (tmp_path / ".vibe" / "runs" / run_id).mkdir(parents=True, exist_ok=True)
+        write_run_decision(tmp_path, run_id)
+    assert not apply_loop_guard(paths, "r002")
+
+
+def test_v0104_loop_guard_allows_repeated_collect_for_valid_metrics(tmp_path: Path):
+    run_id = prepare_toy_run(tmp_path)
+    paths = VibePaths(tmp_path)
+    write_json(tmp_path / ".vibe" / "runs" / run_id / "metrics.json", {"schema_valid": True, "metrics": {"primary": 1.0}})
+    write_run_decision(tmp_path, run_id)
+    write_run_decision(tmp_path, run_id)
+    assert not apply_loop_guard(paths, run_id)
 
 
 def test_literature_and_deep_research_interfaces(tmp_path: Path):

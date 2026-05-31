@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.10.4 - 2026-05-31
+
+- Scope repeated decision loop-guard checks to the same target instead of
+  treating sibling route decisions as a global repeated loop.
+- Allow repeated run-level `collect_more_metrics` when the run already has
+  schema-valid collected metrics, preserving the evidence for cycle-level
+  comparison.
+- Keep true repeated evidence blockers for the same target without valid
+  metrics and for repeated untrusted zero-metric history.
+
 ## 0.10.3 - 2026-05-31
 
 - Fall back from `squeue` timeout/socket/controller failures to `sacct` when

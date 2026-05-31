@@ -17,12 +17,16 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
 
 
-def detect_repeating_evidence(paths: VibePaths) -> tuple[bool, str]:
+def detect_repeating_evidence(paths: VibePaths, target_id: str = "") -> tuple[bool, str]:
     config = load_config(paths)
     threshold = int(config.get("loop_guard", {}).get("repeated_threshold", 2))
     decisions = read_jsonl(paths.state / "decisions.jsonl")
-    recent_decisions = [row for row in decisions if row.get("decision_type") in {"collect_more_metrics", "blocked_missing_decision", "blocked_missing_adapter"}][-threshold:]
+    scoped = [row for row in decisions if not target_id or row.get("target_id") == target_id]
+    recent_decisions = [row for row in scoped if row.get("decision_type") in {"collect_more_metrics", "blocked_missing_decision", "blocked_missing_adapter"}][-threshold:]
     if len(recent_decisions) >= threshold and len({row.get("decision_type") for row in recent_decisions}) == 1:
+        decision_type = recent_decisions[-1].get("decision_type")
+        if decision_type == "collect_more_metrics" and target_id.startswith("r") and target_has_schema_valid_metrics(paths, target_id):
+            return False, ""
         return True, f"same decision repeated {threshold} times: {recent_decisions[-1].get('decision_type')}"
     state = read_json(paths.state / "state.json", {})
     runs = list(state.get("runs", {}).items())[-threshold:]
@@ -52,9 +56,18 @@ def detect_repeating_evidence(paths: VibePaths) -> tuple[bool, str]:
 
 
 def apply_loop_guard(paths: VibePaths, target_id: str) -> bool:
-    triggered, reason = detect_repeating_evidence(paths)
+    triggered, reason = detect_repeating_evidence(paths, target_id)
     if not triggered:
         return False
     write_block_decision(paths, target_id, reason, decision_type="blocked_repeating_evidence")
     record_event(paths, "blocked_repeating_evidence", reason, cycle_id=target_id if target_id.startswith("c") else "", run_id=target_id if target_id.startswith("r") else "", status="blocked_repeating_evidence")
     return True
+
+
+def target_has_schema_valid_metrics(paths: VibePaths, target_id: str) -> bool:
+    run_dir = paths.runs / target_id
+    for name in ["metrics.json", "analysis.json", "collect.json"]:
+        data = read_json(run_dir / name, {})
+        if isinstance(data, dict) and (data.get("schema_valid") is True or data.get("trusted") is True or data.get("metrics")):
+            return True
+    return False
