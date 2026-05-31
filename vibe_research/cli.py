@@ -51,6 +51,7 @@ from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .dashboard_site import build_dashboard_site, serve_dashboard_site
 from .decisions import decision_json, make_decision, validate_decision_file, write_block_decision, write_decision
 from .directions import set_direction_status
+from .external_resources import clone_external_repo
 from .git_ops import abandon_run, create_branch, git_available, git_current_branch, git_diff_text, merge_review, merge_run, protected_diff_paths
 from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
@@ -88,6 +89,7 @@ from .research_manager import (
     render_daily_memo,
     reserve_budget,
     research_init,
+    sustained_round_audit,
 )
 from .real_experiments import summarize_real_experiment_progress
 from .scheduler import collect as collect_run
@@ -114,6 +116,7 @@ portfolio_app = typer.Typer(help="Plan, schedule, and audit bounded experiment p
 policy_app = typer.Typer(help="Inspect and lint research policies.")
 budget_app = typer.Typer(help="Reserve, reconcile, and inspect research budget.")
 memo_app = typer.Typer(help="Generate daily research memos.")
+external_app = typer.Typer(help="Acquire external repositories and method resources with provenance.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -132,6 +135,7 @@ app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(policy_app, name="policy")
 app.add_typer(budget_app, name="budget")
 app.add_typer(memo_app, name="memo")
+app.add_typer(external_app, name="external")
 console = Console()
 
 
@@ -498,6 +502,18 @@ def research_audit_cmd(target: Path = typer.Option(Path("."), "--target", "-t"))
         raise typer.Exit(1)
 
 
+@research_app.command("sustained-audit")
+def research_sustained_audit_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    target_rounds: int = typer.Option(3, "--target-rounds"),
+    min_routes: int = typer.Option(3, "--min-routes"),
+) -> None:
+    """Audit multi-route, reflected, externally informed sustained rounds."""
+
+    result = sustained_round_audit(paths(target), target_rounds=target_rounds, min_routes_per_round=min_routes)
+    console.print_json(data=result)
+
+
 @research_app.command("answer")
 def research_answer_cmd(
     question_id: str = typer.Argument(...),
@@ -718,6 +734,21 @@ def portfolio_audit_cmd(target: Path = typer.Option(Path("."), "--target", "-t")
     result = research_portfolio_audit(paths(target))
     console.print_json(data=result)
     if not result.get("ok"):
+        raise typer.Exit(1)
+
+
+@external_app.command("clone-repo")
+def external_clone_repo_cmd(
+    url: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    name: str = typer.Option("", "--name"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Clone an external method repository into `.vibe/research/external_repos`."""
+
+    result = clone_external_repo(paths(target), url, name=name, dry_run=dry_run)
+    console.print_json(data=result)
+    if result.get("status") == "failed":
         raise typer.Exit(1)
 
 

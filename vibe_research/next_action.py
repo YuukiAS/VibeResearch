@@ -26,6 +26,8 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     readiness = adapter_readiness(paths)
     if state.get("project_brief_missing"):
         return "add project goal/background with vibe init --goal ... --background ...", "project_brief_missing"
+    if active_jobs_fragment_sustained_round(paths, active):
+        return "vibe monitor", ""
     if any(row.get("status") == "new" for row in read_jsonl(paths.ideas / "registry.jsonl")):
         return "vibe ideas triage", ""
     if any(row.get("status") == "needs_literature_refresh" for row in read_jsonl(paths.ideas / "registry.jsonl")):
@@ -132,6 +134,25 @@ def active_jobs_exhaust_capacity(paths: VibePaths, active: list[dict]) -> bool:
     if len(active) >= max_parallel:
         return True
     return active_gpu_count(active) >= max_gpu
+
+
+def active_jobs_fragment_sustained_round(paths: VibePaths, active: list[dict]) -> bool:
+    """Prefer monitoring over planning when active jobs look like a split attempted round."""
+
+    if not active:
+        return False
+    config = load_config(paths)
+    min_routes = int(config.get("research", {}).get("sustained_min_routes_per_round", 3) or 3)
+    if len(active) < min_routes:
+        return False
+    counts: dict[str, int] = {}
+    for job in active:
+        cycle_id = str(job.get("cycle_id") or "")
+        if cycle_id:
+            counts[cycle_id] = counts.get(cycle_id, 0) + 1
+    if len(counts) <= 1:
+        return False
+    return max(counts.values()) < min_routes
 
 
 def allow_prequeue_planning(paths: VibePaths, state: dict) -> bool:

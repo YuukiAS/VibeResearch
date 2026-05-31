@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.8.39 - 2026-05-31
+
+- Add sustained multi-route round support: default portfolio candidates now
+  diversify across active hypotheses and executable capabilities, deterministic
+  cycle synthesis can emit multi-capability resource plans, and `vibe next`
+  monitors fragmented active jobs before planning another cycle.
+- Make bounded method search cycle-aware: searches are deduplicated within one
+  context, rerun for new cycle contexts, and offline skips no longer block a
+  later online search.
+- Add richer cycle reflection/revision scaffolds, `vibe research sustained-audit`
+  for reflected multi-route round checks, and `vibe external clone-repo` to
+  acquire external repositories with provenance under `.vibe/research/`.
+
 ## 0.8.38 - 2026-05-31
 
 - Promote semantic onboarding decisions into the default initialization question

@@ -100,17 +100,23 @@ def auto_method_search(paths: VibePaths, *, offline: bool = False, force: bool =
     ensure_dir(paths.research)
     marker_path = paths.research / "auto_method_search.json"
     existing = read_json(marker_path, {})
-    if existing and not force:
-        return {**existing, "status": "already_done"}
+    context_id = method_search_context_id(paths)
+    searches = normalize_method_search_marker(existing)
+    context_record = searches.get(context_id, {})
+    context_status = str(context_record.get("status") or "")
+    if context_status and context_status != "skipped_offline" and not force:
+        return {**context_record, "status": "already_done", "context_id": context_id, "searches": searches}
     if offline:
-        result = {"status": "skipped_offline", "created_at": utc_now()}
-        write_json(marker_path, result)
+        result = {"status": "skipped_offline", "created_at": utc_now(), "context_id": context_id}
+        searches[context_id] = result
+        write_json(marker_path, {**result, "searches": searches})
         return result
     config = load_config(paths)
     research = config.get("research", {}) if isinstance(config.get("research"), dict) else {}
     if research.get("auto_method_search_enabled", True) is False:
-        result = {"status": "disabled", "created_at": utc_now()}
-        write_json(marker_path, result)
+        result = {"status": "disabled", "created_at": utc_now(), "context_id": context_id}
+        searches[context_id] = result
+        write_json(marker_path, {**result, "searches": searches})
         return result
     query = derive_method_search_query(paths)
     sources = research.get("auto_method_search_sources") or DEFAULT_AUTO_METHOD_SEARCH_SOURCES
@@ -123,6 +129,7 @@ def auto_method_search(paths: VibePaths, *, offline: bool = False, force: bool =
     result = {
         "status": "searched_with_errors" if errors and not ideas else "searched",
         "created_at": utc_now(),
+        "context_id": context_id,
         "query": query,
         "sources": sources,
         "limit": limit,
@@ -130,10 +137,29 @@ def auto_method_search(paths: VibePaths, *, offline: bool = False, force: bool =
         "error_count": len(errors),
         "idea_ids": [row.get("idea_id", "") for row in ideas],
     }
-    append_jsonl(paths.research / "sources.jsonl", {"created_at": result["created_at"], "source": "auto_method_search", "query": query, "results": all_results, "idea_ids": result["idea_ids"]})
-    write_json(marker_path, result)
+    append_jsonl(paths.research / "sources.jsonl", {"created_at": result["created_at"], "source": "auto_method_search", "context_id": context_id, "query": query, "results": all_results, "idea_ids": result["idea_ids"]})
+    searches[context_id] = result
+    write_json(marker_path, {**result, "searches": searches})
     record_event(paths, "auto_method_search", f"{len(all_results)} results for {query}", status=result["status"], payload=result)
     return result
+
+
+def method_search_context_id(paths: VibePaths) -> str:
+    state = read_json(paths.state / "state.json", {})
+    cycle_id = str(state.get("current_cycle_id") or "")
+    return cycle_id or "global"
+
+
+def normalize_method_search_marker(existing: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if not isinstance(existing, dict) or not existing:
+        return {}
+    searches = existing.get("searches")
+    if isinstance(searches, dict):
+        return {str(key): value for key, value in searches.items() if isinstance(value, dict)}
+    status = str(existing.get("status") or "")
+    if status in {"searched", "searched_with_errors", "disabled", "already_done"}:
+        return {"global": existing}
+    return {}
 
 
 def derive_method_search_query(paths: VibePaths) -> str:

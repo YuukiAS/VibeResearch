@@ -246,7 +246,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.38" in show.output
+    assert "0.8.39" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -427,6 +427,72 @@ def test_v080_portfolio_blocks_budget_and_duplicate_but_allows_changed_repeat(tm
     assert read_jsonl(tmp_path / ".vibe" / "research" / "budget_ledger.jsonl")
 
 
+def test_v0839_default_portfolio_candidates_cover_multiple_routes(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    manifest = load_adapter_manifest(VibePaths(tmp_path))
+    alt = manifest.capabilities[0].model_copy(deep=True)
+    alt.id = "toy-alt-metrics-export"
+    alt.supported_decisions = ["collect_more_metrics"]
+    alt.activation = {**alt.activation, "contract_test_result_id": "test-alt"}
+    manifest.capabilities.append(alt)
+    write_adapter_manifest(VibePaths(tmp_path), manifest)
+    assert invoke("hypothesis", "create", "first route", "--stage", "smoke", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("hypothesis", "create", "second route", "--stage", "smoke", "--target", str(tmp_path)).exit_code == 0
+    candidates = default_candidates(VibePaths(tmp_path))
+    assert len(candidates) >= 3
+    assert len({row["capability_id"] for row in candidates}) == 2
+    assert len({row["hypothesis_id"] for row in candidates}) >= 2
+
+
+def test_v0839_sustained_round_audit_requires_multiroute_reflected_rounds(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    assert invoke("hypothesis", "create", "first route", "--stage", "smoke", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("hypothesis", "create", "second route", "--stage", "smoke", "--target", str(tmp_path)).exit_code == 0
+    assert invoke("hypothesis", "create", "third route", "--stage", "smoke", "--target", str(tmp_path)).exit_code == 0
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["cycles"] = {f"c00{idx}": {"status": "revised"} for idx in range(1, 4)}
+    state["runs"] = {}
+    for cycle_idx in range(1, 4):
+        cycle = f"c00{cycle_idx}"
+        cycle_dir = tmp_path / ".vibe" / "cycles" / cycle
+        cycle_dir.mkdir(parents=True, exist_ok=True)
+        (cycle_dir / "cycle_reflect.md").write_text("# Cycle Reflect\n\n## Run comparison\n- compared\n\n## Route classification\n- classified\n")
+        (cycle_dir / "cycle_revised_plan.md").write_text("# Revised\n\n## Next-cycle diversity requirement\nmultiple routes\n")
+        for route_idx in range(1, 4):
+            run_id = f"r{cycle_idx}{route_idx:02d}_route"
+            state["runs"][run_id] = {
+                "cycle_id": cycle,
+                "status": "revised",
+                "direction_id": f"route_{route_idx}",
+                "run_kind": "real_experiment",
+                "backend": "local",
+                "adapter_metadata": {"task_type": "metrics_export", "capability_id": "toy-metrics-export"},
+            }
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    (tmp_path / ".vibe" / "research" / "sources.jsonl").write_text(json.dumps({"source": "test", "query": "method", "results": [{"title": "paper"}]}) + "\n")
+    result = invoke("research", "sustained-audit", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
+    assert audit["complete"] is True
+    assert audit["completed_round_count"] == 3
+
+
+def test_v0839_sustained_round_audit_flags_fragmented_active_jobs(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy").exit_code == 0
+    enable_toy_adapter(tmp_path)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["cycles"] = {"c001": {}, "c002": {}, "c003": {}}
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    write_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {"active": [{"cycle_id": "c001"}, {"cycle_id": "c002"}, {"cycle_id": "c003"}]})
+    result = invoke("research", "sustained-audit", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    audit = read_json(tmp_path / ".vibe" / "research" / "sustained_round_audit.json", {})
+    assert "active_jobs_fragmented_across_cycles_not_one_round" in audit["issues"]
+    assert audit["complete"] is False
+
+
 def test_v080_promotion_stop_require_trusted_evidence(tmp_path: Path):
     assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy").exit_code == 0
     assert invoke("hypothesis", "create", "untrusted idea", "--target", str(tmp_path)).exit_code == 0
@@ -510,6 +576,23 @@ def test_v081_policy_gate_archive_import_and_external_dogfood(tmp_path: Path):
     dogfood = read_json(out, {})
     assert dogfood["dry_run"] is True
     assert dogfood["issue_classes"]
+
+
+def test_v0839_external_clone_repo_records_provenance(tmp_path: Path):
+    target = tmp_path / "target"
+    assert invoke("init", "--target", str(target), "--goal", "Improve validation", "--background", "Toy", "--no-root-portal").exit_code == 0
+    source = tmp_path / "source_repo"
+    source.mkdir()
+    subprocess.run(["git", "init"], cwd=source, check=True, capture_output=True)
+    (source / "README.md").write_text("external method\n")
+    subprocess.run(["git", "add", "README.md"], cwd=source, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "init"], cwd=source, check=True, capture_output=True)
+    result = invoke("external", "clone-repo", str(source), "--target", str(target), "--name", "method-source")
+    assert result.exit_code == 0
+    assert (target / ".vibe" / "research" / "external_repos" / "method-source" / "README.md").exists()
+    rows = read_jsonl(target / ".vibe" / "research" / "external_repos.jsonl")
+    assert rows[-1]["status"] == "cloned"
+    assert rows[-1]["url"] == str(source)
 
 
 def test_v082_discovery_prunes_heavy_dirs_and_reports_limits(tmp_path: Path):
@@ -745,8 +828,14 @@ def test_cycle_run_queue_and_reflection_flow(tmp_path: Path):
     write_run_decision(tmp_path, run_id)
     assert invoke("revise-plan", run_id, "--offline", "--target", str(tmp_path)).exit_code == 0
     assert invoke("reflect-cycle", "c001", "--offline", "--target", str(tmp_path)).exit_code == 0
+    cycle_reflect = (tmp_path / ".vibe" / "cycles" / "c001" / "cycle_reflect.md").read_text()
+    assert "## Route classification" in cycle_reflect
+    assert "## External evidence consulted" in cycle_reflect
+    assert "## Next-round requirements" in cycle_reflect
     compile_toy_cycle(tmp_path)
     assert invoke("revise-cycle", "c001", "--offline", "--target", str(tmp_path), "--mode", "balanced").exit_code == 0
+    cycle_revised = (tmp_path / ".vibe" / "cycles" / "c001" / "cycle_revised_plan.md").read_text()
+    assert "## Next-cycle diversity requirement" in cycle_revised
     assert invoke("validate-hard-rules", "--target", str(tmp_path)).exit_code == 0
     assert (tmp_path / ".vibe" / "runs" / run_id / "revised_plan.md").read_text()
     assert "0.7" in (tmp_path / "VIBE_LEADERBOARD.md").read_text()
@@ -1194,6 +1283,43 @@ def test_auto_method_search_creates_candidate_ideas(tmp_path: Path, monkeypatch)
     again = auto_method_search(VibePaths(tmp_path))
     assert again["status"] == "already_done"
     assert len(read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")) == 1
+
+
+def test_v0839_auto_method_search_runs_once_per_cycle_context(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "CARE myocardium", "--background", "cardiac MRI", "--no-root-portal").exit_code == 0
+    calls = []
+
+    def fake_search(paths, query, *, source="arxiv", limit=10, offline=False, add_candidates=False):
+        calls.append((source, query))
+        return [{"title": f"Method {len(calls)}", "source_url": "https://example.test/paper", "source": source}]
+
+    monkeypatch.setattr("vibe_research.papers.paper_search", fake_search)
+    first = auto_method_search(VibePaths(tmp_path))
+    assert first["status"] == "searched"
+    again = auto_method_search(VibePaths(tmp_path))
+    assert again["status"] == "already_done"
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["current_cycle_id"] = "c999"
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    next_cycle = auto_method_search(VibePaths(tmp_path))
+    assert next_cycle["status"] == "searched"
+    marker = read_json(tmp_path / ".vibe" / "research" / "auto_method_search.json", {})
+    assert set(marker["searches"]) == {"global", "c999"}
+
+
+def test_v0839_offline_method_search_skip_does_not_block_later_online_search(tmp_path: Path, monkeypatch):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "CARE myocardium", "--background", "cardiac MRI", "--no-root-portal").exit_code == 0
+    skipped = auto_method_search(VibePaths(tmp_path), offline=True, force=True)
+    assert skipped["status"] == "skipped_offline"
+
+    def fake_search(paths, query, *, source="arxiv", limit=10, offline=False, add_candidates=False):
+        return [{"title": "Later Online Method", "source_url": "https://example.test/paper", "source": source}]
+
+    monkeypatch.setattr("vibe_research.papers.paper_search", fake_search)
+    online = auto_method_search(VibePaths(tmp_path), offline=False)
+    assert online["status"] == "searched"
+    ideas = read_jsonl(tmp_path / ".vibe" / "ideas" / "registry.jsonl")
+    assert any("Later Online Method" in row["raw_text"] for row in ideas)
 
 
 def test_auto_next_monitor_triggers_online_method_search(tmp_path: Path, monkeypatch):
@@ -2210,6 +2336,51 @@ def test_v0822_synthesized_decision_prefers_less_used_capability(tmp_path: Path)
     assert ok, message
     decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
     assert decision["selected_direction"] == "cap_b"
+
+
+def test_v0839_synthesized_cycle_decision_compiles_multiroute_capabilities(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy").exit_code == 0
+    enable_train_smoke_adapter(tmp_path)
+    paths = VibePaths(tmp_path)
+    manifest = load_adapter_manifest(paths)
+    base = manifest.capabilities[0]
+    for cap_id in ["train-smoke-b", "train-smoke-c"]:
+        cap = base.model_copy(deep=True)
+        cap.id = cap_id
+        cap.outputs = {"expected_output_path": f".vibe/{cap_id}.json", "metrics_file_path": f".vibe/{cap_id}.json"}
+        cap.artifact_rules.expected_outputs = [f".vibe/{cap_id}.json"]
+        cap.activation = {**cap.activation, "contract_test_result_id": cap_id}
+        manifest.capabilities.append(cap)
+        write_json(tmp_path / ".vibe" / "contract_tests" / f"{cap_id}.json", {"capability_id": cap_id, "status": "passed", "created_at": "test"})
+    write_adapter_manifest(paths, manifest)
+    (tmp_path / ".vibe" / "cycles" / "c001").mkdir(parents=True, exist_ok=True)
+    state = read_json(tmp_path / ".vibe" / "state" / "state.json", {})
+    state["current_cycle_id"] = "c001"
+    state["cycles"] = {"c001": {"status": "reviewed"}}
+    write_json(tmp_path / ".vibe" / "state" / "state.json", state)
+    ok, message = ensure_executable_resource_plan(paths, "c001")
+    assert ok, message
+    plan = read_yaml(tmp_path / ".vibe" / "cycles" / "c001" / "resource_plan.yaml", {})
+    assert set(plan["runs"]) == {"train-smoke", "train-smoke-b", "train-smoke-c"}
+    decision = read_json(tmp_path / ".vibe" / "cycles" / "c001" / "cycle_decision.json", {})
+    assert decision["resource_intent"]["source"] == "auto_compile_multi_route"
+
+
+def test_v0839_next_monitors_fragmented_active_sustained_round(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "Improve validation", "--background", "Toy", "--no-root-portal").exit_code == 0
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {
+            "active": [
+                {"run_id": "r001", "cycle_id": "c001", "resource_request": {"gpu": 1}, "status": "pending"},
+                {"run_id": "r002", "cycle_id": "c002", "resource_request": {"gpu": 1}, "status": "pending"},
+                {"run_id": "r003", "cycle_id": "c003", "resource_request": {"gpu": 1}, "status": "pending"},
+            ]
+        },
+    )
+    result = invoke("next", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    assert "vibe monitor" in result.output
 
 
 def test_v0823_auto_cycle_stops_after_single_monitor(monkeypatch, tmp_path: Path):

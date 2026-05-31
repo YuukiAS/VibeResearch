@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .adapters import get_adapter, validate_compiled_plan
+from .config import load_config
 from .decisions import BLOCK_DECISIONS, EXECUTABLE_DECISIONS, ResearchDecision, load_decision, make_decision, write_block_decision, write_decision
 from .io import read_json, read_yaml, utc_now, write_json, write_yaml
 from .paths import VibePaths
@@ -155,6 +156,33 @@ def synthesize_cycle_decision(paths: VibePaths, cycle_id: str) -> ResearchDecisi
             blocking_questions=["complete adapter_real_experiment_gaps.md"],
             confidence="blocked",
             provenance={"source": "deterministic_auto_compile"},
+        )
+    config = load_config(paths)
+    min_routes = int(config.get("research", {}).get("sustained_min_routes_per_round", 3) or 3)
+    by_decision: dict[str, list[Any]] = {}
+    for cap in active_real:
+        decision_type = select_executable_decision_for_capability(cap)
+        if decision_type:
+            by_decision.setdefault(decision_type, []).append(cap)
+    multi_route_groups = [group for group in by_decision.values() if len(group) >= min_routes]
+    if multi_route_groups:
+        group = sorted(multi_route_groups, key=lambda rows: (-len(rows), rows[0].id))[0]
+        caps = sorted(group, key=lambda cap: cap.id)
+        decision_type = select_executable_decision_for_capability(caps[0])
+        return make_decision(
+            paths,
+            cycle_id,
+            decision_type,
+            rationale="deterministic multi-route cycle decision synthesized from active real-experiment adapter capabilities",
+            selected_direction="",
+            required_action="run a bounded multi-route portfolio across active capabilities",
+            resource_intent={
+                "capability_ids": [cap.id for cap in caps],
+                "task_type": caps[0].task_type,
+                "source": "auto_compile_multi_route",
+                "min_routes_per_round": min_routes,
+            },
+            provenance={"source": "deterministic_auto_compile_multi_route", "capability_ids": [cap.id for cap in caps]},
         )
     run_counts = capability_run_counts(paths)
     capability = sorted(active_real, key=lambda cap: (run_counts.get(cap.id, 0), int(cap.resources.default.get("gpu", 0) or 0), cap.id))[0]

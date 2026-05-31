@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .adapter_onboarding import adapter_readiness
 from .adapter_schema import load_adapter_manifest
+from .config import load_config
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, utc_now, write_json, write_text, write_yaml
 from .paths import VibePaths
 from .promotion import select_executable_decision_for_capability
@@ -530,6 +531,131 @@ def research_readiness(paths: VibePaths) -> dict[str, Any]:
         "adapter_ready": adapter.get("ready_for_real_experiments", False),
         "adapter_maturity": adapter.get("maturity_level", "missing"),
     }
+
+
+def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_routes_per_round: int = 3) -> dict[str, Any]:
+    """Audit sustained multi-route progress instead of raw concurrent job count."""
+
+    state = read_json(paths.state / "state.json", {})
+    config = load_config(paths)
+    manifest = load_adapter_manifest(paths)
+    active_caps = [cap for cap in manifest.capabilities if cap.status == "active" and select_executable_decision_for_capability(cap)]
+    candidates = default_candidates(paths)
+    cycles = state.get("cycles", {}) if isinstance(state.get("cycles"), dict) else {}
+    runs = state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}
+    active_jobs = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
+    cycle_rows = [audit_cycle_round(paths, cycle_id, runs, min_routes_per_round) for cycle_id in sorted(cycles)]
+    completed_rounds = [row for row in cycle_rows if row["round_complete"]]
+    active_cycle_counts: dict[str, int] = defaultdict(int)
+    for job in active_jobs:
+        cycle_id = str(job.get("cycle_id") or "")
+        if cycle_id:
+            active_cycle_counts[cycle_id] += 1
+
+    issues: list[str] = []
+    portfolio_cfg = config.get("portfolio", {}) if isinstance(config.get("portfolio"), dict) else {}
+    if int(portfolio_cfg.get("max_runs_per_cycle", 0) or 0) < min_routes_per_round:
+        issues.append("portfolio_max_runs_per_cycle_below_min_routes")
+    if len(candidates) < min_routes_per_round:
+        issues.append("default_portfolio_generates_too_few_routes")
+    if active_jobs and max(active_cycle_counts.values() or [0]) < min_routes_per_round and len(active_jobs) >= min_routes_per_round:
+        issues.append("active_jobs_fragmented_across_cycles_not_one_round")
+    source_rows = read_jsonl(paths.research / "sources.jsonl")
+    external_repo_rows = read_jsonl(paths.research / "external_repos.jsonl")
+    method_marker = read_json(paths.research / "auto_method_search.json", {})
+    if not source_rows and not external_repo_rows and not method_marker:
+        issues.append("no_external_resource_provenance_recorded")
+
+    result = {
+        "created_at": utc_now(),
+        "target_rounds": target_rounds,
+        "min_routes_per_round": min_routes_per_round,
+        "completed_round_count": len(completed_rounds),
+        "complete": len(completed_rounds) >= target_rounds and not issues,
+        "issues": issues,
+        "framework_capabilities": {
+            "active_executable_capabilities": [cap.id for cap in active_caps],
+            "default_candidate_count": len(candidates),
+            "portfolio_max_runs_per_cycle": portfolio_cfg.get("max_runs_per_cycle"),
+            "external_search_contexts": sorted((method_marker.get("searches") or {}).keys()) if isinstance(method_marker.get("searches"), dict) else [],
+            "external_source_records": len(source_rows),
+            "external_repo_records": len(external_repo_rows),
+        },
+        "active_jobs_by_cycle": dict(sorted(active_cycle_counts.items())),
+        "cycles": cycle_rows,
+        "completed_rounds": completed_rounds,
+        "next_action": sustained_round_next_action(len(completed_rounds), target_rounds, issues, active_jobs),
+    }
+    write_json(paths.research / "sustained_round_audit.json", result)
+    write_text(paths.research / "sustained_round_audit.md", render_sustained_round_audit(result))
+    append_research_event(paths, "sustained_round_audit", {"complete": result["complete"], "issues": issues, "completed_round_count": len(completed_rounds)})
+    return result
+
+
+def audit_cycle_round(paths: VibePaths, cycle_id: str, runs: dict[str, Any], min_routes_per_round: int) -> dict[str, Any]:
+    cycle_runs = {run_id: run for run_id, run in runs.items() if isinstance(run, dict) and run.get("cycle_id") == cycle_id}
+    route_ids = {
+        str(run.get("direction_id") or (run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}).get("capability_id") or run_id)
+        for run_id, run in cycle_runs.items()
+    }
+    capability_ids = {
+        str(run.get("adapter_metadata", {}).get("capability_id") or "")
+        for run in cycle_runs.values()
+        if isinstance(run.get("adapter_metadata"), dict)
+    }
+    terminal_statuses = {"collected", "reflected", "revised", "merged", "abandoned", "cancelled", "failed", "timeout"}
+    all_finished = bool(cycle_runs) and all(str(run.get("status", "")) in terminal_statuses for run in cycle_runs.values())
+    reflect_path = paths.cycles / cycle_id / "cycle_reflect.md"
+    revised_path = paths.cycles / cycle_id / "cycle_revised_plan.md"
+    reflect_text = reflect_path.read_text(errors="ignore") if reflect_path.exists() else ""
+    revised_text = revised_path.read_text(errors="ignore") if revised_path.exists() else ""
+    has_reflection = "## Run comparison" in reflect_text and "## Route classification" in reflect_text
+    has_revision = "## Next-cycle diversity requirement" in revised_text
+    route_count = len(route_ids)
+    return {
+        "cycle_id": cycle_id,
+        "run_count": len(cycle_runs),
+        "route_count": route_count,
+        "capability_count": len({item for item in capability_ids if item}),
+        "all_runs_finished": all_finished,
+        "has_cycle_reflection": has_reflection,
+        "has_cycle_revision": has_revision,
+        "round_complete": route_count >= min_routes_per_round and all_finished and has_reflection and has_revision,
+    }
+
+
+def sustained_round_next_action(completed_count: int, target_rounds: int, issues: list[str], active_jobs: list[dict[str, Any]]) -> str:
+    if completed_count >= target_rounds and not issues:
+        return "sustained round target met"
+    if active_jobs:
+        return "monitor active jobs, then collect metrics and run cycle reflection/revision before planning the next round"
+    if "default_portfolio_generates_too_few_routes" in issues:
+        return "create or promote more hypotheses/capabilities before scheduling the next portfolio"
+    return "plan the next multi-route portfolio, then audit again after reflection/revision"
+
+
+def render_sustained_round_audit(result: dict[str, Any]) -> str:
+    lines = [
+        "# Sustained Round Audit",
+        "",
+        f"Complete: `{result.get('complete')}`",
+        f"Completed rounds: `{result.get('completed_round_count')}` / `{result.get('target_rounds')}`",
+        f"Minimum routes per round: `{result.get('min_routes_per_round')}`",
+        f"Next action: {result.get('next_action')}",
+        "",
+        "## Issues",
+    ]
+    lines.extend([f"- `{issue}`" for issue in result.get("issues", [])] or ["- none"])
+    lines.extend(["", "## Cycles"])
+    for row in result.get("cycles", []):
+        lines.append(
+            f"- `{row['cycle_id']}` runs={row['run_count']} routes={row['route_count']} "
+            f"finished={row['all_runs_finished']} reflected={row['has_cycle_reflection']} "
+            f"revised={row['has_cycle_revision']} complete={row['round_complete']}"
+        )
+    if not result.get("cycles"):
+        lines.append("- none")
+    return "\n".join(lines) + "\n"
 
 
 def policy_completeness(paths: VibePaths) -> dict[str, Any]:
@@ -1200,20 +1326,33 @@ def default_candidates(paths: VibePaths) -> list[dict[str, Any]]:
     )
     if not hypotheses or not caps:
         return []
-    capability = caps[0]
-    decision_type = select_executable_decision_for_capability(capability)
-    return [
-        {
-            "hypothesis_id": hypotheses[0]["hypothesis_id"],
-            "design_summary": hypotheses[0].get("next_testable_change") or hypotheses[0].get("title", "next bounded experiment"),
-            "stage": hypotheses[0].get("current_stage", "smoke"),
-            "capability_id": capability.id,
-            "decision_type": decision_type,
-            "expected_evidence": {"kind": "schema_valid_metrics"},
-            "resource_units": {"gpu_hours": 0.0, "cpu_hours": 0.1},
-            "rationale": "default bounded diagnostic candidate",
-        }
-    ]
+    config = load_config(paths)
+    portfolio_cfg = config.get("portfolio", {}) if isinstance(config.get("portfolio"), dict) else {}
+    research_cfg = config.get("research", {}) if isinstance(config.get("research"), dict) else {}
+    max_candidates = int(research_cfg.get("portfolio_candidate_count", portfolio_cfg.get("max_runs_per_cycle", 6)) or 6)
+    candidates: list[dict[str, Any]] = []
+    for hypothesis in hypotheses:
+        for capability in caps:
+            decision_type = select_executable_decision_for_capability(capability)
+            if not decision_type:
+                continue
+            base_change = hypothesis.get("next_testable_change") or hypothesis.get("title", "next bounded experiment")
+            candidates.append(
+                {
+                    "hypothesis_id": hypothesis["hypothesis_id"],
+                    "design_summary": f"{base_change} via {capability.id}",
+                    "stage": hypothesis.get("current_stage", "smoke"),
+                    "capability_id": capability.id,
+                    "decision_type": decision_type,
+                    "expected_evidence": {"kind": "schema_valid_metrics"},
+                    "resource_units": {"gpu_hours": 0.0, "cpu_hours": 0.1},
+                    "changed_variable": capability.id,
+                    "rationale": "default diversified bounded candidate across active hypotheses and capabilities",
+                }
+            )
+            if len(candidates) >= max_candidates:
+                return candidates
+    return candidates
 
 
 def portfolio_schedule(paths: VibePaths) -> dict[str, Any]:

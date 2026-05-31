@@ -119,9 +119,35 @@ def reflect_cycle(paths: VibePaths, cycle_id: str, *, keep_existing: bool = Fals
     state = read_json(paths.state / "state.json", {})
     runs = [run_id for run_id, run in state.get("runs", {}).items() if run.get("cycle_id") == cycle_id]
     body = "\n".join(f"- {run_id}: {state['runs'][run_id].get('status')}" for run_id in runs) or "- none"
+    classification = render_cycle_route_classification(paths, state, runs)
+    external = render_recent_external_evidence(paths)
     reflect_path = paths.cycles / cycle_id / "cycle_reflect.md"
-    if not keep_existing or not reflect_path.exists() or not reflect_path.read_text().strip():
-        write_text(reflect_path, f"# Cycle Reflect for {cycle_id}\n\n## Run comparison\n{body}\n")
+    existing_text = reflect_path.read_text() if reflect_path.exists() else ""
+    if not keep_existing or not reflect_path.exists() or not existing_text.strip():
+        write_text(
+            reflect_path,
+            f"# Cycle Reflect for {cycle_id}\n\n"
+            f"## Run comparison\n{body}\n\n"
+            f"## Route classification\n{classification}\n\n"
+            f"## External evidence consulted\n{external}\n\n"
+            f"## Next-round requirements\n"
+            f"- Compare at least two distinct routes before repeating a mechanism.\n"
+            f"- Use trusted metric/schema evidence where available; mark missing evidence explicitly.\n",
+        )
+    else:
+        additions = []
+        if "## Route classification" not in existing_text:
+            additions.append(f"## Route classification\n{classification}\n")
+        if "## External evidence consulted" not in existing_text:
+            additions.append(f"## External evidence consulted\n{external}\n")
+        if "## Next-round requirements" not in existing_text:
+            additions.append(
+                "## Next-round requirements\n"
+                "- Compare at least two distinct routes before repeating a mechanism.\n"
+                "- Use trusted metric/schema evidence where available; mark missing evidence explicitly.\n"
+            )
+        if additions:
+            write_text(reflect_path, existing_text.rstrip() + "\n\n" + "\n\n".join(additions))
     state.setdefault("cycles", {}).setdefault(cycle_id, {})["status"] = "reflected"
     state["next_action"] = f"vibe revise-cycle {cycle_id}"
     state["updated_at"] = utc_now()
@@ -147,6 +173,9 @@ No direction is promoted or stopped by default in the scaffold.
 ## Next portfolio sketch
 Generate the next portfolio with `vibe plan-cycle`.
 
+## Next-cycle diversity requirement
+Plan a bounded multi-route portfolio unless the evidence justifies narrowing.
+
 ## Resource update
 Use current scheduler budget.
 
@@ -163,8 +192,15 @@ none
 Stop or shrink directions after repeated provenance or guardrail failures.
 """
     revised_path = paths.cycles / cycle_id / "cycle_revised_plan.md"
-    if not keep_existing or not revised_path.exists() or not revised_path.read_text().strip():
+    existing_revised = revised_path.read_text() if revised_path.exists() else ""
+    if not keep_existing or not revised_path.exists() or not existing_revised.strip():
         write_text(revised_path, text)
+    elif "## Next-cycle diversity requirement" not in existing_revised:
+        write_text(
+            revised_path,
+            existing_revised.rstrip()
+            + "\n\n## Next-cycle diversity requirement\nPlan a bounded multi-route portfolio unless the evidence justifies narrowing.\n",
+        )
     ensure_idea_update_section(revised_path)
     sync_plan_idea_updates(paths, revised_path.read_text())
     structured = ensure_decision_after_revise(paths, cycle_id, revised_path.read_text(), offline=offline)
@@ -185,6 +221,33 @@ Stop or shrink directions after repeated provenance or guardrail failures.
     write_json(paths.state / "state.json", state)
     record_event(paths, "cycle_revised_plan_written", f"Decision={structured.decision_type}; next mode={next_mode}", cycle_id=cycle_id, status="blocked" if blocked else "revised")
     sync_dashboard(paths)
+
+
+def render_cycle_route_classification(paths: VibePaths, state: dict, run_ids: list[str]) -> str:
+    lines = []
+    for run_id in run_ids:
+        run = state.get("runs", {}).get(run_id, {})
+        metrics = read_json(paths.runs / run_id / "metrics.json", {})
+        trusted = bool(metrics.get("trusted") or metrics.get("provenance"))
+        classification = "trusted_metric" if trusted else "needs_trust_evidence"
+        primary = metrics.get("primary_metric", metrics.get("primary", ""))
+        metadata = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}
+        lines.append(
+            f"- `{run_id}` route={run.get('direction_id', '') or metadata.get('capability_id', '')} "
+            f"status={run.get('status', '')} classification={classification} primary={primary}"
+        )
+    return "\n".join(lines) if lines else "- none"
+
+
+def render_recent_external_evidence(paths: VibePaths) -> str:
+    rows = read_jsonl(paths.research / "sources.jsonl")[-5:]
+    repos = read_jsonl(paths.research / "external_repos.jsonl")[-5:]
+    lines = []
+    for row in rows:
+        lines.append(f"- source={row.get('source', '')} context={row.get('context_id', '')} query={row.get('query', '')} results={len(row.get('results', []))}")
+    for row in repos:
+        lines.append(f"- external_repo={row.get('name', '')} url={row.get('url', '')} status={row.get('status', '')}")
+    return "\n".join(lines) if lines else "- none"
 
 
 def literature_refresh(paths: VibePaths, run_id: str | None = None, cycle_id: str | None = None, query: str = "") -> None:
