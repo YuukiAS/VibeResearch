@@ -1192,6 +1192,8 @@ def bootstrap_memo_state(paths: VibePaths, date: str) -> dict[str, Any]:
     if not state:
         return {}
     records = [row for row in state.get("phase_records", []) if str(row.get("finished_at", "")).startswith(date)]
+    if not records and state.get("phase_records"):
+        records = state.get("phase_records", [])[-8:]
     readiness = read_json(paths.vibe / "bootstrap" / "readiness.json", {})
     return {
         "session_id": state.get("session_id", ""),

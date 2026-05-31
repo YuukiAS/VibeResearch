@@ -27,6 +27,7 @@ from vibe_research.papers import auto_method_search
 from vibe_research.portal import GENERATED_NOTICE
 from vibe_research.promotion import compile_decision, ensure_executable_resource_plan, synthesize_cycle_decision
 from vibe_research.research_manager import default_candidates
+from vibe_research.resource_policy import normalize_run_resources
 from vibe_research.scheduler import collect as collect_run
 from vibe_research.backends import SlurmBackend, fallback_completion_estimates, start_plus_run_hours
 from vibe_research.slurm import choose_partition
@@ -201,7 +202,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.8.29" in show.output
+    assert "0.8.30" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1190,6 +1191,81 @@ def test_v086_strict_preferred_partition_overrides_sinfo_fallback(monkeypatch):
     partition, reason = choose_partition(manifest, {"execution": {"slurm": {"default_partition": "general"}}})
     assert partition == "lab-gpu"
     assert reason == "strict_preferred_partition"
+
+
+def test_v0830_non_strict_preferred_can_choose_available_fallback(monkeypatch):
+    monkeypatch.setattr("vibe_research.slurm.probe_available_partitions", lambda: ({"a100-gpu"}, "sinfo"))
+    manifest = {
+        "resources": {
+            "preferred_partitions": ["htzhulab"],
+            "fallback_partitions": ["a100-gpu", "volta-gpu"],
+        }
+    }
+    partition, reason = choose_partition(manifest, {"execution": {"slurm": {"default_partition": "general"}}})
+    assert partition == "a100-gpu"
+    assert reason == "fallback_available: sinfo"
+
+
+def test_v0830_init_records_partition_wait_and_runtime_policy(tmp_path: Path):
+    result = invoke(
+        "init",
+        "--target",
+        str(tmp_path),
+        "--goal",
+        "g",
+        "--background",
+        "b",
+        "--no-root-portal",
+        "--preferred-partition",
+        "htzhulab",
+        "--fallback-partition",
+        "a100-gpu",
+        "--fallback-partition",
+        "volta-gpu",
+        "--max-pending-start-plus-run-hours",
+        "12",
+        "--max-run-hours",
+        "8",
+        "--mature-max-run-hours",
+        "24",
+        "--max-epochs",
+        "120",
+    )
+    assert result.exit_code == 0
+    config = read_yaml(tmp_path / ".vibe" / "config.yaml", {})
+    assert config["execution"]["slurm"]["preferred_partitions"] == ["htzhulab"]
+    assert config["execution"]["slurm"]["fallback_partitions"] == ["a100-gpu", "volta-gpu"]
+    assert config["execution"]["slurm"]["max_pending_start_plus_run_hours"] == 12
+    assert config["scheduler"]["max_run_hours_per_experiment"] == 8
+    assert config["scheduler"]["mature_max_run_hours_per_experiment"] == 24
+    assert config["scheduler"]["max_epochs_per_experiment"] == 120
+    budget = read_yaml(tmp_path / ".vibe" / "scheduler" / "budget.yaml", {})
+    assert budget["fallback_partitions"] == ["a100-gpu", "volta-gpu"]
+
+
+def test_v0830_resource_policy_removes_default_strict_and_caps_runtime():
+    resources = {
+        "gpu": 1,
+        "cpus": 4,
+        "mem_gb": 16,
+        "time": "100:00:00",
+        "epochs": 10000,
+        "preferred_partitions": ["htzhulab"],
+        "fallback_partitions": ["a100-gpu", "volta-gpu"],
+        "strict_preferred_partition": True,
+    }
+    config = {
+        "execution": {"slurm": {"max_pending_start_plus_run_hours": 12}},
+        "scheduler": {"max_run_hours_per_experiment": 8, "max_epochs_per_experiment": 120},
+    }
+    normalized = normalize_run_resources(resources, config)
+    assert normalized["preferred_partitions"] == ["htzhulab"]
+    assert normalized["fallback_partitions"] == ["a100-gpu", "volta-gpu"]
+    assert "strict_preferred_partition" not in normalized
+    assert normalized["time"] == "08:00:00"
+    assert normalized["epochs"] == 120
+    assert normalized["max_epochs"] == 120
+    assert normalized["max_pending_start_plus_run_hours"] == 12
 
 
 def test_v087_compile_preserves_active_job_next_action(tmp_path: Path):

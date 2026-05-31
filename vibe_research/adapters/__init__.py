@@ -10,6 +10,7 @@ from ..config import load_config
 from ..io import read_json, read_yaml
 from ..paths import VibePaths
 from ..real_experiments import run_kind_from_task
+from ..resource_policy import normalize_run_resources
 
 
 PLACEHOLDER_TOKENS = [
@@ -196,7 +197,7 @@ def compile_from_active_capabilities(paths: VibePaths, cycle_id: str, decision: 
             missing = capability_block_reason(paths, capability, decision)
             if missing:
                 return CompileResult(False, block_reason=missing[1], block_type=missing[0])
-            tasks.append(task_from_capability(manifest, capability, decision))
+            tasks.append(task_from_capability(paths, manifest, capability, decision))
         plan = resource_plan_from_tasks(cycle_id, decision, tasks)
         errors = validate_compiled_plan(plan)
         if errors:
@@ -206,7 +207,7 @@ def compile_from_active_capabilities(paths: VibePaths, cycle_id: str, decision: 
     missing = capability_block_reason(paths, capability, decision)
     if missing:
         return CompileResult(False, block_reason=missing[1], block_type=missing[0])
-    task = task_from_capability(manifest, capability, decision)
+    task = task_from_capability(paths, manifest, capability, decision)
     plan = resource_plan_from_task(cycle_id, decision, task)
     errors = validate_compiled_plan(plan)
     if errors:
@@ -243,9 +244,10 @@ def capability_block_reason(paths: VibePaths, capability: AdapterCapability, dec
     return None
 
 
-def task_from_capability(manifest: Any, capability: AdapterCapability, decision: Any) -> dict[str, Any]:
+def task_from_capability(paths: VibePaths, manifest: Any, capability: AdapterCapability, decision: Any) -> dict[str, Any]:
     expected_output = capability.outputs.get("expected_output_path") or (capability.artifact_rules.expected_outputs[0] if capability.artifact_rules.expected_outputs else "")
     metrics_file = capability.outputs.get("metrics_file_path") or expected_output
+    config = load_config(paths)
     metadata = {
         "adapter_revision": manifest.adapter_revision,
         "capability_id": capability.id,
@@ -271,7 +273,7 @@ def task_from_capability(manifest: Any, capability: AdapterCapability, decision:
         "expected_output_path": expected_output,
         "metrics_file_path": metrics_file,
         "metrics_schema": metrics_schema_for_plan(capability),
-        "resources": capability.resources.default,
+        "resources": normalize_run_resources(capability.resources.default, config, long_run_allowed=capability.resources.long_run_allowed),
         "trust_rules": {"checks": capability.trust_checks, "require_metrics_schema": True, "allow_manual_metric": False},
         "baseline_comparison_target": getattr(decision, "baseline_comparison_target", ""),
         "run_kind": run_kind_from_task(capability.task_type),

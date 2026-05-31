@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.8.29"
+    vibe_version: str = "0.8.30"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",
@@ -68,10 +68,15 @@ class ProjectConfig(BaseModel):
             "max_parallel_gpu_jobs": 2,
             "max_total_gpus": 4,
             "max_walltime_hours_per_cycle": 48,
+            "max_run_hours_per_experiment": 12,
+            "mature_max_run_hours_per_experiment": 24,
+            "max_epochs_per_experiment": 200,
+            "mature_max_epochs_per_experiment": 1000,
             "max_failed_runs_before_pause": 3,
             "queue_policy": "priority_then_resource_fit",
             "prequeue_when_capacity_full": True,
             "max_prequeued_runs_when_full": 1,
+            "allow_strict_preferred_partition": False,
         }
     )
     slurm: dict[str, Any] = Field(
@@ -250,10 +255,15 @@ def default_budget() -> dict[str, Any]:
         "max_gpu_jobs": 2,
         "max_total_gpus": 4,
         "max_walltime_hours_per_cycle": 48,
+        "max_run_hours_per_experiment": 12,
+        "mature_max_run_hours_per_experiment": 24,
+        "max_epochs_per_experiment": 200,
+        "mature_max_epochs_per_experiment": 1000,
         "max_failed_runs_before_pause": 3,
         "queue_policy": "priority_then_resource_fit",
         "prequeue_when_capacity_full": True,
         "max_prequeued_runs_when_full": 1,
+        "allow_strict_preferred_partition": False,
         "partition_priority": {},
         "fallback_partitions": ["gpu", "a100", "general_gpu"],
         "cancel_rules": [],

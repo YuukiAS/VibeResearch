@@ -7,7 +7,7 @@ from typing import Any
 
 from .adapter_onboarding import adapter_readiness, bootstrap_adapter_on_init, clear_adapter_block_if_ready, set_adapter_block, write_real_experiment_gap_report
 from .dashboard import sync_dashboard
-from .config import write_config_schema
+from .config import load_config, write_config_schema
 from .decisions import write_block_decision
 from .ideas import create_idea as create_pool_idea
 from .ideas import ensure_idea_pool
@@ -19,6 +19,7 @@ from .paths import VibePaths
 from .portal import build_portal, install_agents_snippet, write_agents_files, write_portal_text
 from .promotion import ensure_executable_resource_plan, validate_resource_plan
 from .research_manager import research_init
+from .resource_policy import normalize_run_resources
 from .timeline import record_event
 
 
@@ -80,6 +81,12 @@ def init_project(
     brief_file: str | Path | None = None,
     initial_ideas: list[str] | None = None,
     idea_file: str | Path | None = None,
+    preferred_partitions: list[str] | None = None,
+    fallback_partitions: list[str] | None = None,
+    max_pending_start_plus_run_hours: float | None = None,
+    max_run_hours_per_experiment: float | None = None,
+    mature_max_run_hours_per_experiment: float | None = None,
+    max_epochs_per_experiment: int | None = None,
 ) -> VibePaths:
     paths = VibePaths(target)
     ensure_dir(paths.root)
@@ -99,6 +106,15 @@ def init_project(
         "brief_path": ".vibe/project/brief.md",
         "brief_missing": project_brief["missing"],
     }
+    apply_init_resource_policy(
+        config_data,
+        preferred_partitions=preferred_partitions or [],
+        fallback_partitions=fallback_partitions or [],
+        max_pending_start_plus_run_hours=max_pending_start_plus_run_hours,
+        max_run_hours_per_experiment=max_run_hours_per_experiment,
+        mature_max_run_hours_per_experiment=mature_max_run_hours_per_experiment,
+        max_epochs_per_experiment=max_epochs_per_experiment,
+    )
     config_data.setdefault("portal", {})["root_mode"] = root_portal
     write_yaml(paths.vibe / "config.yaml", config_data)
     write_json(paths.vibe / "config.json", config_data)
@@ -150,7 +166,26 @@ def init_project(
     touch_jsonl(paths.leaderboard / "history.jsonl")
 
     write_json(paths.scheduler / "queue.json", {"queued": []})
-    write_yaml(paths.scheduler / "budget.yaml", default_budget())
+    budget = default_budget()
+    scheduler_config = config_data.get("scheduler", {})
+    for key in [
+        "max_parallel_jobs",
+        "max_parallel_gpu_jobs",
+        "max_total_gpus",
+        "max_walltime_hours_per_cycle",
+        "max_run_hours_per_experiment",
+        "mature_max_run_hours_per_experiment",
+        "max_epochs_per_experiment",
+        "mature_max_epochs_per_experiment",
+        "max_failed_runs_before_pause",
+        "prequeue_when_capacity_full",
+        "max_prequeued_runs_when_full",
+        "allow_strict_preferred_partition",
+    ]:
+        if key in scheduler_config:
+            budget[key] = scheduler_config[key]
+    budget["fallback_partitions"] = config_data.get("execution", {}).get("slurm", {}).get("fallback_partitions", budget.get("fallback_partitions", []))
+    write_yaml(paths.scheduler / "budget.yaml", budget)
     write_json(paths.scheduler / "active_jobs.json", {"active": []})
     touch_jsonl(paths.scheduler / "completed_jobs.jsonl")
 
@@ -180,6 +215,38 @@ def init_project(
     if install_agents:
         install_agents_snippet(paths)
     return paths
+
+
+def apply_init_resource_policy(
+    config_data: dict[str, Any],
+    *,
+    preferred_partitions: list[str],
+    fallback_partitions: list[str],
+    max_pending_start_plus_run_hours: float | None,
+    max_run_hours_per_experiment: float | None,
+    mature_max_run_hours_per_experiment: float | None,
+    max_epochs_per_experiment: int | None,
+) -> None:
+    execution_slurm = config_data.setdefault("execution", {}).setdefault("slurm", {})
+    root_slurm = config_data.setdefault("slurm", {})
+    scheduler = config_data.setdefault("scheduler", {})
+    if preferred_partitions:
+        execution_slurm["default_partition"] = preferred_partitions[0]
+        execution_slurm["preferred_partitions"] = preferred_partitions
+        root_slurm["default_partition"] = preferred_partitions[0]
+        root_slurm["preferred_partitions"] = preferred_partitions
+    if fallback_partitions:
+        execution_slurm["fallback_partitions"] = fallback_partitions
+        root_slurm["fallback_partitions"] = fallback_partitions
+    if max_pending_start_plus_run_hours is not None:
+        execution_slurm["max_pending_start_plus_run_hours"] = max_pending_start_plus_run_hours
+        root_slurm["max_pending_start_plus_run_hours"] = max_pending_start_plus_run_hours
+    if max_run_hours_per_experiment is not None:
+        scheduler["max_run_hours_per_experiment"] = max_run_hours_per_experiment
+    if mature_max_run_hours_per_experiment is not None:
+        scheduler["mature_max_run_hours_per_experiment"] = mature_max_run_hours_per_experiment
+    if max_epochs_per_experiment is not None:
+        scheduler["max_epochs_per_experiment"] = max_epochs_per_experiment
 
 
 def touch_jsonl(path: Path) -> None:
@@ -649,7 +716,11 @@ def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3)
                         "cancel_if_failed": list(spec.get("cancel_if_failed", [])) + cancel_map.get(str(short), []),
                         "dryrun": spec.get("dryrun", {}),
                         "entrypoint": spec.get("entrypoint", {}),
-                        "resources": spec.get("resources", {}),
+                        "resources": normalize_run_resources(
+                            spec.get("resources", {}),
+                            load_config(paths),
+                            long_run_allowed=bool((spec.get("resources", {}) if isinstance(spec.get("resources", {}), dict) else {}).get("long_run_allowed")),
+                        ),
                         "outputs": spec.get("outputs", {}),
                         "evaluation": spec.get("evaluation", {}),
                         "run_kind": spec.get("run_kind", ""),

@@ -153,6 +153,12 @@ def init(
     brief_file: Optional[Path] = typer.Option(None, "--brief-file", help="Markdown file to import as .vibe/project/brief.md."),
     idea: list[str] = typer.Option([], "--idea", help="Initial idea; may be repeated."),
     idea_file: Optional[Path] = typer.Option(None, "--idea-file", help="File containing initial ideas, one per line."),
+    preferred_partition: list[str] = typer.Option([], "--preferred-partition", help="Preferred Slurm partition; may be repeated in priority order."),
+    fallback_partition: list[str] = typer.Option([], "--fallback-partition", help="Fallback Slurm partition; may be repeated in priority order."),
+    max_pending_start_plus_run_hours: Optional[float] = typer.Option(None, "--max-pending-start-plus-run-hours", help="Maximum acceptable queued start plus requested runtime hours before fallback is preferred."),
+    max_run_hours: Optional[float] = typer.Option(None, "--max-run-hours", help="Default per-experiment walltime cap for early runs."),
+    mature_max_run_hours: Optional[float] = typer.Option(None, "--mature-max-run-hours", help="Relaxed per-experiment walltime cap for mature long-run capabilities."),
+    max_epochs: Optional[int] = typer.Option(None, "--max-epochs", help="Default epoch cap advertised to generated run resources."),
 ) -> None:
     """Initialize `.vibe/` and root progress files in a target repo."""
 
@@ -175,6 +181,12 @@ def init(
         brief_file=brief_file,
         initial_ideas=idea,
         idea_file=idea_file,
+        preferred_partitions=preferred_partition,
+        fallback_partitions=fallback_partition,
+        max_pending_start_plus_run_hours=max_pending_start_plus_run_hours,
+        max_run_hours_per_experiment=max_run_hours,
+        mature_max_run_hours_per_experiment=mature_max_run_hours,
+        max_epochs_per_experiment=max_epochs,
     )
     console.print(f"Initialized VibeResearch at [bold]{p.root}[/bold]")
 

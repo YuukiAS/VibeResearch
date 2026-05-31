@@ -48,11 +48,22 @@ def render_sbatch(
             "",
             "set -euo pipefail",
             f"cd {workdir}",
+            *runtime_limit_exports(resources),
             manifest.get("entrypoint", {}).get("env_setup", ""),
             manifest.get("entrypoint", {}).get("command", "true"),
             "",
         ] if line]
     )
+
+
+def runtime_limit_exports(resources: dict[str, Any]) -> list[str]:
+    limits = resources.get("runtime_limits", {}) if isinstance(resources.get("runtime_limits"), dict) else {}
+    lines = []
+    if limits.get("max_run_hours"):
+        lines.append(f"export VIBE_MAX_RUN_HOURS={limits['max_run_hours']}")
+    if limits.get("max_epochs"):
+        lines.append(f"export VIBE_MAX_EPOCHS={limits['max_epochs']}")
+    return lines
 
 
 def select_partition(manifest: dict[str, Any], config: dict[str, Any]) -> str:

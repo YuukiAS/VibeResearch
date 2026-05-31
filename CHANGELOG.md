@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.8.30 - 2026-05-30
+
+- Add init-time scheduler resource policy options for preferred/fallback Slurm
+  partitions, maximum pending start-plus-run wait hours, per-experiment
+  walltime caps, mature long-run caps, and epoch caps.
+- Normalize adapter-generated run resources so preferred/fallback partitions are
+  preserved, normal queued jobs are not strict-pinned away from fallback
+  selection, and generated runs carry bounded runtime limits.
+- Export runtime caps into Slurm scripts as `VIBE_MAX_RUN_HOURS` and
+  `VIBE_MAX_EPOCHS` for project adapters that honor framework limits.
+- Keep recent bootstrap phase records in daily memos across UTC/local date
+  boundaries so onboarding progress is not hidden immediately after bootstrap.
+
 ## 0.8.29 - 2026-05-30
 
 - Repair existing zero-byte cycle portfolio plans during monitor steps by
