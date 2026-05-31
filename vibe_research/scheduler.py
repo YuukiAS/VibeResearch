@@ -301,7 +301,7 @@ def monitor(paths: VibePaths, *, auto_next: bool = False, backend_name: str | No
             job["cancel_result"] = cancel_result
             append_jsonl(paths.scheduler / "completed_jobs.jsonl", job)
             run = state.get("runs", {}).get(job["run_id"], {})
-            force_run_partition(paths, job["run_id"], run, recommended)
+            force_run_partition(paths, job["run_id"], run, recommended, reason="fallback_selected_after_wait_policy")
             launch = submit_run(paths, job["run_id"], dry=False, backend_name=backend.name)
             launch["requeued_from_job_id"] = job.get("job_id", "")
             launch["requeue_reason"] = "fallback_better_available"
@@ -360,6 +360,7 @@ def operator_fallback_requeue(
     execute: bool = False,
     allow_outside_policy: bool = False,
     allow_carried_forward: bool = False,
+    to_preferred: bool = False,
     backend_name: str | None = None,
     run_ids: list[str] | None = None,
     all_runs: bool = False,
@@ -375,10 +376,22 @@ def operator_fallback_requeue(
     for job in active.get("active", []):
         details = job.get("poll_details", {}) if isinstance(job.get("poll_details"), dict) else {}
         verdict = details.get("wait_verdict", {}) if isinstance(details.get("wait_verdict"), dict) else {}
+        preferred = preferred_partition_for_job(state, job)
+        preferred_eligible = bool(preferred and preferred != job.get("partition") and str(job.get("status", "submitted")) in {"pending", "submitted", "dry_submitted"})
         recommended = verdict.get("recommended_partition", "")
         verdict_name = verdict.get("verdict", "")
         eligible = bool(recommended and verdict_name in {"fallback_better_available", "fallback_better_but_outside_wait_policy"})
         blocked_reason = ""
+        if to_preferred:
+            recommended = preferred
+            verdict_name = "preferred_partition_selected"
+            eligible = preferred_eligible
+            if not preferred:
+                blocked_reason = "missing_preferred_partition"
+            elif preferred == job.get("partition"):
+                blocked_reason = "already_on_preferred_partition"
+            elif str(job.get("status", "submitted")) not in {"pending", "submitted", "dry_submitted"}:
+                blocked_reason = "preferred_requeue_only_before_job_starts"
         if verdict_name == "fallback_better_but_outside_wait_policy" and not allow_outside_policy:
             eligible = False
             blocked_reason = "outside_wait_policy_requires_allow_outside_policy"
@@ -393,6 +406,7 @@ def operator_fallback_requeue(
             "job_id": job.get("job_id", ""),
             "current_partition": job.get("partition", ""),
             "recommended_partition": recommended,
+            "preferred_partition": preferred,
             "verdict": verdict_name,
             "eligible": eligible,
             "blocked_reason": blocked_reason,
@@ -403,8 +417,17 @@ def operator_fallback_requeue(
                 str(job.get("run_id", "")),
                 allow_outside_policy=command_allow_outside_policy,
                 allow_carried_forward=command_allow_carried_forward,
+                to_preferred=to_preferred,
                 execute=True,
             ),
+            "preferred_requeue_command": fallback_requeue_command(
+                paths.root,
+                str(job.get("run_id", "")),
+                to_preferred=True,
+                execute=True,
+            )
+            if preferred and preferred != job.get("partition")
+            else "",
         }
         rows.append(row)
         if not execute or not eligible or not selected_for_execute:
@@ -412,17 +435,20 @@ def operator_fallback_requeue(
             continue
         backend = get_backend(paths, job.get("backend") or backend_name)
         cancel_result = backend.cancel(job)
-        old = {**job, "cancelled_at": utc_now(), "status": "cancelled_for_fallback", "cancel_result": cancel_result, "operator_requeue": True}
+        old_status = "cancelled_for_preferred_requeue" if to_preferred else "cancelled_for_fallback"
+        old = {**job, "cancelled_at": utc_now(), "status": old_status, "cancel_result": cancel_result, "operator_requeue": True}
         append_jsonl(paths.scheduler / "completed_jobs.jsonl", old)
         run = state.get("runs", {}).get(job["run_id"], {})
-        force_run_partition(paths, job["run_id"], run, recommended)
+        force_reason = "preferred_partition_selected" if to_preferred else "fallback_selected_after_wait_policy"
+        force_run_partition(paths, job["run_id"], run, recommended, reason=force_reason)
         launch = submit_run(paths, job["run_id"], dry=False, backend_name=backend.name)
         launch["requeued_from_job_id"] = job.get("job_id", "")
         launch["requeue_reason"] = verdict_name
         launch["operator_requeue"] = True
         still_active.append(launch)
         executed.append({"old_job": old, "new_launch": launch})
-        record_event(paths, "operator_fallback_requeue", f"Requeued {job['run_id']} to {recommended}", cycle_id=job.get("cycle_id", ""), run_id=job["run_id"], status="requeued", payload={"old_job": old, "new_launch": launch, "verdict": verdict})
+        event_name = "operator_preferred_requeue" if to_preferred else "operator_fallback_requeue"
+        record_event(paths, event_name, f"Requeued {job['run_id']} to {recommended}", cycle_id=job.get("cycle_id", ""), run_id=job["run_id"], status="requeued", payload={"old_job": old, "new_launch": launch, "verdict": verdict})
     if execute:
         write_json(paths.scheduler / "active_jobs.json", {"active": still_active})
         state = read_json(paths.state / "state.json", state)
@@ -440,6 +466,7 @@ def operator_fallback_requeue(
         "execute": execute,
         "allow_outside_policy": allow_outside_policy,
         "allow_carried_forward": allow_carried_forward,
+        "to_preferred": to_preferred,
         "run_ids": sorted(selected_run_ids),
         "all_runs": all_runs,
         "approval_request": approval_request,
@@ -475,6 +502,19 @@ def should_requeue_to_fallback(config: dict[str, Any], job: dict[str, Any], deta
         return float(estimate) <= max_wait_hours
     except (TypeError, ValueError):
         return False
+
+
+def preferred_partition_for_job(state: dict[str, Any], job: dict[str, Any]) -> str:
+    resources = job.get("resource_request", {}) if isinstance(job.get("resource_request"), dict) else {}
+    if not resources:
+        run = state.get("runs", {}).get(job.get("run_id", ""), {}) if isinstance(state.get("runs"), dict) else {}
+        resources = run.get("resources", {}) if isinstance(run.get("resources"), dict) else {}
+    current = str(job.get("partition") or "")
+    for partition in resources.get("preferred_partitions", []) or []:
+        name = str(partition)
+        if name and name != current:
+            return name
+    return ""
 
 
 def carry_forward_wait_evidence(paths: VibePaths, job: dict[str, Any], status: str, details: dict[str, Any]) -> dict[str, Any]:
@@ -516,9 +556,10 @@ def previous_wait_evidence(paths: VibePaths, job: dict[str, Any]) -> dict[str, A
     return {}
 
 
-def force_run_partition(paths: VibePaths, run_id: str, run: dict[str, Any], partition: str) -> None:
+def force_run_partition(paths: VibePaths, run_id: str, run: dict[str, Any], partition: str, *, reason: str = "forced_partition") -> None:
     resources = run.setdefault("resources", {})
     resources["force_partition"] = partition
+    resources["force_partition_reason"] = reason
     resources["preferred_partitions"] = [partition] + [p for p in resources.get("preferred_partitions", []) if p != partition]
     run["resources"] = resources
     state = read_json(paths.state / "state.json", {})

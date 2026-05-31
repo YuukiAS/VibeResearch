@@ -248,7 +248,7 @@ def test_config_commands_and_schema_validation(tmp_path: Path):
     assert result.exit_code == 0
     show = invoke("config", "show", "--target", str(tmp_path))
     assert show.exit_code == 0
-    assert "0.10.5" in show.output
+    assert "0.10.6" in show.output
     schema = read_json(tmp_path / ".vibe" / "config.schema.json", {})
     assert schema["title"] == "ProjectConfig"
 
@@ -1531,7 +1531,7 @@ def test_v086_strict_preferred_partition_overrides_sinfo_fallback(monkeypatch):
     assert reason == "strict_preferred_partition"
 
 
-def test_v0830_non_strict_preferred_can_choose_available_fallback(monkeypatch):
+def test_v0106_preferred_partition_requires_wait_policy_before_fallback(monkeypatch):
     monkeypatch.setattr("vibe_research.slurm.probe_available_partitions", lambda: ({"a100-gpu"}, "sinfo"))
     manifest = {
         "resources": {
@@ -1540,8 +1540,27 @@ def test_v0830_non_strict_preferred_can_choose_available_fallback(monkeypatch):
         }
     }
     partition, reason = choose_partition(manifest, {"execution": {"slurm": {"default_partition": "general"}}})
+    assert partition == "htzhulab"
+    assert reason == "preferred_partition_selected: fallback_requires_wait_policy_evidence; sinfo"
+
+
+def test_v0106_wait_policy_evidence_can_select_fallback(monkeypatch):
+    monkeypatch.setattr("vibe_research.slurm.probe_available_partitions", lambda: ({"a100-gpu"}, "sinfo"))
+    manifest = {
+        "resources": {
+            "preferred_partitions": ["htzhulab"],
+            "fallback_partitions": ["a100-gpu", "volta-gpu"],
+            "wait_verdict": {
+                "verdict": "fallback_better_available",
+                "recommended_partition": "a100-gpu",
+                "preferred_estimated_start_plus_run_hours": 48,
+                "recommended_estimated_start_plus_run_hours": 8,
+            },
+        }
+    }
+    partition, reason = choose_partition(manifest, {"execution": {"slurm": {"default_partition": "general"}}})
     assert partition == "a100-gpu"
-    assert reason == "fallback_available: sinfo"
+    assert reason == "fallback_selected_after_wait_policy"
 
 
 def test_v0830_init_records_partition_wait_and_runtime_policy(tmp_path: Path):
@@ -1709,7 +1728,7 @@ def test_v0841_choose_partition_skips_incompatible_gpu_runtime(monkeypatch):
     }
     partition, reason = choose_partition(manifest, config)
     assert partition == "a100-gpu"
-    assert reason.startswith("fallback_available: sinfo")
+    assert reason.startswith("fallback_selected_preferred_incompatible: sinfo")
     assert "skipped_incompatible=volta-gpu=cuda_compute_capability_below_requirement" in reason
 
 
@@ -2048,6 +2067,37 @@ def test_v0859_fallback_requeue_dry_run_writes_self_contained_approval_request(t
     assert command in latest_md
     active = read_json(tmp_path / ".vibe" / "scheduler" / "active_jobs.json", {})
     assert active["active"][0]["job_id"] == "111"
+
+
+def test_v0106_requeue_request_surfaces_move_back_to_preferred_command(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path), "--goal", "g", "--background", "b", "--no-root-portal").exit_code == 0
+    write_json(
+        tmp_path / ".vibe" / "scheduler" / "active_jobs.json",
+        {
+            "active": [
+                {
+                    "run_id": "r001",
+                    "job_id": "111",
+                    "backend": "slurm",
+                    "status": "pending",
+                    "partition": "a100-gpu",
+                    "resource_request": {
+                        "preferred_partitions": ["htzhulab"],
+                        "fallback_partitions": ["a100-gpu", "volta-gpu"],
+                    },
+                }
+            ]
+        },
+    )
+    result = invoke("scheduler-requeue-fallback", "--target", str(tmp_path))
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    command = data["candidates"][0]["preferred_requeue_command"]
+    assert "--run-id r001" in command
+    assert "--execute" in command
+    assert "--to-preferred" in command
+    latest_md = (tmp_path / ".vibe" / "scheduler" / "fallback_requeue_requests" / "latest.md").read_text()
+    assert command in latest_md
 
 
 def test_v0859_fallback_requeue_execute_run_id_only_requeues_selected_job(tmp_path: Path, monkeypatch):

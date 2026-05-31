@@ -16,6 +16,7 @@ def fallback_requeue_command(
     *,
     allow_outside_policy: bool = False,
     allow_carried_forward: bool = False,
+    to_preferred: bool = False,
     execute: bool = True,
 ) -> str:
     parts = [
@@ -32,6 +33,8 @@ def fallback_requeue_command(
         parts.append("--allow-outside-policy")
     if allow_carried_forward:
         parts.append("--allow-carried-forward")
+    if to_preferred:
+        parts.append("--to-preferred")
     return " ".join(shlex.quote(part) for part in parts)
 
 
@@ -58,9 +61,10 @@ def render_fallback_requeue_request(record: dict[str, Any]) -> str:
                 f"  - recommended partition: `{row.get('recommended_partition', '')}`",
                 f"  - eligible: `{row.get('eligible')}` blocked: `{row.get('blocked_reason', '')}`",
                 f"  - command: `{row.get('executable_command', '')}`",
+                f"  - preferred command: `{row.get('preferred_requeue_command', '')}`" if row.get("preferred_requeue_command") else "",
             ]
         )
-    return "\n".join(lines) + "\n"
+    return "\n".join(line for line in lines if line) + "\n"
 
 
 def write_fallback_requeue_request(paths: VibePaths, rows: list[dict[str, Any]]) -> dict[str, Any]:

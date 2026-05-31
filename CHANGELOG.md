@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.10.6 - 2026-05-31
+
+- Make Slurm preferred partitions the default submission target when configured;
+  fallback availability from `sinfo` alone no longer bypasses the preferred
+  partition.
+- Allow fallback partition selection only when explicit wait-policy evidence
+  recommends a compatible fallback, and record `preferred_partition_selected`
+  versus `fallback_selected_after_wait_policy` in launch partition reasons.
+- Add operator-facing preferred requeue commands so a pending job that landed on
+  a fallback partition can be moved back to the configured preferred partition.
+
 ## 0.10.5 - 2026-05-31
 
 - Clear stale blocked state after a recovered multi-route round has closed with

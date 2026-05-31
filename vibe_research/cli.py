@@ -1987,6 +1987,7 @@ def fallback_requeue_cmd(
     execute: bool = typer.Option(False, "--execute", help="Actually cancel and resubmit eligible jobs."),
     allow_outside_policy: bool = typer.Option(False, "--allow-outside-policy", help="Allow outside-wait-policy fallback requeues."),
     allow_carried_forward: bool = typer.Option(False, "--allow-carried-forward", help="Allow requeue from carried-forward wait evidence."),
+    to_preferred: bool = typer.Option(False, "--to-preferred", help="Requeue a pending fallback job back to its configured preferred partition."),
     run_id: list[str] = typer.Option([], "--run-id", help="Run id to execute. May be supplied more than once."),
     all_runs: bool = typer.Option(False, "--all", help="Execute all eligible fallback requeues."),
 ) -> None:
@@ -2000,6 +2001,7 @@ def fallback_requeue_cmd(
         execute=execute,
         allow_outside_policy=allow_outside_policy,
         allow_carried_forward=allow_carried_forward,
+        to_preferred=to_preferred,
         run_ids=run_id,
         all_runs=all_runs,
     )

@@ -99,7 +99,13 @@ def choose_partition(manifest: dict[str, Any], config: dict[str, Any]) -> tuple[
     fallback = list(resources.get("fallback_partitions") or [])
     execution_slurm = config.get("execution", {}).get("slurm", {})
     if resources.get("force_partition"):
-        return str(resources["force_partition"]), "forced_partition"
+        forced = str(resources["force_partition"])
+        forced_reason = str(resources.get("force_partition_reason") or "")
+        if forced_reason:
+            return forced, forced_reason
+        if forced in preferred:
+            return forced, "preferred_partition_selected: forced"
+        return forced, "forced_partition"
     if not preferred and execution_slurm.get("default_partition"):
         preferred = [execution_slurm["default_partition"]]
     if resources.get("strict_preferred_partition") or resources.get("prefer_configured_partition"):
@@ -115,20 +121,50 @@ def choose_partition(manifest: dict[str, Any], config: dict[str, Any]) -> tuple[
     compatible_candidates, skipped = compatible_partition_candidates(candidates, {"resource_request": resources}, config)
     if not compatible_candidates:
         return "", "no_compatible_partition: " + ";".join(f"{row['partition']}={','.join(row.get('reasons', []))}" for row in skipped)
+    compatible_preferred = [name for name in preferred if name in compatible_candidates]
+    compatible_fallback = [name for name in fallback if name in compatible_candidates and name not in compatible_preferred]
+    wait_policy_fallback = fallback_selected_by_wait_policy(resources, compatible_fallback)
+    if wait_policy_fallback:
+        return wait_policy_fallback, append_compatibility_skip_reason("fallback_selected_after_wait_policy", skipped)
     available, reason = probe_available_partitions()
     if available:
-        for name in compatible_candidates:
+        for name in compatible_preferred:
             if name in available:
-                selected_reason = "preferred_available" if name in preferred else f"fallback_available: {reason}"
-                return name, append_compatibility_skip_reason(selected_reason, skipped)
+                return name, append_compatibility_skip_reason(f"preferred_partition_selected: {reason}", skipped)
+        if compatible_preferred:
+            return compatible_preferred[0], append_compatibility_skip_reason(
+                f"preferred_partition_selected: fallback_requires_wait_policy_evidence; {reason}",
+                skipped,
+            )
+        for name in compatible_fallback:
+            if name in available:
+                return name, append_compatibility_skip_reason(f"fallback_selected_preferred_incompatible: {reason}", skipped)
     profiles = {row.get("name"): row for row in execution_slurm.get("partitions", []) if row.get("name")}
     if not profiles:
-        return compatible_candidates[0], append_compatibility_skip_reason(reason or "no_partition_profiles", skipped)
-    ranked = sorted(compatible_candidates, key=lambda name: profiles.get(name, {}).get("priority", 0), reverse=True)
+        selected = compatible_preferred[0] if compatible_preferred else compatible_candidates[0]
+        base_reason = "preferred_partition_selected" if selected in compatible_preferred else "fallback_selected_preferred_incompatible"
+        return selected, append_compatibility_skip_reason(f"{base_reason}: {reason or 'no_partition_profiles'}", skipped)
+    rank_pool = compatible_preferred or compatible_candidates
+    ranked = sorted(rank_pool, key=lambda name: profiles.get(name, {}).get("priority", 0), reverse=True)
     selected = ranked[0]
     if selected not in preferred:
-        return selected, append_compatibility_skip_reason("fallback_by_config_priority", skipped)
-    return selected, append_compatibility_skip_reason(reason or "selected_by_config_priority", skipped)
+        return selected, append_compatibility_skip_reason("fallback_selected_preferred_incompatible: config_priority", skipped)
+    return selected, append_compatibility_skip_reason(f"preferred_partition_selected: {reason or 'selected_by_config_priority'}", skipped)
+
+
+def fallback_selected_by_wait_policy(resources: dict[str, Any], compatible_fallback: list[str]) -> str:
+    if not compatible_fallback:
+        return ""
+    for key in ["wait_verdict", "partition_wait_verdict", "fallback_wait_verdict", "scheduler_wait_verdict"]:
+        verdict = resources.get(key, {})
+        if not isinstance(verdict, dict):
+            continue
+        if verdict.get("verdict") not in {"fallback_better_available", "fallback_selected_after_wait_policy"}:
+            continue
+        selected = str(verdict.get("recommended_partition") or verdict.get("partition") or "")
+        if selected in compatible_fallback:
+            return selected
+    return ""
 
 
 def compatible_partition_candidates(candidates: list[str], launch: dict[str, Any], config: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
