@@ -111,6 +111,11 @@ Two sessions are optional and should be opened only when needed:
 - Archivist Session: compresses long-term memory, maintains registry state, and
   clears WATCH debts; it does not execute experiments.
 
+Planner drafts are created explicitly with `vibe planner draft` and checked
+with `vibe planner validate`. A draft must include a failure anchor, hypothesis,
+mechanism, minimum experiment, expected artifact, expected belief update,
+compute cost, risk, fallback, and stop condition before it can be reviewed.
+
 ```mermaid
 flowchart TD
     A["Kernel / Memory Layer<br/>PROJECT_KERNEL<br/>PROBLEM_STATE<br/>FAILURE_SIGNATURES<br/>OPEN_DEBTS<br/>NEGATIVE_MEMORY<br/>SESSION_BUDGET_STATE"] --> B["Planner Session<br/>draft_plan_manifest.json"]

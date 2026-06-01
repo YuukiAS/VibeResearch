@@ -78,6 +78,7 @@ from .owned import owned_contract, owned_design_audit, owned_shadow_plan, scaffo
 from .optimization import external_deemphasis_plan, plan_ablation, promote_champion, record_optimization_memory, record_regression_suite, register_challenger
 from .papers import add_paper, auto_method_search, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
+from .planner import build_draft_plan, load_draft_plan, validate_draft_plan, write_draft_plan
 from .portal import build_portal
 from .presentation import build_framework_spec, build_narrative, build_presentation_package, build_reproducibility_package, export_presentation_tables
 from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio, vendor_runtime
@@ -130,6 +131,7 @@ adapter_app = typer.Typer(help="Manage adapter onboarding, readiness, and capabi
 script_app = typer.Typer(help="Bootstrap downstream execution wrapper scripts.")
 bootstrap_app = typer.Typer(help="Run resumable project bootstrap, readiness, archive, and dogfood workflows.")
 kernel_app = typer.Typer(help="Manage the session-oriented research kernel.")
+planner_app = typer.Typer(help="Generate reviewable Planner Session draft plans.")
 research_app = typer.Typer(help="Initialize and audit bounded autonomous research state.")
 hypothesis_app = typer.Typer(help="Manage hypothesis registry records.")
 experiment_app = typer.Typer(help="Manage experiment registry and evidence links.")
@@ -158,6 +160,7 @@ app.add_typer(adapter_app, name="adapter")
 app.add_typer(script_app, name="script")
 app.add_typer(bootstrap_app, name="bootstrap")
 app.add_typer(kernel_app, name="kernel")
+app.add_typer(planner_app, name="planner")
 app.add_typer(research_app, name="research")
 app.add_typer(hypothesis_app, name="hypothesis")
 app.add_typer(experiment_app, name="experiment")
@@ -635,6 +638,65 @@ def kernel_check_protocol_cmd(
     for violation in result.violations:
         console.print(f"Violation: {violation}")
     if not result.ok:
+        raise typer.Exit(1)
+
+
+@planner_app.command("draft")
+def planner_draft_cmd(
+    mode: str = typer.Option(..., "--mode", help="Generation mode: exploit, recombine, or invent."),
+    failure_anchor: str = typer.Option(..., "--failure-anchor"),
+    hypothesis: str = typer.Option(..., "--hypothesis"),
+    mechanism: str = typer.Option(..., "--mechanism"),
+    minimum_experiment: str = typer.Option(..., "--minimum-experiment"),
+    expected_artifact: str = typer.Option(..., "--expected-artifact"),
+    expected_belief_update: str = typer.Option(..., "--expected-belief-update"),
+    compute_cost: str = typer.Option(..., "--compute-cost"),
+    risk: str = typer.Option(..., "--risk"),
+    fallback: str = typer.Option(..., "--fallback"),
+    stop_condition: str = typer.Option(..., "--stop-condition"),
+    confidence: str = typer.Option("speculative_mechanism", "--confidence"),
+    output: str = typer.Option("draft_plan_manifest.json", "--output"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Write a Planner-only draft plan manifest for later review."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    plan = build_draft_plan(
+        paths_,
+        mode=mode,
+        failure_anchor=failure_anchor,
+        hypothesis=hypothesis,
+        mechanism=mechanism,
+        minimum_experiment=minimum_experiment,
+        expected_artifact=expected_artifact,
+        expected_belief_update=expected_belief_update,
+        compute_cost=compute_cost,
+        risk=risk,
+        fallback=fallback,
+        stop_condition=stop_condition,
+        confidence=confidence,
+    )
+    ok, diagnostics = validate_draft_plan(plan)
+    path = write_draft_plan(paths_, plan, output=output)
+    console.print(f"Draft plan: {path}")
+    console.print(f"Review route: {plan['review_route']}")
+    for item in diagnostics:
+        console.print(f"{item['level']}: {item['code']} - {item['message']}")
+    if not ok:
+        raise typer.Exit(1)
+
+
+@planner_app.command("validate")
+def planner_validate_cmd(plan: Path = typer.Argument(..., help="Draft plan JSON path to validate.")) -> None:
+    """Validate a draft plan manifest without approving or executing it."""
+
+    draft = load_draft_plan(plan)
+    ok, diagnostics = validate_draft_plan(draft)
+    console.print(f"Draft plan validation: {'ok' if ok else 'blocked'}")
+    for item in diagnostics:
+        console.print(f"{item['level']}: {item['code']} - {item['message']}")
+    if not ok:
         raise typer.Exit(1)
 
 

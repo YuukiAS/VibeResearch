@@ -84,6 +84,11 @@ VibeResearch OS 不是把某个外部自动科研框架包一层，也不是让�
   不能直接进入执行队列。
 - Archivist Session：压缩长期 memory、整理 registry、清算 WATCH 债务，不参与实验执行。
 
+Planner draft 通过 `vibe planner draft` 创建，并用 `vibe planner validate` 检查。
+每个 draft 进入 review 前，必须写清 failure anchor、hypothesis、mechanism、
+minimum experiment、expected artifact、expected belief update、compute cost、
+risk、fallback 和 stop condition。
+
 ```mermaid
 flowchart TD
     A["内核 / 记忆层<br/>PROJECT_KERNEL<br/>PROBLEM_STATE<br/>FAILURE_SIGNATURES<br/>OPEN_DEBTS<br/>NEGATIVE_MEMORY<br/>SESSION_BUDGET_STATE"] --> B["Planner 计划会话<br/>draft_plan_manifest.json"]
