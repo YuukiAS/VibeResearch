@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
+from vibe_research.automation import auto_cycle
 from vibe_research.cli import app
 from vibe_research.daemon import daemon_autonomy_audit, daemon_status
+from vibe_research.decisions import ensure_decision_after_revise, load_decision, make_decision, write_decision
 from vibe_research.io import write_json, write_yaml
+from vibe_research.locks import active_advance_lock, advancing_lock
 from vibe_research.paths import VibePaths
 from vibe_research.project import create_cycle, sync_resource_plan_from_portfolio
 
@@ -93,3 +97,62 @@ def test_v0122_post_target_plan_cycle_compiles_active_capability_routes(tmp_path
     capability_ids = {spec["adapter_metadata"]["capability_id"] for spec in plan["runs"].values()}
     assert capability_ids == {"route-1", "route-2", "route-3"}
     assert all(spec["dryrun"]["command"] and spec["entrypoint"]["command"] for spec in plan["runs"].values())
+
+
+def test_v0123_auto_cycle_refuses_second_advancing_lock(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    with advancing_lock(paths, command="auto-cycle", current_action="vibe reflect r001"):
+        lock = active_advance_lock(paths)
+        assert lock["command"] == "auto-cycle"
+        assert lock["current_action"] == "vibe reflect r001"
+        with pytest.raises(RuntimeError, match="advance_lock_active"):
+            auto_cycle(paths, offline=True, dry_submit=True, max_steps=1)
+
+
+def test_v0123_negative_untrusted_metrics_do_not_promote(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    run_id = "r001"
+    (paths.runs / run_id).mkdir(parents=True, exist_ok=True)
+    write_json(
+        paths.runs / run_id / "metrics.json",
+        {
+            "schema_status": "valid",
+            "trust_status": "untrusted",
+            "trusted": False,
+            "primary": -0.3944,
+            "metric_delta": {"primary": -0.3944},
+        },
+    )
+    (paths.runs / run_id / "reflect.md").write_text("Verdict: do_not_promote\nRecommended decision: failed_stop_or_redesign\n")
+    decision = ensure_decision_after_revise(paths, run_id, "## Decision\npromote_to_baseline_compare against trusted baseline")
+    assert decision.decision_type == "stop_direction"
+    assert decision.baseline_comparison_target == ""
+    assert decision.provenance["source"] == "metrics_reflection_guard"
+
+    run_id = "r002"
+    (paths.runs / run_id).mkdir(parents=True, exist_ok=True)
+    write_json(
+        paths.runs / run_id / "metrics.json",
+        {
+            "schema_status": "valid",
+            "trust_status": "untrusted",
+            "trusted": False,
+            "primary": -0.3944,
+            "metric_delta": {"primary": -0.3944},
+        },
+    )
+    write_decision(
+        paths,
+        make_decision(
+            paths,
+            run_id,
+            "promote_to_baseline_compare",
+            required_action="promote_to_baseline_compare",
+            baseline_comparison_target="trusted_baseline",
+            provenance={"source": "legacy_markdown_inference"},
+        ),
+    )
+    repaired = ensure_decision_after_revise(paths, run_id, "baseline")
+    loaded = load_decision(paths, run_id)
+    assert repaired.decision_type == "stop_direction"
+    assert loaded.decision_type == "stop_direction"

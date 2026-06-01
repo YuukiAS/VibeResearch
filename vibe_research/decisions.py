@@ -223,7 +223,12 @@ def decision_json(paths: VibePaths, target_id: str) -> str:
 def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text: str, *, offline: bool = False) -> ResearchDecision:
     existing_path = decision_path(paths, target_id)
     if existing_path.exists() and existing_path.read_text().strip():
-        return load_decision(paths, target_id)
+        existing = load_decision(paths, target_id)
+        guard = metrics_reflection_guard_decision(paths, target_id, existing.decision_type)
+        if existing.decision_type == "promote_to_baseline_compare" and guard:
+            write_decision(paths, guard)
+            return guard
+        return existing
     if offline:
         if offline_run_has_trusted_candidate_metrics(paths, target_id):
             decision = make_decision(
@@ -240,6 +245,10 @@ def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text
             return decision
         return write_block_decision(paths, target_id, "offline fallback cannot make a structured research decision", decision_type="blocked_missing_decision")
     decision_type = infer_decision_type(markdown_text)
+    guard = metrics_reflection_guard_decision(paths, target_id, decision_type, markdown_text=markdown_text)
+    if guard:
+        write_decision(paths, guard)
+        return guard
     if decision_type in BLOCK_DECISIONS:
         return write_block_decision(paths, target_id, f"Markdown plan inferred {decision_type}", decision_type=decision_type)
     decision = make_decision(
@@ -257,6 +266,99 @@ def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text
     return decision
 
 
+def metrics_reflection_guard_decision(
+    paths: VibePaths,
+    target_id: str,
+    inferred_decision_type: str,
+    *,
+    markdown_text: str = "",
+) -> ResearchDecision | None:
+    if not target_id.startswith("r"):
+        return None
+    metrics = read_json(paths.runs / target_id / "metrics.json", {})
+    if not isinstance(metrics, dict) or not metrics:
+        return None
+    reflection_text = read_reflection_verdict_text(paths, target_id, markdown_text)
+    explicit_no_promote = any(token in reflection_text for token in ("do_not_promote", "failed_stop_or_redesign", "route_exhausted", "needs_new_hypothesis"))
+    untrusted = metrics_are_untrusted(metrics)
+    negative_delta = primary_delta_is_negative(metrics)
+    if not (explicit_no_promote or untrusted or negative_delta):
+        return None
+    if inferred_decision_type != "promote_to_baseline_compare" and not (explicit_no_promote and negative_delta):
+        return None
+    if explicit_no_promote or negative_delta:
+        return make_decision(
+            paths,
+            target_id,
+            "stop_direction",
+            rationale="Collected metrics or reflection verdict reject promotion; the route needs redesign before another launch.",
+            selected_direction="failed_stop_or_redesign",
+            expected_evidence={"negative_primary_delta": negative_delta, "untrusted_metrics": untrusted, "reflection_no_promote": explicit_no_promote},
+            metrics_requirements={"required": ["trusted_non_negative_baseline_delta"]},
+            provenance={"source": "metrics_reflection_guard", "inferred_decision_type": inferred_decision_type},
+            confidence="medium",
+        )
+    return make_decision(
+        paths,
+        target_id,
+        "collect_more_metrics",
+        rationale="Untrusted collected metrics cannot promote a run to baseline comparison.",
+        required_action="collect trusted schema-valid metrics before promotion",
+        expected_evidence={"untrusted_metrics": True},
+        metrics_requirements={"required": ["trusted_metrics"]},
+        provenance={"source": "metrics_trust_guard", "inferred_decision_type": inferred_decision_type},
+        confidence="medium",
+    )
+
+
+def read_reflection_verdict_text(paths: VibePaths, target_id: str, markdown_text: str) -> str:
+    parts = [markdown_text]
+    for filename in ("reflect.md", "revised_plan.md", "review.md"):
+        path = paths.runs / target_id / filename
+        if path.exists():
+            parts.append(path.read_text())
+    return "\n".join(parts).lower()
+
+
+def metrics_are_untrusted(metrics: dict[str, Any]) -> bool:
+    trust_status = str(metrics.get("trust_status") or metrics.get("trust") or metrics.get("trust_level") or "").lower()
+    if trust_status == "untrusted":
+        return True
+    if metrics.get("trusted") is False or metrics.get("trusted_candidate") is False:
+        return True
+    return False
+
+
+def primary_delta_is_negative(metrics: dict[str, Any]) -> bool:
+    candidates = [
+        metrics.get("primary"),
+        metrics.get("primary_delta"),
+        metrics.get("delta_primary"),
+        nested_get(metrics, "metrics", "primary"),
+        nested_get(metrics, "metric_delta", "primary"),
+        nested_get(metrics, "metric_deltas", "primary"),
+        nested_get(metrics, "metrics", "metric_delta", "primary"),
+        nested_get(metrics, "metrics", "metric_deltas", "primary"),
+    ]
+    return any(is_negative_number(value) for value in candidates)
+
+
+def nested_get(data: dict[str, Any], *keys: str) -> Any:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def is_negative_number(value: Any) -> bool:
+    try:
+        return float(value) < 0
+    except (TypeError, ValueError):
+        return False
+
+
 def offline_run_has_trusted_candidate_metrics(paths: VibePaths, target_id: str) -> bool:
     if not target_id.startswith("r"):
         return False
@@ -270,6 +372,8 @@ def offline_run_has_trusted_candidate_metrics(paths: VibePaths, target_id: str) 
 
 def infer_decision_type(text: str) -> DecisionType:
     lowered = text.lower()
+    if "failed_stop_or_redesign" in lowered or "route_exhausted" in lowered or "needs_new_hypothesis" in lowered or "do_not_promote" in lowered:
+        return "stop_direction"
     if "deep_research_needed" in lowered or "deep research: yes" in lowered:
         return "request_deep_research"
     if "ask_user" in lowered:

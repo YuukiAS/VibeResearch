@@ -131,9 +131,7 @@ def run_codex(
 
     config = load_config(paths)
     calls_dir = ensure_dir(paths.vibe / "codex_calls")
-    existing = [row.get("call_id", "") for row in read_jsonl(calls_dir / "registry.jsonl")]
-    call_id = next_numeric_id(existing, "call")
-    call_dir = ensure_dir(calls_dir / call_id)
+    call_id, call_dir = reserve_codex_call_dir(calls_dir)
     prompt = prompt_packet(paths, role, target_id)
     output = artifact_path(paths, role, target_id)
     last_message_path = call_dir / "last_message.md"
@@ -198,6 +196,29 @@ def run_codex(
         handle.write(json.dumps(record, sort_keys=True) + "\n")
     record_event(paths, "codex_artifact_generated", f"{role} -> {output.name}", cycle_id=target_id if target_id.startswith("c") else "", run_id=target_id if target_id.startswith("r") else "", status="ok" if returncode == 0 else "failed", payload=record)
     return CodexCallResult(call_id, role, target_id, output, returncode, call_dir, last_message, stdout, stderr)
+
+
+def reserve_codex_call_dir(calls_dir: Path) -> tuple[str, Path]:
+    """Atomically reserve a Codex call directory.
+
+    The auto-cycle lock prevents normal same-target races, but call directory
+    reservation also needs to be atomic for direct Codex calls and stale manual
+    recovery sessions.
+    """
+
+    ensure_dir(calls_dir)
+    existing = {row.get("call_id", "") for row in read_jsonl(calls_dir / "registry.jsonl")}
+    existing.update(child.name for child in calls_dir.iterdir() if child.is_dir())
+    for _ in range(100000):
+        call_id = next_numeric_id(existing, "call")
+        call_dir = calls_dir / call_id
+        try:
+            call_dir.mkdir()
+        except FileExistsError:
+            existing.add(call_id)
+            continue
+        return call_id, call_dir
+    raise RuntimeError(f"unable to reserve Codex call directory under {calls_dir}")
 
 
 def codex_exec_command(paths: VibePaths, role: str, config: dict[str, Any], last_message_path: Path) -> list[str]:

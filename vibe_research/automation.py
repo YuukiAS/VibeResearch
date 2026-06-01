@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
+
 from .codex_adapter import run_codex
 from .git_ops import create_branch
 from .io import read_json, write_json
+from .locks import advancing_lock, update_advance_lock
 from .next_action import compute_next_action
 from .papers import auto_method_search
 from .paths import VibePaths
@@ -13,10 +16,14 @@ from .research import literature_refresh_idea, reflect, reflect_cycle, revise_cy
 from .scheduler import collect, monitor, queue_run, review_cycle, review_run, run_dryrun, submit_queue
 
 
-def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = True) -> str:
+def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = True, force_lock: bool = False, _locked: bool = False) -> str:
     """Execute one safe next action derived from local state."""
 
+    if not _locked:
+        with advancing_lock(paths, command="auto-next", current_action="computing_next_action", force=force_lock):
+            return auto_next(paths, offline=offline, dry_submit=dry_submit, force_lock=force_lock, _locked=True)
     action, blocked = compute_next_action(paths)
+    update_advance_lock(paths, current_action=action)
     if blocked:
         return f"blocked: {blocked}"
     parts = action.split()
@@ -93,14 +100,21 @@ def auto_next(paths: VibePaths, *, offline: bool = False, dry_submit: bool = Tru
     return f"manual: {action}"
 
 
-def auto_cycle(paths: VibePaths, *, offline: bool = False, dry_submit: bool = True, max_steps: int = 30) -> list[str]:
+def auto_cycle(paths: VibePaths, *, offline: bool = False, dry_submit: bool = True, max_steps: int = 30, force_lock: bool = False) -> list[str]:
     results: list[str] = []
-    for _ in range(max_steps):
-        result = auto_next(paths, offline=offline, dry_submit=dry_submit)
-        results.append(result)
-        if result.startswith(("blocked:", "manual:", "submitted", "monitored")):
-            break
+    with advancing_lock(paths, command="auto-cycle", current_action="starting_auto_cycle", force=force_lock):
+        for _ in range(max_steps):
+            result = call_auto_next_under_existing_lock(paths, offline=offline, dry_submit=dry_submit)
+            results.append(result)
+            if result.startswith(("blocked:", "manual:", "submitted", "monitored")):
+                break
     return results
+
+
+def call_auto_next_under_existing_lock(paths: VibePaths, *, offline: bool, dry_submit: bool) -> str:
+    if "_locked" in inspect.signature(auto_next).parameters:
+        return auto_next(paths, offline=offline, dry_submit=dry_submit, _locked=True)
+    return auto_next(paths, offline=offline, dry_submit=dry_submit)
 
 
 def scheduler_explain(paths: VibePaths) -> str:

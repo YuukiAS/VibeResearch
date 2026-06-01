@@ -12,6 +12,7 @@ from typing import Any
 
 from .config import load_config
 from .io import read_json, read_jsonl, utc_now, write_json
+from .locks import active_advance_lock
 from .paths import VibePaths
 
 
@@ -44,6 +45,7 @@ def daemon_status(paths: VibePaths) -> dict[str, Any]:
         dry_submit=daemon_state.get("dry_submit"),
         actionable_next=actionable,
     )
+    advance_lock = active_advance_lock(paths)
     base = {
         "session": session,
         "target_root": target_root,
@@ -62,6 +64,10 @@ def daemon_status(paths: VibePaths) -> dict[str, Any]:
         "autonomous_progress_ok": not autonomous_blockers,
         "autonomous_progress_blockers": autonomous_blockers,
         "next_collection_runs": next_collect,
+        "advance_lock": advance_lock,
+        "advance_lock_owner": advance_lock.get("pid", "") if advance_lock else "",
+        "advance_lock_command": advance_lock.get("command", "") if advance_lock else "",
+        "advance_lock_current_action": advance_lock.get("current_action", "") if advance_lock else "",
     }
     if not shutil.which("tmux"):
         return {**base, "available": False, "running": False, "reason": "tmux not found"}

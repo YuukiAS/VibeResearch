@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.12.3 - 2026-05-31
+
+- Add target-scoped advancing locks for `auto-next` and `auto-cycle`, including
+  current action tracking and operator-visible lock owner details.
+- Expose active advancing lock state in daemon and scheduler status output.
+- Reserve Codex call directories atomically so concurrent callers cannot reuse
+  the same `callNNN` artifact path.
+- Treat untrusted or negative collected metrics and no-promote reflection
+  verdicts as authoritative over Markdown-derived promotion decisions.
+- Add regression coverage for same-target auto-cycle lock refusal and negative
+  untrusted metrics producing stop/redesign instead of promotion.
+
 ## 0.12.2 - 2026-05-31
 
 - Compile post-target continuation cycles from active executable adapter

@@ -59,6 +59,7 @@ from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
 from .io import read_json, read_jsonl, read_yaml
+from .locks import active_advance_lock
 from .internalization import (
     add_external_asset,
     add_lineage_relation,
@@ -2154,8 +2155,15 @@ def scheduler_status(target: Path = typer.Option(Path("."), "--target", "-t")) -
     active = read_json(p.scheduler / "active_jobs.json", {"active": []}).get("active", [])
     completed = read_jsonl(p.scheduler / "completed_jobs.jsonl")
     daemon = daemon_status(p)
+    lock = active_advance_lock(p)
     console.print(f"Daemon running: {daemon.get('running', False)} session={daemon.get('session', '')}")
     console.print(f"Queued={len(queue)} Active={len(active)} Completed={len(completed)} Next collect={', '.join(daemon.get('next_collection_runs', [])) or 'none'}")
+    if lock:
+        console.print(
+            "Advance lock: "
+            f"pid={lock.get('pid')} command={lock.get('command')} "
+            f"current_action={lock.get('current_action')} pid_alive={lock.get('pid_alive')}"
+        )
     table = Table(title="Scheduler")
     table.add_column("Kind")
     table.add_column("Run")
@@ -2210,10 +2218,11 @@ def auto_next_cmd(
     offline: bool = typer.Option(False, "--offline"),
     dry_submit: bool = typer.Option(False, "--dry-submit", help="Record backend submissions without launching jobs."),
     real_submit: bool = typer.Option(False, "--real-submit", help="Explicitly allow real backend submission."),
+    force_lock: bool = typer.Option(False, "--force-lock", help="Override a stale advancing lock after validation."),
 ) -> None:
     """Execute one safe next step from the local state machine."""
 
-    console.print(run_auto_next(paths(target), offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit)))
+    console.print(run_auto_next(paths(target), offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit), force_lock=force_lock))
 
 
 @app.command("auto-cycle")
@@ -2223,10 +2232,11 @@ def auto_cycle_cmd(
     dry_submit: bool = typer.Option(False, "--dry-submit", help="Record backend submissions without launching jobs."),
     real_submit: bool = typer.Option(False, "--real-submit", help="Explicitly allow real backend submission."),
     max_steps: int = typer.Option(30, "--max-steps"),
+    force_lock: bool = typer.Option(False, "--force-lock", help="Override a stale advancing lock after validation."),
 ) -> None:
     """Advance one portfolio cycle until submit/manual/block."""
 
-    for line in run_auto_cycle(paths(target), offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit), max_steps=max_steps):
+    for line in run_auto_cycle(paths(target), offline=offline, dry_submit=effective_dry_submit(dry_submit, real_submit), max_steps=max_steps, force_lock=force_lock):
         console.print(line)
 
 
