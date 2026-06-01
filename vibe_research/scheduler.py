@@ -703,6 +703,8 @@ def collect(paths: VibePaths, run_id: str, metric: float | None = None, trusted:
         "cycle_id": run.get("cycle_id", ""),
         "direction_id": run.get("direction_id", ""),
         "branch": run.get("branch", ""),
+        "run_kind": run.get("run_kind", ""),
+        "adapter_metadata": run.get("adapter_metadata", {}),
         "primary_metric": value,
         "metrics": metric_values,
         "trusted": trusted_now,

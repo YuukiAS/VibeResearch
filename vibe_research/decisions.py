@@ -224,6 +224,10 @@ def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text
     existing_path = decision_path(paths, target_id)
     if existing_path.exists() and existing_path.read_text().strip():
         existing = load_decision(paths, target_id)
+        artifact_guard = artifact_only_promotion_guard_decision(paths, target_id, existing.decision_type)
+        if artifact_guard:
+            write_decision(paths, artifact_guard)
+            return artifact_guard
         guard = metrics_reflection_guard_decision(paths, target_id, existing.decision_type)
         if existing.decision_type == "promote_to_baseline_compare" and guard:
             write_decision(paths, guard)
@@ -245,6 +249,10 @@ def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text
             return decision
         return write_block_decision(paths, target_id, "offline fallback cannot make a structured research decision", decision_type="blocked_missing_decision")
     decision_type = infer_decision_type(markdown_text)
+    artifact_guard = artifact_only_promotion_guard_decision(paths, target_id, decision_type)
+    if artifact_guard:
+        write_decision(paths, artifact_guard)
+        return artifact_guard
     guard = metrics_reflection_guard_decision(paths, target_id, decision_type, markdown_text=markdown_text)
     if guard:
         write_decision(paths, guard)
@@ -264,6 +272,27 @@ def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text
     )
     write_decision(paths, decision)
     return decision
+
+
+def artifact_only_promotion_guard_decision(paths: VibePaths, target_id: str, inferred_decision_type: str) -> ResearchDecision | None:
+    if inferred_decision_type != "promote_to_baseline_compare" or not target_id.startswith("r"):
+        return None
+    state = read_json(paths.state / "state.json", {})
+    run = state.get("runs", {}).get(target_id, {}) if isinstance(state.get("runs"), dict) else {}
+    metadata = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}
+    if run.get("run_kind") != "artifact_only" and not metadata.get("no_job"):
+        return None
+    return make_decision(
+        paths,
+        target_id,
+        "collect_more_metrics",
+        rationale="Artifact-only/no-job runs record local analysis artifacts and must not be promoted to baseline comparison from Markdown text alone.",
+        required_action="review artifact output and continue artifact-only closure",
+        expected_evidence={"artifact_only": True, "no_job": bool(metadata.get("no_job"))},
+        metrics_requirements={"required": ["schema_valid_artifact_output"]},
+        provenance={"source": "artifact_only_promotion_guard", "inferred_decision_type": inferred_decision_type},
+        confidence="medium",
+    )
 
 
 def metrics_reflection_guard_decision(

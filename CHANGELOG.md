@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.12.6 - 2026-05-31
+
+- Exclude artifact-only/no-job runs from repeated zero-metric loop-guard
+  blocking.
+- Preserve run kind and no-job adapter metadata in collected metric history so
+  loop guards can distinguish local closure artifacts from model experiments.
+- Prevent artifact-only revised-plan text from inferring
+  `promote_to_baseline_compare` solely because it mentions a baseline.
+- Add regression coverage that repeated artifact-only zero metrics do not block
+  downstream artifact-only dependencies.
+
 ## 0.12.5 - 2026-05-31
 
 - Allow artifact-only/no-job runs to record logical branches without requiring a

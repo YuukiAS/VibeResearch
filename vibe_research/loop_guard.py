@@ -20,6 +20,9 @@ def normalize(text: str) -> str:
 def detect_repeating_evidence(paths: VibePaths, target_id: str = "") -> tuple[bool, str]:
     config = load_config(paths)
     threshold = int(config.get("loop_guard", {}).get("repeated_threshold", 2))
+    state = read_json(paths.state / "state.json", {})
+    if target_id.startswith("r") and run_is_artifact_only(state.get("runs", {}).get(target_id, {})):
+        return False, ""
     decisions = read_jsonl(paths.state / "decisions.jsonl")
     scoped = [row for row in decisions if not target_id or row.get("target_id") == target_id]
     recent_decisions = [row for row in scoped if row.get("decision_type") in {"collect_more_metrics", "blocked_missing_decision", "blocked_missing_adapter"}][-threshold:]
@@ -28,12 +31,11 @@ def detect_repeating_evidence(paths: VibePaths, target_id: str = "") -> tuple[bo
         if decision_type == "collect_more_metrics" and target_id.startswith("r") and target_has_schema_valid_metrics(paths, target_id):
             return False, ""
         return True, f"same decision repeated {threshold} times: {recent_decisions[-1].get('decision_type')}"
-    state = read_json(paths.state / "state.json", {})
-    runs = list(state.get("runs", {}).items())[-threshold:]
+    runs = [(run_id, run) for run_id, run in state.get("runs", {}).items() if not run_is_artifact_only(run)][-threshold:]
     hypotheses = [normalize(run.get("hypothesis", "")) for _run_id, run in runs]
     if len(hypotheses) >= threshold and len(set(hypotheses)) == 1 and hypotheses[0]:
         return True, f"same run hypothesis repeated {threshold} times"
-    history = read_jsonl(paths.leaderboard / "history.jsonl")[-threshold:]
+    history = [row for row in read_jsonl(paths.leaderboard / "history.jsonl") if not metric_row_is_artifact_only(state, row)][-threshold:]
     if len(history) >= threshold and all((not row.get("trusted")) and float(row.get("primary_metric", 0.0) or 0.0) == 0.0 for row in history):
         return True, f"untrusted default primary_metric=0.0 repeated {threshold} times"
     all_history = read_jsonl(paths.leaderboard / "history.jsonl")
@@ -53,6 +55,21 @@ def detect_repeating_evidence(paths: VibePaths, target_id: str = "") -> tuple[bo
     if len(invalid_plans) >= threshold and not has_trusted:
         return True, f"resource plan missing or placeholder for {threshold} recent cycles without trusted metrics"
     return False, ""
+
+
+def run_is_artifact_only(run: dict[str, Any]) -> bool:
+    metadata = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}
+    return run.get("run_kind") == "artifact_only" or bool(metadata.get("no_job"))
+
+
+def metric_row_is_artifact_only(state: dict[str, Any], row: dict[str, Any]) -> bool:
+    if row.get("run_kind") == "artifact_only":
+        return True
+    metadata = row.get("adapter_metadata", {}) if isinstance(row.get("adapter_metadata"), dict) else {}
+    if metadata.get("no_job"):
+        return True
+    run_id = row.get("run_id", "")
+    return bool(run_id and run_is_artifact_only(state.get("runs", {}).get(run_id, {})))
 
 
 def apply_loop_guard(paths: VibePaths, target_id: str) -> bool:

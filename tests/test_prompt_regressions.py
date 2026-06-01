@@ -12,11 +12,13 @@ from vibe_research.cli import app
 from vibe_research.daemon import daemon_autonomy_audit, daemon_status
 from vibe_research.decisions import ensure_decision_after_revise, load_decision, make_decision, write_decision
 from vibe_research.git_ops import create_branch
-from vibe_research.io import write_json, write_yaml
+from vibe_research.io import append_jsonl, write_json, write_yaml
 from vibe_research.locks import active_advance_lock, advancing_lock
+from vibe_research.loop_guard import apply_loop_guard
 from vibe_research.paths import VibePaths
 from vibe_research.project import create_cycle, sync_resource_plan_from_portfolio
 from vibe_research.promotion import validate_resource_plan
+from vibe_research.scheduler import dependencies_blocked
 
 
 runner = CliRunner()
@@ -236,3 +238,64 @@ def test_v0125_artifact_only_branch_records_logical_branch_with_dirty_git(tmp_pa
     status = invoke("status", "--target", str(tmp_path))
     assert status.exit_code == 0
     assert "logical/no-git" in status.output
+
+
+def test_v0126_artifact_only_zero_metrics_do_not_trip_repeated_evidence(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    state = {
+        "cycles": {"c001": {"status": "active"}},
+        "runs": {
+            "r001_audit": {"run_id": "r001_audit", "cycle_id": "c001", "status": "revised", "run_kind": "artifact_only", "adapter_metadata": {"no_job": True}},
+            "r002_review": {"run_id": "r002_review", "cycle_id": "c001", "status": "revised", "run_kind": "artifact_only", "adapter_metadata": {"no_job": True}},
+            "r003_decision": {
+                "run_id": "r003_decision",
+                "cycle_id": "c001",
+                "status": "queued",
+                "run_kind": "artifact_only",
+                "adapter_metadata": {"no_job": True},
+                "dependencies": {"run_after": ["r001_audit", "r002_review"]},
+            },
+        },
+    }
+    write_json(paths.state / "state.json", state)
+    for run_id in ["r001_audit", "r002_review"]:
+        append_jsonl(
+            paths.leaderboard / "history.jsonl",
+            {
+                "run_id": run_id,
+                "cycle_id": "c001",
+                "primary_metric": 0.0,
+                "trusted": False,
+                "trust_status": "untrusted",
+                "schema_status": "valid",
+                "run_kind": "artifact_only",
+                "adapter_metadata": {"no_job": True},
+            },
+        )
+    assert not apply_loop_guard(paths, "r002_review")
+    assert not apply_loop_guard(paths, "c001")
+    assert not dependencies_blocked(state, state["runs"]["r003_decision"])
+
+
+def test_v0126_artifact_only_revised_plan_does_not_promote_on_baseline_word(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    run_id = "r001_artifact_review"
+    (paths.runs / run_id).mkdir(parents=True, exist_ok=True)
+    write_json(
+        paths.state / "state.json",
+        {
+            "runs": {
+                run_id: {
+                    "run_id": run_id,
+                    "cycle_id": "c001",
+                    "status": "collected",
+                    "run_kind": "artifact_only",
+                    "adapter_metadata": {"no_job": True},
+                }
+            }
+        },
+    )
+    decision = ensure_decision_after_revise(paths, run_id, "## Decision\nCompare against baseline context before closing the artifact audit.")
+    assert decision.decision_type == "collect_more_metrics"
+    assert decision.baseline_comparison_target == ""
+    assert decision.provenance["source"] == "artifact_only_promotion_guard"
