@@ -123,6 +123,14 @@ from .scheduler import operator_fallback_requeue
 from .scheduler import queue_run, review_cycle, review_run, run_dryrun, submit_queue
 from .scout import add_scout_finding, create_scout_claim, scout_audit, scout_query_context, triage_scout_finding
 from .selftests import sustained_round_selftest
+from .session_budget_guard import (
+    guard_session_action,
+    initialize_budget_state,
+    load_budget_state,
+    record_zero_cost_wait,
+    refresh_budget_from_status,
+    write_low_budget_checkpoint,
+)
 from .timeline import render_timeline_markdown, sync_timeline_files
 
 app = typer.Typer(help="Repo-specific sustained Vibe Research orchestration.")
@@ -149,6 +157,7 @@ mve_app = typer.Typer(help="Validate minimum viable experiment contracts.")
 portfolio_app = typer.Typer(help="Plan, schedule, and audit bounded experiment portfolios.")
 policy_app = typer.Typer(help="Inspect and lint research policies.")
 budget_app = typer.Typer(help="Reserve, reconcile, and inspect research budget.")
+session_budget_app = typer.Typer(help="Manage Codex session quota guard state.")
 memo_app = typer.Typer(help="Generate daily research memos.")
 external_app = typer.Typer(help="Acquire external repositories and method resources with provenance.")
 lineage_app = typer.Typer(help="Manage generic research lineage records.")
@@ -182,6 +191,7 @@ app.add_typer(mve_app, name="mve")
 app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(policy_app, name="policy")
 app.add_typer(budget_app, name="budget")
+app.add_typer(session_budget_app, name="session-budget")
 app.add_typer(memo_app, name="memo")
 app.add_typer(external_app, name="external")
 app.add_typer(lineage_app, name="lineage")
@@ -643,7 +653,115 @@ def kernel_init_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), fo
     paths_ = paths(target)
     paths_.require_initialized()
     written = initialize_kernel(paths_, force=force)
+    initialize_budget_state(paths_, force=force)
     console.print(f"Kernel initialized: {len(written)} file(s) written")
+
+
+@session_budget_app.command("init")
+def session_budget_init_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    session_name: str = typer.Option("", "--session-name"),
+    role: str = typer.Option("", "--role"),
+    resume_command: str = typer.Option("", "--resume-command"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Create or refresh SESSION_BUDGET_STATE.json and wait helper."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    state_path = initialize_budget_state(paths_, force=force, session_name=session_name, role=role, resume_command=resume_command)
+    console.print(f"Session budget state: {state_path}")
+
+
+@session_budget_app.command("refresh")
+def session_budget_refresh_cmd(
+    status_text: Optional[str] = typer.Option(None, "--status-text", help="Text copied from codex --no-alt-screen /status."),
+    status_file: Optional[Path] = typer.Option(None, "--status-file"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    session_name: str = typer.Option("", "--session-name"),
+    role: str = typer.Option("", "--role"),
+    estimated_reset_at: str = typer.Option("", "--estimated-reset-at"),
+    resume_command: str = typer.Option("", "--resume-command"),
+) -> None:
+    """Refresh quota percentages from manually observed Codex status text."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    text = status_text if status_text is not None else (status_file.read_text() if status_file else "")
+    state = refresh_budget_from_status(
+        paths_,
+        status_text=text,
+        session_name=session_name,
+        role=role,
+        estimated_reset_at=estimated_reset_at,
+        resume_command=resume_command,
+    )
+    console.print_json(data=state)
+
+
+@session_budget_app.command("guard")
+def session_budget_guard_cmd(
+    phase: str = typer.Option(..., "--phase", help="PLAN, REVIEW, COMPILE, EXECUTE, REFLECT, or SLEEP."),
+    role: str = typer.Option("", "--role"),
+    output: str = typer.Option("", "--output"),
+    checkpoint_on_block: bool = typer.Option(False, "--checkpoint-on-block"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Check whether a role may enter a budget-sensitive phase."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    result = guard_session_action(paths_, role=role, phase=phase, output_path=output, checkpoint_on_block=checkpoint_on_block)
+    console.print(f"Session budget guard: {'ok' if result['ok'] else 'blocked'}")
+    console.print(f"Phase: {result['phase']}")
+    console.print(f"Role: {result['role']}")
+    console.print(f"Action: {result['action']}")
+    if result.get("checkpoint_path"):
+        console.print(f"Checkpoint: {result['checkpoint_path']}")
+    for reason in result["reasons"]:
+        console.print(f"Reason: {reason}")
+    if not result["ok"]:
+        raise typer.Exit(1)
+
+
+@session_budget_app.command("checkpoint")
+def session_budget_checkpoint_cmd(
+    phase: str = typer.Option(..., "--phase"),
+    reason: list[str] = typer.Option([], "--reason"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Write a low-budget checkpoint and root RESUME.md."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    checkpoint = write_low_budget_checkpoint(paths_, load_budget_state(paths_), phase=phase.upper(), reasons=reason)
+    console.print_json(data=checkpoint)
+
+
+@session_budget_app.command("wait-mode")
+def session_budget_wait_mode_cmd(
+    wait_type: str = typer.Option(..., "--wait-type", help="slurm-job or quota-wait."),
+    job_id: str = typer.Option("", "--job-id"),
+    estimated_reset_at: str = typer.Option("", "--estimated-reset-at"),
+    resume_command: str = typer.Option("", "--resume-command"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Record a zero-cost wait state without polling from Codex."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    try:
+        record = record_zero_cost_wait(
+            paths_,
+            wait_type=wait_type,
+            job_id=job_id,
+            estimated_reset_at=estimated_reset_at,
+            resume_command=resume_command,
+        )
+    except ValueError as exc:
+        console.print(str(exc))
+        raise typer.Exit(1) from exc
+    console.print_json(data=record)
 
 
 @kernel_app.command("status")

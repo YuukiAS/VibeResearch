@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.16.2 - 2026-06-01
+
+- Add Budget-Aware Session Runtime state in `SESSION_BUDGET_STATE.json`.
+- Add `vibe session-budget` commands for initialization, manual Codex `/status`
+  refresh, phase guards, checkpoint creation, and zero-cost wait mode records.
+- Parse observed `5h limit: ... % left` and `weekly limit: ... % left` status
+  text without launching Codex from the framework.
+- Generate low-budget checkpoints, root `RESUME.md`, and
+  `wait_until_budget_reset.sh` for quota wait recovery.
+- Record Slurm job wait versus quota wait as zero-cost state so Codex can stop
+  spending reasoning while external work or quota renewal is pending.
+
 ## 0.16.1 - 2026-06-01
 
 - Add an Executor Boundary Guard before command execution.

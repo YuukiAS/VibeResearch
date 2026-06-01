@@ -273,18 +273,25 @@ multi-fold or packaging. The system cannot jump from smoke to success.
 All Codex sessions are quota-aware. Each session reads
 `SESSION_BUDGET_STATE.json` before starting work, before long tasks, before
 revision, before reflection, and before sleep or resume.
+`vibe session-budget init` creates the shared state, `vibe session-budget
+refresh` records manually observed `codex --no-alt-screen` `/status` quota
+text, and `vibe session-budget guard --phase PLAN|REVIEW|COMPILE|EXECUTE|REFLECT|SLEEP`
+decides whether the next phase is allowed.
 
 When the 5-hour quota is below 20%, sessions may only close work, write
 checkpoints, submit an already prepared short job, summarize results, or update
 memory. When it is below 10%, sessions must stop new reasoning, write
 `RESUME.md`, record the current phase, next command, open debts, job id, and
-actions that must not be repeated, then sleep or exit until renewal.
+actions that must not be repeated, then sleep or exit until renewal. Use
+`vibe session-budget checkpoint --phase ...` to write that recovery state.
 
 Executor has priority at low quota because it must preserve the engineering
 state. Reflector is next because it preserves interpretation. Planner and
 Reviewer should pause. During long Slurm jobs, Codex should not repeatedly read
 logs; zero-cost shell monitoring should wait for the job and leave a resume
-command.
+command. `vibe session-budget wait-mode --wait-type slurm-job` records job
+polling, while `--wait-type quota-wait` records a quota renewal wait using
+`wait_until_budget_reset.sh`.
 
 ### Codex Roles
 

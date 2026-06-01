@@ -25,6 +25,7 @@ from .portal import build_portal, install_agents_snippet, write_agents_files, wr
 from .promotion import ensure_executable_resource_plan, select_executable_decision_for_capability, validate_resource_plan
 from .research_manager import research_init
 from .resource_policy import normalize_run_resources
+from .session_budget_guard import initialize_budget_state
 from .timeline import record_event
 
 
@@ -161,6 +162,7 @@ def init_project(
     touch_jsonl(paths.state / "decisions.jsonl")
     touch_jsonl(paths.state / "open_questions.jsonl")
     initialize_kernel(paths, project_goal=project_brief["goal"])
+    initialize_budget_state(paths, session_name="bootstrap", role="planner", resume_command="vibe next")
 
     write_text(paths.inbox / "ideas.md", "## New Ideas Inbox\n\n- [ ] idea:\n")
     write_text(paths.inbox / "user_prompts.md", "# User Prompts\n\n")
@@ -611,6 +613,7 @@ cd {{ workdir }}
 """,
     )
     write_text(paths.templates / "run_status.md.j2", "# Run {{ run_id }}\n\nStatus: {{ status }}\n")
+    write_text(paths.templates / "RESUME.md.j2", "# RESUME\n\nSession: {{ session_name }}\nRole: {{ role }}\nNext: {{ next_resume_command }}\n")
     for name in ["slurm_gpu_example.sbatch.j2", "slurm_long_run_example.sbatch.j2"]:
         write_text(paths.templates / name, (paths.templates / "slurm_default.sbatch.j2").read_text())
 

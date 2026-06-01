@@ -217,15 +217,20 @@ VibeResearch 不靠一句 “不要偷懒” 来约束系统，而是让偷懒�
 
 所有 Codex session 都必须有 5-hour quota 意识。每个 session 在启动、长任务、revise、
 reflection、sleep 或 resume 前，都要读取 `SESSION_BUDGET_STATE.json`。
+`vibe session-budget init` 创建共享状态，`vibe session-budget refresh` 记录人工观察到的
+`codex --no-alt-screen` `/status` quota 文本，`vibe session-budget guard --phase PLAN|REVIEW|COMPILE|EXECUTE|REFLECT|SLEEP`
+判断下一阶段是否允许进入。
 
 当 5h quota 低于 20% 时，只允许收尾、写 checkpoint、提交已经准备好的短 job、
 整理报告或更新 memory。当 5h quota 低于 10% 时，必须停止新推理，写 `RESUME.md`，
 记录当前阶段、下一步命令、未完成债务、job id 和必须避免重复的动作，然后 sleep
-或退出等待 renew。
+或退出等待 renew。`vibe session-budget checkpoint --phase ...` 用来写这份恢复状态。
 
 低 quota 时，Executor 优先级最高，因为它要保存工程现场；Reflector 次之，因为它要保存
 结果解释；Planner 和 Reviewer 应暂停。Slurm 长任务期间不应让 Codex 反复读日志，
 而应使用 zero-cost monitor 等待作业结束，并留下 resume command。
+`vibe session-budget wait-mode --wait-type slurm-job` 记录 job 轮询，
+`--wait-type quota-wait` 则记录基于 `wait_until_budget_reset.sh` 的 quota renew 等待。
 
 ### Codex 的角色
 
