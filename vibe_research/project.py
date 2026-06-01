@@ -20,7 +20,7 @@ from .models import IdeaRecord, ProjectConfig, RunManifest, default_budget, defa
 from .papers import connect
 from .paths import VibePaths
 from .portal import build_portal, install_agents_snippet, write_agents_files, write_portal_text
-from .promotion import ensure_executable_resource_plan, validate_resource_plan
+from .promotion import ensure_executable_resource_plan, select_executable_decision_for_capability, validate_resource_plan
 from .research_manager import research_init
 from .resource_policy import normalize_run_resources
 from .timeline import record_event
@@ -843,7 +843,59 @@ def sync_resource_plan_from_portfolio(paths: VibePaths, cycle_id: str) -> dict[s
     plan.setdefault("runs", {})
     plan.setdefault("cancel_rules", [])
     write_yaml(paths.cycles / cycle_id / "resource_plan.yaml", plan)
+    if should_compile_post_target_continuation(paths, plan):
+        ok, message = ensure_executable_resource_plan(paths, cycle_id)
+        if ok:
+            compiled = load_resource_plan(paths, cycle_id)
+            compiled["post_target_continuation"] = {
+                "source": "sustained_target_complete",
+                "generic_placeholder_repaired": True,
+                "compiled_at": utc_now(),
+            }
+            write_yaml(paths.cycles / cycle_id / "resource_plan.yaml", compiled)
+            record_event(paths, "post_target_resource_plan_compiled", f"Compiled post-target continuation resource plan for {cycle_id}", cycle_id=cycle_id, status="compiled")
+            return compiled
+        record_event(paths, "post_target_resource_plan_blocked", f"{cycle_id}: {message}", cycle_id=cycle_id, status="blocked_missing_resource_plan")
     return plan
+
+
+def should_compile_post_target_continuation(paths: VibePaths, plan: dict[str, Any]) -> bool:
+    audit = read_json(paths.research / "sustained_round_audit.json", {})
+    if not audit.get("complete"):
+        return False
+    if not generic_placeholder_resource_plan(plan):
+        return False
+    try:
+        from .adapter_schema import load_adapter_manifest
+        from .real_experiments import REAL_EXPERIMENT_TASKS
+
+        manifest = load_adapter_manifest(paths)
+    except Exception:
+        return False
+    active_real = [
+        cap
+        for cap in manifest.capabilities
+        if cap.status == "active"
+        and cap.task_type in REAL_EXPERIMENT_TASKS
+        and select_executable_decision_for_capability(cap)
+    ]
+    return bool(active_real)
+
+
+def generic_placeholder_resource_plan(plan: dict[str, Any]) -> bool:
+    runs = plan.get("runs", {}) if isinstance(plan.get("runs"), dict) else {}
+    if not runs:
+        return True
+    names = set(runs)
+    generic_names = {"baseline-check", "diagnostic-check", "first-hypothesis"}
+    if names and names.issubset(generic_names):
+        return True
+    for spec in runs.values():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("adapter_metadata", {}).get("capability_id") or spec.get("dryrun") or spec.get("entrypoint"):
+            return False
+    return not bool(plan.get("decision_id"))
 
 
 def generate_runs(paths: VibePaths, cycle_id: str | None = None, count: int = 3) -> list[str]:

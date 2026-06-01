@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.12.2 - 2026-05-31
+
+- Compile post-target continuation cycles from active executable adapter
+  capabilities when the sustained-round audit target is already complete.
+- Repair generic baseline/diagnostic placeholder resource plans into concrete
+  capability-backed routes for ongoing downstream improvement.
+- Add regression coverage that post-target planning produces multi-route
+  executable runs with adapter metadata instead of generic scaffold runs.
+
 ## 0.12.1 - 2026-05-31
 
 - Add daemon autonomy status fields for actionable next actions, queued/active
