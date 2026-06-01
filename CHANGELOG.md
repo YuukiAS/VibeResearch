@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-05-31
+
+- Add `vibe present` exports for narrative, reproducibility, presentation
+  tables, framework specification, and complete package manifests.
+- Separate traceable evidence-backed claims from speculation/future work and
+  preserve negative hypothesis, experiment, evidence, and scout results.
+- Export reproducibility rows linking conclusions to experiments, runs,
+  metrics, artifacts, adapter revisions, policy revisions, code commits, and
+  memos.
+- Generate presentation JSON tables for baseline comparison, ablations,
+  stage-gate progression, budget usage, hypothesis outcomes, scout traces, and
+  external-to-owned transition timelines.
+- Build final framework specs from lineage proposals, owned scaffolds, adapter
+  internal capabilities, active execution surfaces, dependencies, and optional
+  external regression plans.
+
 ## 0.10.19 - 2026-05-31
 
 - Prefer actionable current-cycle run lifecycle steps over stale

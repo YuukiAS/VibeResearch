@@ -74,6 +74,7 @@ from .optimization import external_deemphasis_plan, plan_ablation, promote_champ
 from .papers import add_paper, auto_method_search, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
 from .portal import build_portal
+from .presentation import build_framework_spec, build_narrative, build_presentation_package, build_reproducibility_package, export_presentation_tables
 from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio, vendor_runtime
 from .promotion import compile_decision as compile_cycle_decision
 from .promotion import validate_resource_plan
@@ -136,6 +137,7 @@ internalization_app = typer.Typer(help="Plan and audit generic internalization r
 scout_app = typer.Typer(help="Triage scout findings into evidence-grade research inputs.")
 owned_app = typer.Typer(help="Generate and audit downstream owned framework alpha scaffolds.")
 optimize_app = typer.Typer(help="Manage champion/challenger owned optimization loops.")
+present_app = typer.Typer(help="Export presentation-ready research packages.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -160,6 +162,7 @@ app.add_typer(internalization_app, name="internalization")
 app.add_typer(scout_app, name="scout")
 app.add_typer(owned_app, name="owned")
 app.add_typer(optimize_app, name="optimize")
+app.add_typer(present_app, name="present")
 console = Console()
 
 
@@ -1309,6 +1312,50 @@ def optimize_external_deemphasis_cmd(
     console.print_json(data=result)
     if not result.get("approved"):
         raise typer.Exit(1)
+
+
+@present_app.command("narrative")
+def present_narrative_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    claims_file: Optional[Path] = typer.Option(None, "--claims-file", help="Optional JSON list of final claims to trace."),
+) -> None:
+    """Build a final narrative with untraceable claims separated from evidence-backed claims."""
+
+    claims = read_json(claims_file, []) if claims_file else None
+    console.print_json(data=build_narrative(paths(target), claims=claims))
+
+
+@present_app.command("reproducibility")
+def present_reproducibility_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Build a reproducibility package linking conclusions to evidence, runs, code, adapter, and policy state."""
+
+    console.print_json(data=build_reproducibility_package(paths(target)))
+
+
+@present_app.command("tables")
+def present_tables_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Export presentation-ready JSON tables for figures and slides."""
+
+    result = export_presentation_tables(paths(target))
+    console.print_json(data={"created_at": result["created_at"], "table_files": {key: str(value) for key, value in result["table_files"].items()}})
+
+
+@present_app.command("framework-spec")
+def present_framework_spec_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Build the final framework specification from lineage, owned, and adapter state."""
+
+    console.print_json(data=build_framework_spec(paths(target)))
+
+
+@present_app.command("package")
+def present_package_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    claims_file: Optional[Path] = typer.Option(None, "--claims-file", help="Optional JSON list of final claims to trace."),
+) -> None:
+    """Build the complete presentation-ready research package."""
+
+    claims = read_json(claims_file, []) if claims_file else None
+    console.print_json(data=build_presentation_package(paths(target), claims=claims))
 
 
 @policy_app.command("lint")
