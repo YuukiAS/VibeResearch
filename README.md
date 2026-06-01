@@ -130,6 +130,9 @@ Executor runs are started with `vibe executor run` against an accepted
 `execution_manifest.json`. Executor writes an execution log, artifact inventory,
 result manifest, and Reflector-readable result report; failed commands or
 missing expected artifacts produce a blocker report instead of a completed run.
+`vibe executor guard` checks the same entry boundary without running commands:
+review approval consistency, evidence-grade artifacts, safety red lines, stop
+condition, fallback command, and failure-report path.
 
 ```mermaid
 flowchart TD
@@ -303,7 +306,7 @@ around an external auto-research framework:
 - 0.13: session-oriented kernel and shared file protocol.
 - 0.14: Planner, Reviewer, and revision loop.
 - 0.15: Compiler and MVE contract.
-- 0.16: Executor boundary.
+- 0.16.0-0.16.1: Executor session and boundary guard.
 - 0.16.2: Budget-Aware Session Runtime.
 - 0.17: Reflector and Belief Ratchet.
 - 0.18: Research Registry, Immune System, and WATCH TTL.

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.16.1 - 2026-06-01
+
+- Add an Executor Boundary Guard before command execution.
+- Add `vibe executor guard` to validate reviewed-manifest, artifact, safety,
+  stop, fallback, and failure-report constraints without running commands.
+- Verify compiled manifests match `reviewed_plan_manifest.json` approval IDs,
+  revision history, mechanism, expected artifact, and stop condition.
+- Reject weak artifacts such as README summaries, repo clones, import-success
+  outputs, cache paths, metadata-only outputs, and smoke/status markers.
+- Block explicit safety red lines for data permission, missing human approval,
+  prohibited uploads/deletes/external data, Slurm budget, and resource caps.
+
 ## 0.16.0 - 2026-06-01
 
 - Add an Executor Session that runs accepted `execution_manifest.json` files

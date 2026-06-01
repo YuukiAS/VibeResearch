@@ -51,6 +51,7 @@ def compile_reviewed_plan(paths: VibePaths, reviewed: dict[str, Any]) -> dict[st
         "evaluation_commands": [{"reader": metric_reader, "command": f"python -m vibe_research.cli validate-artifact execution_manifest {mechanism_slug}"}],
         "stop_conditions": [body.get("stop_condition", "")],
         "fallbacks": [{"command": f"echo {body.get('fallback', 'record blocker')!r}", "rationale": body.get("fallback", "")}],
+        "failure_report_path": ".vibe/executor/blocker_report.md",
         "artifact_inventory": [{"path": expected_artifact, "required": True, "reader": metric_reader}],
         "mve_contract": build_mve_contract(
             body,
@@ -144,6 +145,8 @@ def validate_execution_manifest(manifest: dict[str, Any]) -> list[str]:
         issues.append("stop condition is required")
     if not manifest.get("fallbacks") or not manifest["fallbacks"][0].get("command"):
         issues.append("fallback command is required")
+    if not manifest.get("failure_report_path"):
+        issues.append("failure_report_path is required")
     safety = manifest.get("safety_checks", {})
     if safety.get("review_verdict") != "ACCEPT" or not safety.get("allow_compiler"):
         issues.append("accepted review approval must be preserved")

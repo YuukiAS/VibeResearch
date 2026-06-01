@@ -21,6 +21,33 @@ RESULT_REPORT = "result_report.md"
 ARTIFACT_INVENTORY = "artifact_inventory.json"
 EXECUTION_LOG = "execution_log.jsonl"
 BLOCKER_REPORT = "blocker_report.md"
+EVIDENCE_ARTIFACT_TERMS = {
+    "prediction",
+    "pred",
+    "qc",
+    "mask",
+    "softmax",
+    "route",
+    "metric",
+    "metrics",
+    "failure",
+    "table",
+    "audit",
+    "evidence",
+    "eval",
+}
+WEAK_ARTIFACT_TERMS = {
+    "readme",
+    "summary",
+    "repo_clone",
+    "clone",
+    "import_success",
+    "import",
+    "cache",
+    "metadata",
+    "smoke",
+    "status",
+}
 IMMUTABLE_DECISION_FIELDS = {
     "failure_anchor",
     "hypothesis",
@@ -76,6 +103,102 @@ def validate_executor_manifest(manifest: dict[str, Any]) -> list[str]:
     if not command:
         issues.append("commands.local is required for Executor run")
     issues.extend(validate_scientific_boundary(manifest))
+    return issues
+
+
+def validate_boundary_guard(paths: VibePaths, manifest: dict[str, Any], *, reviewed_path: Path | None = None) -> list[str]:
+    issues: list[str] = []
+    issues.extend(validate_review_approval_consistency(paths, manifest, reviewed_path=reviewed_path))
+    issues.extend(validate_artifact_quality(manifest))
+    issues.extend(validate_safety_red_lines(manifest))
+    issues.extend(validate_stop_fallback_contract(manifest))
+    return issues
+
+
+def validate_review_approval_consistency(paths: VibePaths, manifest: dict[str, Any], *, reviewed_path: Path | None = None) -> list[str]:
+    issues: list[str] = []
+    reviewed_manifest_path = reviewed_path or (paths.kernel / "reviewed_plan_manifest.json")
+    if not reviewed_manifest_path.exists():
+        return [f"reviewed_plan_manifest is required: {reviewed_manifest_path}"]
+    reviewed = read_json(reviewed_manifest_path, {})
+    review = reviewed.get("review", {}) if isinstance(reviewed.get("review"), dict) else {}
+    draft = reviewed.get("draft_plan", {}) if isinstance(reviewed.get("draft_plan"), dict) else {}
+    body = draft.get("plan", {}) if isinstance(draft.get("plan"), dict) else {}
+    if review.get("verdict") != "ACCEPT" or not review.get("allow_compiler"):
+        issues.append("reviewed plan must have ACCEPT verdict and allow_compiler=true")
+    if manifest.get("accepted_plan_id") != draft.get("created_at"):
+        issues.append("compiler manifest accepted_plan_id does not match reviewed draft")
+    if manifest.get("review_approval_id") != review.get("created_at"):
+        issues.append("compiler manifest review_approval_id does not match reviewed approval")
+    if manifest.get("revision_history", []) != reviewed.get("revision_history", []):
+        issues.append("compiler manifest revision_history does not match reviewed manifest")
+    expected_artifacts = manifest.get("expected_artifacts", [])
+    expected_artifact = expected_artifacts[0] if isinstance(expected_artifacts, list) and expected_artifacts else ""
+    field_pairs = {
+        "mechanism": (manifest.get("mechanism", ""), body.get("mechanism", "")),
+        "minimum_experiment": (manifest.get("minimum_experiment", ""), body.get("minimum_experiment", "")),
+        "expected_artifact": (expected_artifact, body.get("expected_artifact", "")),
+        "stop_condition": ((manifest.get("stop_conditions") or [""])[0], body.get("stop_condition", "")),
+    }
+    for field, (compiled, reviewed_value) in field_pairs.items():
+        if compiled != reviewed_value:
+            issues.append(f"compiler manifest {field} does not match reviewed plan")
+    return issues
+
+
+def validate_artifact_quality(manifest: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    artifacts = manifest.get("expected_artifacts", [])
+    if not artifacts:
+        return ["expected_artifacts are required"]
+    for artifact in artifacts:
+        path = str(artifact).strip().lower()
+        compact = path.replace("-", "_")
+        if not path:
+            issues.append("expected artifact path is empty")
+            continue
+        if any(term in compact for term in WEAK_ARTIFACT_TERMS):
+            issues.append(f"expected artifact is not evidence-grade: {artifact}")
+            continue
+        if not any(term in compact for term in EVIDENCE_ARTIFACT_TERMS):
+            issues.append(f"expected artifact lacks evidence-grade signal: {artifact}")
+    return issues
+
+
+def validate_safety_red_lines(manifest: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    safety = manifest.get("safety_checks", {}) if isinstance(manifest.get("safety_checks"), dict) else {}
+    resource = manifest.get("resource_plan", {}) if isinstance(manifest.get("resource_plan"), dict) else {}
+    command_text = " ".join(str(value) for value in manifest.get("commands", {}).values()) if isinstance(manifest.get("commands"), dict) else ""
+    input_text = " ".join(str(item) for item in manifest.get("input_assets", []))
+    lowered = f"{command_text} {input_text}".lower()
+    if safety.get("data_permission") in {"missing", "denied", "unknown"} or safety.get("data_permissions_approved") is False:
+        issues.append("data permission is not approved")
+    if safety.get("required_human_approval") and not safety.get("human_approved"):
+        issues.append("required human approval is missing")
+    if safety.get("upload_prohibited") and any(term in lowered for term in ("upload", "dx upload", "aws s3 cp", "scp ", "rsync ")):
+        issues.append("upload is prohibited by safety policy")
+    if safety.get("delete_prohibited") and any(term in lowered for term in ("rm -rf", "rm ", "unlink", "shutil.rmtree")):
+        issues.append("delete is prohibited by safety policy")
+    if safety.get("external_data_prohibited") and any(term in lowered for term in ("http://", "https://", "s3://", "gs://", "dx://", "wget ", "curl ")):
+        issues.append("external data use is prohibited by safety policy")
+    max_gpu_hours = resource.get("max_gpu_hours")
+    requested_gpu_hours = resource.get("gpu_hours")
+    if max_gpu_hours is not None and requested_gpu_hours is not None and float(requested_gpu_hours) > float(max_gpu_hours):
+        issues.append("resource plan exceeds gpu hour cap")
+    if resource.get("backend") == "slurm" and resource.get("budget_approved") is False:
+        issues.append("Slurm budget is not approved")
+    return issues
+
+
+def validate_stop_fallback_contract(manifest: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    if not manifest.get("stop_conditions") or not manifest["stop_conditions"][0]:
+        issues.append("stop condition is required")
+    if not manifest.get("fallbacks") or not manifest["fallbacks"][0].get("command"):
+        issues.append("fallback command is required")
+    if not manifest.get("failure_report_path"):
+        issues.append("failure_report_path is required")
     return issues
 
 
@@ -136,6 +259,7 @@ def run_execution_manifest(
     proposed_updates: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     issues = validate_executor_manifest(manifest)
+    issues.extend(validate_boundary_guard(paths, manifest))
     issues.extend(validate_scientific_boundary(manifest, proposed_updates))
     if issues:
         return write_blocker_result(paths, manifest, issues, manifest_path=manifest_path, status="blocked_invalid_manifest")

@@ -100,6 +100,8 @@ evaluation command、stop condition 和 fallback command。
 Executor 通过 `vibe executor run` 执行通过审查的 `execution_manifest.json`，
 写出 execution log、artifact inventory、result manifest 和 Reflector 可读的
 result report；命令失败或缺少预期 artifact 时写 blocker report，不能把执行标记为完成。
+`vibe executor guard` 可以只检查入口边界而不执行命令：review approval 一致性、
+evidence-grade artifact、安全红线、stop condition、fallback command 和 failure report path。
 
 ```mermaid
 flowchart TD
@@ -242,7 +244,7 @@ Reviewer 是整套系统最重要的防空转闸门。没有 Reviewer，系统�
 - 0.13：session-oriented kernel 和共享文件协议。
 - 0.14：Planner、Reviewer 和 revision loop。
 - 0.15：Compiler 和 MVE contract。
-- 0.16：Executor boundary。
+- 0.16.0-0.16.1：Executor session 和 boundary guard。
 - 0.16.2：Budget-Aware Session Runtime。
 - 0.17：Reflector 和 Belief Ratchet。
 - 0.18：Research Registry、Immune System 和 WATCH TTL。

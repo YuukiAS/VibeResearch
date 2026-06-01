@@ -55,7 +55,7 @@ from .decisions import decision_json, make_decision, validate_decision_file, wri
 from .directions import set_direction_status
 from .dual_track import create_track_experiment, parallel_comparison_plan, track_budget_audit, track_memo, track_transition_audit
 from .external_resources import analyze_external_repo, clone_external_repo
-from .executor import load_execution_manifest, run_execution_manifest, validate_result_manifest
+from .executor import load_execution_manifest, run_execution_manifest, validate_boundary_guard, validate_result_manifest
 from .git_ops import abandon_run, create_branch, git_available, git_current_branch, git_diff_text, merge_review, merge_run, protected_diff_paths
 from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
@@ -594,6 +594,28 @@ def executor_run_cmd(
     console.print(f"Executor result: {paths_.root / '.vibe' / 'executor' / 'result_manifest.json'}")
     console.print(f"Executor status: {result.get('status', 'unknown')}")
     if str(result.get("status", "")).startswith("blocked"):
+        raise typer.Exit(1)
+
+
+@executor_app.command("guard")
+def executor_guard_cmd(
+    manifest: Optional[Path] = typer.Argument(None, help="Execution manifest JSON path; defaults to .vibe/kernel/execution_manifest.json."),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Validate Executor boundary guard checks without running commands."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    manifest_path = manifest or (paths_.kernel / "execution_manifest.json")
+    try:
+        issues = validate_boundary_guard(paths_, load_execution_manifest(manifest_path))
+    except FileNotFoundError as exc:
+        console.print(str(exc))
+        raise typer.Exit(1) from exc
+    console.print(f"Executor boundary guard: {'ok' if not issues else 'blocked'}")
+    for issue in issues:
+        console.print(f"Issue: {issue}")
+    if issues:
         raise typer.Exit(1)
 
 
