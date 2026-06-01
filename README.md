@@ -126,6 +126,10 @@ artifact inventory, evaluation command, stop condition, and fallback command.
 Every compiled manifest includes an MVE contract. `vibe mve validate` checks
 the contract before execution, and `vibe mve promote-success` records the next
 evidence debt instead of declaring mainline success.
+Executor runs are started with `vibe executor run` against an accepted
+`execution_manifest.json`. Executor writes an execution log, artifact inventory,
+result manifest, and Reflector-readable result report; failed commands or
+missing expected artifacts produce a blocker report instead of a completed run.
 
 ```mermaid
 flowchart TD
@@ -138,7 +142,7 @@ flowchart TD
 
     D --> E["Compiler / MVE Layer<br/>execution_manifest.json<br/>minimum viable experiment<br/>artifact contract<br/>stop condition"]
 
-    E --> F["Executor Session<br/>Codex implementation<br/>code changes<br/>runner scripts<br/>Slurm jobs<br/>NIfTI / CSV / model artifacts"]
+    E --> F["Executor Session<br/>execution log<br/>artifact inventory<br/>result_manifest.json<br/>blocker report"]
 
     F --> G["Artifacts and Metrics<br/>prediction files<br/>QC masks<br/>trained verifier<br/>case-level metrics<br/>route manifest<br/>job logs"]
 
@@ -177,8 +181,9 @@ is:
    `plan_review_report.md`. It returns `ACCEPT`, `REVISE`, `REJECT`, or
    `ASK_HUMAN`. Only accepted plans become `reviewed_plan_manifest.json`.
 4. The Compiler / MVE Layer turns the reviewed plan into `execution_manifest.json`.
-5. The Executor Session runs the accepted manifest and writes scripts, Slurm
-   jobs, artifact inventory, metrics, and job logs.
+5. The Executor Session runs the accepted manifest, records command provenance,
+   artifact inventory, result reports, and blocker reports, and cannot rewrite
+   the reviewed scientific decisions.
 6. Monitor / Safety / Budget Runtime watches jobs cheaply, enforces queue and
    quota limits, and writes checkpoints before interruption.
 7. The Reflector Session reads the outputs and writes `reflect_report.md` with

@@ -97,6 +97,9 @@ Reviewer 检查通过 `vibe reviewer review` 执行；只有 `ACCEPT` verdict �
 evaluation command、stop condition 和 fallback command。
 每个编译后的 manifest 都包含 MVE contract。`vibe mve validate` 在执行前检查
 最小实验契约，`vibe mve promote-success` 在成功后记录下一层证据债务，而不是直接宣布主线成功。
+Executor 通过 `vibe executor run` 执行通过审查的 `execution_manifest.json`，
+写出 execution log、artifact inventory、result manifest 和 Reflector 可读的
+result report；命令失败或缺少预期 artifact 时写 blocker report，不能把执行标记为完成。
 
 ```mermaid
 flowchart TD
@@ -109,7 +112,7 @@ flowchart TD
 
     D --> E["Compiler / MVE 编译层<br/>execution_manifest.json<br/>最小可行实验<br/>artifact contract<br/>stop condition"]
 
-    E --> F["Executor 执行会话<br/>Codex implementation<br/>代码修改<br/>runner scripts<br/>Slurm jobs<br/>NIfTI / CSV / model artifacts"]
+    E --> F["Executor 执行会话<br/>execution log<br/>artifact inventory<br/>result_manifest.json<br/>blocker report"]
 
     F --> G["产物与指标<br/>prediction files<br/>QC masks<br/>trained verifier<br/>case-level metrics<br/>route manifest<br/>job logs"]
 
@@ -144,7 +147,8 @@ flowchart TD
    输出 `ACCEPT`、`REVISE`、`REJECT` 或 `ASK_HUMAN`。只有被接受的计划才会成为
    `reviewed_plan_manifest.json`。
 4. Compiler / MVE Layer 把 reviewed plan 转成 `execution_manifest.json`。
-5. Executor Session 执行 accepted manifest，写脚本、提交 Slurm、整理 artifact inventory、metrics 和 job logs。
+5. Executor Session 执行 accepted manifest，记录命令 provenance、artifact inventory、
+   result report 和 blocker report，并且不能改写已经审查过的科学决策。
 6. Monitor / Safety / Budget Runtime 用低成本方式监控作业，守住队列、预算和安全边界，并在中断前写 checkpoint。
 7. Reflector Session 读取结果，写 `reflect_report.md`，给出 `PROCEED`、`REFINE`、`PIVOT` 或 `STOP`。
 8. Registry 和 memory 更新后，下一轮 Planner 从新的信念状态继续，而不是从空白 prompt 重新开始。

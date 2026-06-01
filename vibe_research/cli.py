@@ -55,6 +55,7 @@ from .decisions import decision_json, make_decision, validate_decision_file, wri
 from .directions import set_direction_status
 from .dual_track import create_track_experiment, parallel_comparison_plan, track_budget_audit, track_memo, track_transition_audit
 from .external_resources import analyze_external_repo, clone_external_repo
+from .executor import load_execution_manifest, run_execution_manifest, validate_result_manifest
 from .git_ops import abandon_run, create_branch, git_available, git_current_branch, git_diff_text, merge_review, merge_run, protected_diff_paths
 from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
@@ -136,6 +137,7 @@ adapter_app = typer.Typer(help="Manage adapter onboarding, readiness, and capabi
 script_app = typer.Typer(help="Bootstrap downstream execution wrapper scripts.")
 bootstrap_app = typer.Typer(help="Run resumable project bootstrap, readiness, archive, and dogfood workflows.")
 compiler_app = typer.Typer(help="Compile accepted reviewed plans into execution manifests.")
+executor_app = typer.Typer(help="Run accepted execution manifests and record executor provenance.")
 kernel_app = typer.Typer(help="Manage the session-oriented research kernel.")
 planner_app = typer.Typer(help="Generate reviewable Planner Session draft plans.")
 reviewer_app = typer.Typer(help="Review Planner draft plans before compilation or execution.")
@@ -168,6 +170,7 @@ app.add_typer(adapter_app, name="adapter")
 app.add_typer(script_app, name="script")
 app.add_typer(bootstrap_app, name="bootstrap")
 app.add_typer(compiler_app, name="compiler")
+app.add_typer(executor_app, name="executor")
 app.add_typer(kernel_app, name="kernel")
 app.add_typer(planner_app, name="planner")
 app.add_typer(reviewer_app, name="reviewer")
@@ -559,6 +562,52 @@ def compiler_validate_cmd(manifest: Path = typer.Argument(..., help="Execution m
 
     issues = validate_execution_manifest(read_json(manifest, {}))
     console.print(f"Execution manifest validation: {'ok' if not issues else 'blocked'}")
+    for issue in issues:
+        console.print(f"Issue: {issue}")
+    if issues:
+        raise typer.Exit(1)
+
+
+@executor_app.command("run")
+def executor_run_cmd(
+    manifest: Optional[Path] = typer.Argument(None, help="Execution manifest JSON path; defaults to .vibe/kernel/execution_manifest.json."),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    timeout_seconds: int = typer.Option(600, "--timeout-seconds"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Run an accepted execution manifest and write executor result records."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    manifest_path = manifest or (paths_.kernel / "execution_manifest.json")
+    try:
+        result = run_execution_manifest(
+            paths_,
+            load_execution_manifest(manifest_path),
+            manifest_path=manifest_path,
+            timeout_seconds=timeout_seconds,
+            dry_run=dry_run,
+        )
+    except FileNotFoundError as exc:
+        console.print(str(exc))
+        raise typer.Exit(1) from exc
+    console.print(f"Executor result: {paths_.root / '.vibe' / 'executor' / 'result_manifest.json'}")
+    console.print(f"Executor status: {result.get('status', 'unknown')}")
+    if str(result.get("status", "")).startswith("blocked"):
+        raise typer.Exit(1)
+
+
+@executor_app.command("validate-result")
+def executor_validate_result_cmd(
+    result_manifest: Optional[Path] = typer.Argument(None, help="Executor result manifest; defaults to .vibe/executor/result_manifest.json."),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Validate that Executor output is complete and Reflector-readable."""
+
+    paths_ = paths(target)
+    result_path = result_manifest or (paths_.root / ".vibe" / "executor" / "result_manifest.json")
+    issues = validate_result_manifest(paths_, read_json(result_path, {}))
+    console.print(f"Executor result validation: {'ok' if not issues else 'blocked'}")
     for issue in issues:
         console.print(f"Issue: {issue}")
     if issues:

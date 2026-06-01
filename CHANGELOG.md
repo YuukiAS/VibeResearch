@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.16.0 - 2026-06-01
+
+- Add an Executor Session that runs accepted `execution_manifest.json` files
+  through a manifest-driven boundary rather than free-form experiment execution.
+- Add `vibe executor run` and `vibe executor validate-result` commands.
+- Record execution logs, artifact inventory, result manifests, result reports,
+  command provenance, environment details, input assets, and stdout/stderr.
+- Block completion when expected MVE artifacts are missing or commands fail,
+  writing explicit blocker reports instead.
+- Preserve Planner/Reviewer scientific decisions so Executor cannot rewrite the
+  failure anchor, hypothesis, mechanism, MVE, or promotion rule.
+
 ## 0.15.1 - 2026-06-01
 
 - Add MVE contracts to compiled execution manifests with input asset, minimal
