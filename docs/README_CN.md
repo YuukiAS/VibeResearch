@@ -161,6 +161,9 @@ kernel 文件放在 `.vibe/kernel/` 下，并用 `vibe kernel` 命令负责初�
 
 - `vibe kernel init`：创建或修复必需 kernel 文件。
 - `vibe kernel status`：确认新 session 能从文件恢复状态。
+- `vibe kernel roles`：列出 Planner、Reviewer、Compiler、Executor、Reflector、
+  Scout 和 Archivist 的角色边界。
+- `vibe kernel check-role`：在修改文件或执行动作前校验角色动作、输出路径和预算状态。
 - `vibe kernel record-evidence`：追加一条可审计 evidence ledger 记录。
 - `vibe kernel check-protocol`：发现缺失文件和单 session 自闭环越权。
 

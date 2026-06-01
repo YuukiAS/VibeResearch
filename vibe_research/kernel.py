@@ -41,6 +41,149 @@ class ProtocolCheck:
     evidence_count: int
 
 
+@dataclass(frozen=True)
+class RoleProtocol:
+    name: str
+    role_type: str
+    description: str
+    readable_files: tuple[str, ...]
+    writable_files: tuple[str, ...]
+    allowed_actions: frozenset[str]
+    forbidden_actions: tuple[str, ...]
+    budget_obligations: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RolePermissionCheck:
+    ok: bool
+    session_role: str
+    action: str
+    reasons: list[str]
+    allowed_outputs: tuple[str, ...]
+
+
+SESSION_ROLES = {
+    "planner": RoleProtocol(
+        name="Planner",
+        role_type="standing",
+        description="Proposes draft plans from kernel state, negative memory, open debts, and latest results.",
+        readable_files=("PROJECT_KERNEL.md", "PROBLEM_STATE.md", "NEGATIVE_MEMORY.md", "OPEN_DEBTS.md", "EVIDENCE_LEDGER.jsonl", "result_report.md", "reflect_report.md"),
+        writable_files=("draft_plan_manifest.json", "draft_plan.md"),
+        allowed_actions=frozenset({"start", "read_kernel", "write_draft_plan", "checkpoint", "sleep", "resume"}),
+        forbidden_actions=("review_plan", "approve_plan", "execute_manifest", "submit_job", "reflect_results", "modify_code"),
+        budget_obligations=("start", "sleep", "resume"),
+    ),
+    "reviewer": RoleProtocol(
+        name="Reviewer",
+        role_type="standing",
+        description="Reviews and revises draft plans before execution without running commands or filling results.",
+        readable_files=("draft_plan_manifest.json", "draft_plan.md", "PROJECT_KERNEL.md", "NEGATIVE_MEMORY.md", "EVIDENCE_LEDGER.jsonl", "safety_policy.yaml"),
+        writable_files=("plan_review_report.md", "reviewed_plan_manifest.json"),
+        allowed_actions=frozenset({"start", "read_plan", "write_review", "request_revision", "revise", "checkpoint", "sleep", "resume"}),
+        forbidden_actions=("execute_manifest", "submit_job", "modify_code", "write_result", "reflect_results"),
+        budget_obligations=("start", "revise", "sleep", "resume"),
+    ),
+    "compiler": RoleProtocol(
+        name="Compiler",
+        role_type="standing",
+        description="Translates reviewed plans into execution manifests and MVE contracts.",
+        readable_files=("reviewed_plan_manifest.json", "plan_review_report.md", "mechanism_card.md", "PROJECT_KERNEL.md"),
+        writable_files=("execution_manifest.json", "mve_contract.json"),
+        allowed_actions=frozenset({"start", "read_reviewed_plan", "write_execution_manifest", "write_mve_contract", "checkpoint", "sleep", "resume"}),
+        forbidden_actions=("approve_plan", "execute_manifest", "submit_job", "reflect_results", "change_scientific_goal"),
+        budget_obligations=("start", "sleep", "resume"),
+    ),
+    "executor": RoleProtocol(
+        name="Executor",
+        role_type="standing",
+        description="Executes accepted manifests, writes artifacts, and reports blockers without changing scientific direction.",
+        readable_files=("execution_manifest.json", "reviewed_plan_manifest.json", "SESSION_BUDGET_STATE.json", "adapter.yaml"),
+        writable_files=("result_report.md", "artifact_inventory.json", "execution_log.jsonl", "blocker_report.md", "RESUME.md"),
+        allowed_actions=frozenset({"start", "execute_manifest", "submit_long_task", "submit_prepared_short_job", "write_result", "write_blocker", "checkpoint", "close", "summarize", "sleep", "resume"}),
+        forbidden_actions=("write_draft_plan", "approve_plan", "change_failure_anchor", "change_hypothesis", "change_promotion_criteria", "reflect_results"),
+        budget_obligations=("start", "submit_long_task", "sleep", "resume"),
+    ),
+    "reflector": RoleProtocol(
+        name="Reflector",
+        role_type="standing",
+        description="Interprets results, updates belief and memory, and records next debts without running experiments.",
+        readable_files=("result_report.md", "artifact_inventory.json", "metrics.csv", "execution_log.jsonl", "reviewed_plan_manifest.json", "execution_manifest.json"),
+        writable_files=("reflect_report.md", "NEGATIVE_MEMORY.md", "OPEN_DEBTS.md", "EVIDENCE_LEDGER.jsonl", "belief_update.json"),
+        allowed_actions=frozenset({"start", "read_results", "reflect", "reflect_results", "write_belief_update", "write_negative_memory", "checkpoint", "summarize", "sleep", "resume"}),
+        forbidden_actions=("execute_manifest", "submit_job", "modify_code", "change_scientific_goal", "write_draft_plan"),
+        budget_obligations=("start", "reflect", "sleep", "resume"),
+    ),
+    "scout": RoleProtocol(
+        name="Scout",
+        role_type="temporary",
+        description="Searches papers, repositories, or leaderboards and emits mechanism cards only.",
+        readable_files=("PROJECT_KERNEL.md", "PROBLEM_STATE.md", "FAILURE_SIGNATURES.md", "OPEN_DEBTS.md"),
+        writable_files=("mechanism_card.md",),
+        allowed_actions=frozenset({"start", "search_sources", "write_mechanism_card", "checkpoint", "sleep", "resume"}),
+        forbidden_actions=("write_execution_manifest", "execute_manifest", "submit_job", "approve_plan", "reflect_results"),
+        budget_obligations=("start", "sleep", "resume"),
+    ),
+    "archivist": RoleProtocol(
+        name="Archivist",
+        role_type="temporary",
+        description="Compacts memory, cleans registry noise, and clears WATCH debt without executing experiments.",
+        readable_files=("EVIDENCE_LEDGER.jsonl", "NEGATIVE_MEMORY.md", "OPEN_DEBTS.md", "reflect_report.md", "result_report.md"),
+        writable_files=("memory_summary.md", "NEGATIVE_MEMORY.md", "OPEN_DEBTS.md", "EVIDENCE_LEDGER.jsonl"),
+        allowed_actions=frozenset({"start", "compact_memory", "clear_watch_debt", "archive", "checkpoint", "sleep", "resume"}),
+        forbidden_actions=("write_draft_plan", "approve_plan", "execute_manifest", "submit_job", "change_scientific_goal"),
+        budget_obligations=("start", "sleep", "resume"),
+    ),
+}
+
+BUDGET_REQUIRED_ACTIONS = {"start", "submit_long_task", "revise", "reflect", "sleep", "resume"}
+CRITICAL_LOW_QUOTA_ACTIONS = {"checkpoint", "sleep", "resume"}
+LOW_QUOTA_CLOSE_ACTIONS = {"checkpoint", "close", "summarize", "submit_prepared_short_job", "sleep", "resume"}
+
+
+def render_session_protocol() -> str:
+    lines = [
+        "# Session Protocol",
+        "",
+        "This file is generated from the VibeResearch role catalog. Edit policy",
+        "through code or reviewed project policy changes, not by relying on chat",
+        "memory.",
+        "",
+        "## Global Rules",
+        "",
+        "- A single session must not claim all of plan, review, execute, and reflect for the same target.",
+        "- Unknown roles or new permanent roles require `ASK_HUMAN` before use.",
+        "- Budget-sensitive actions require a fresh `SESSION_BUDGET_STATE.json` check.",
+        "- Below 20% 5h quota, new Planner and Reviewer work pauses; Executor closure has priority, then Reflector preservation.",
+        "- Below 10% 5h quota, sessions may only checkpoint, sleep, or resume.",
+        "",
+        "## Roles",
+        "",
+    ]
+    for key, role in SESSION_ROLES.items():
+        lines.extend(
+            [
+                f"### {role.name}",
+                "",
+                f"- Role key: `{key}`",
+                f"- Type: `{role.role_type}`",
+                f"- Description: {role.description}",
+                "- Readable files: " + ", ".join(f"`{item}`" for item in role.readable_files),
+                "- Writable files: " + ", ".join(f"`{item}`" for item in role.writable_files),
+                "- Allowed actions: " + ", ".join(f"`{item}`" for item in sorted(role.allowed_actions)),
+                "- Forbidden actions: " + ", ".join(f"`{item}`" for item in role.forbidden_actions),
+                "- Budget checkpoints: " + ", ".join(f"`{item}`" for item in role.budget_obligations),
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def kernel_templates() -> dict[str, str]:
+    templates = dict(CORE_MARKDOWN_FILES)
+    templates["SESSION_PROTOCOL.md"] = render_session_protocol()
+    return templates
+
+
 def kernel_dir(paths: VibePaths) -> Path:
     return paths.kernel
 
@@ -50,7 +193,7 @@ def initialize_kernel(paths: VibePaths, *, force: bool = False, project_goal: st
 
     ensure_dir(kernel_dir(paths))
     written: list[Path] = []
-    for name, template in CORE_MARKDOWN_FILES.items():
+    for name, template in kernel_templates().items():
         path = kernel_dir(paths) / name
         if path.exists() and not force:
             continue
@@ -129,6 +272,56 @@ def record_evidence(
     }
     append_jsonl(kernel_dir(paths) / LEDGER_FILE, record)
     return record
+
+
+def output_allowed(output_path: str, allowed_outputs: tuple[str, ...]) -> bool:
+    if not output_path:
+        return True
+    normalized = output_path.strip().replace("\\", "/")
+    name = normalized.rsplit("/", 1)[-1]
+    return any(name == allowed or normalized.endswith("/" + allowed) for allowed in allowed_outputs)
+
+
+def check_role_permission(
+    *,
+    session_role: str,
+    action: str,
+    output_path: str = "",
+    budget_checked: bool = False,
+    quota_percent: float | None = None,
+) -> RolePermissionCheck:
+    role_key = session_role.strip().lower()
+    action_key = action.strip().lower()
+    role = SESSION_ROLES.get(role_key)
+    if role is None:
+        return RolePermissionCheck(
+            ok=False,
+            session_role=role_key,
+            action=action_key,
+            reasons=[f"unknown role `{role_key}` requires ASK_HUMAN"],
+            allowed_outputs=(),
+        )
+
+    reasons: list[str] = []
+    if action_key in BUDGET_REQUIRED_ACTIONS and not budget_checked:
+        reasons.append(f"action `{action_key}` requires a budget state check")
+    if quota_percent is not None:
+        if quota_percent < 10 and action_key not in CRITICAL_LOW_QUOTA_ACTIONS:
+            reasons.append("5h quota below 10%; only checkpoint, sleep, or resume is allowed")
+        elif quota_percent < 20:
+            if role_key in {"planner", "reviewer"} and action_key not in CRITICAL_LOW_QUOTA_ACTIONS:
+                reasons.append(f"5h quota below 20%; {role.name} must pause new work")
+            elif role_key == "executor" and action_key not in LOW_QUOTA_CLOSE_ACTIONS:
+                reasons.append("5h quota below 20%; Executor may only close, checkpoint, summarize, submit prepared short jobs, sleep, or resume")
+            elif role_key == "reflector" and action_key not in LOW_QUOTA_CLOSE_ACTIONS | {"reflect_results", "write_belief_update", "write_negative_memory"}:
+                reasons.append("5h quota below 20%; Reflector may only preserve results, checkpoint, sleep, or resume")
+    if action_key in role.forbidden_actions:
+        reasons.append(f"{role.name} forbids action `{action_key}`")
+    if action_key not in role.allowed_actions:
+        reasons.append(f"{role.name} does not allow action `{action_key}`")
+    if output_path and not output_allowed(output_path, role.writable_files):
+        reasons.append(f"{role.name} cannot write `{output_path}`")
+    return RolePermissionCheck(ok=not reasons, session_role=role_key, action=action_key, reasons=reasons, allowed_outputs=role.writable_files)
 
 
 def check_protocol(

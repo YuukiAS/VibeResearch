@@ -59,6 +59,7 @@ from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
 from .io import read_json, read_jsonl, read_yaml
+from .kernel import SESSION_ROLES, check_role_permission
 from .kernel import check_protocol as kernel_check_protocol
 from .kernel import initialize_kernel, kernel_status, record_evidence
 from .locks import active_advance_lock
@@ -538,6 +539,44 @@ def kernel_status_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) 
     console.print(f"Evidence records: {status_['evidence_count']}")
     if status_["missing_files"]:
         console.print("Missing: " + ", ".join(status_["missing_files"]))
+        raise typer.Exit(1)
+
+
+@kernel_app.command("roles")
+def kernel_roles_cmd() -> None:
+    """List session roles and their writable protocol surfaces."""
+
+    table = Table("Role", "Type", "Writable Files", "Forbidden Actions")
+    for role in SESSION_ROLES.values():
+        table.add_row(role.name, role.role_type, ", ".join(role.writable_files), ", ".join(role.forbidden_actions))
+    console.print(table)
+
+
+@kernel_app.command("check-role")
+def kernel_check_role_cmd(
+    session_role: str = typer.Option(..., "--session-role"),
+    action: str = typer.Option(..., "--action"),
+    output: str = typer.Option("", "--output"),
+    budget_checked: bool = typer.Option(False, "--budget-checked"),
+    quota_percent: Optional[float] = typer.Option(None, "--quota-percent"),
+) -> None:
+    """Validate a session role action before it mutates files or runs work."""
+
+    result = check_role_permission(
+        session_role=session_role,
+        action=action,
+        output_path=output,
+        budget_checked=budget_checked,
+        quota_percent=quota_percent,
+    )
+    console.print(f"Role permission: {'ok' if result.ok else 'blocked'}")
+    console.print(f"Role: {result.session_role}")
+    console.print(f"Action: {result.action}")
+    if result.allowed_outputs:
+        console.print("Allowed outputs: " + ", ".join(result.allowed_outputs))
+    for reason in result.reasons:
+        console.print(f"Reason: {reason}")
+    if not result.ok:
         raise typer.Exit(1)
 
 

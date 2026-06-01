@@ -202,6 +202,10 @@ The kernel command surface is intentionally small:
 
 - `vibe kernel init`: create or repair required kernel files.
 - `vibe kernel status`: verify a new session can recover state from files.
+- `vibe kernel roles`: list Planner, Reviewer, Compiler, Executor, Reflector,
+  Scout, and Archivist role boundaries.
+- `vibe kernel check-role`: preflight a role action, output path, and budget
+  state before mutation or execution.
 - `vibe kernel record-evidence`: append an auditable evidence ledger row.
 - `vibe kernel check-protocol`: detect missing files and closed-loop role
   violations.

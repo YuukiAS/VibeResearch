@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.13.1 - 2026-05-31
+
+- Render `SESSION_PROTOCOL.md` from a structured role catalog covering Planner,
+  Reviewer, Compiler, Executor, Reflector, Scout, and Archivist boundaries.
+- Add `vibe kernel roles` and `vibe kernel check-role` for role permission
+  inspection and preflight validation.
+- Block unknown roles with an `ASK_HUMAN` requirement and enforce role-specific
+  writable outputs and forbidden actions.
+- Add budget-aware preflight behavior that pauses Planner/Reviewer work at low
+  quota while allowing Executor checkpoint/closure actions.
+
 ## 0.13.0 - 2026-05-31
 
 - Add a session-oriented research kernel under `.vibe/kernel/` with shared

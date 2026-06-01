@@ -154,3 +154,133 @@ def test_kernel_blocks_single_session_closed_loop_claim(tmp_path: Path):
     )
     assert check.exit_code == 1
     assert "closed-loop duties" in check.output
+
+
+def test_session_protocol_renders_role_boundaries_and_budget_rules(tmp_path: Path):
+    assert invoke("init", "--target", str(tmp_path)).exit_code == 0
+    protocol = (tmp_path / ".vibe" / "kernel" / "SESSION_PROTOCOL.md").read_text()
+
+    assert "### Planner" in protocol
+    assert "`draft_plan_manifest.json`" in protocol
+    assert "`plan_review_report.md`" in protocol
+    assert "`execution_manifest.json`" in protocol
+    assert "`mechanism_card.md`" in protocol
+    assert "Budget checkpoints" in protocol
+    assert "Below 10% 5h quota" in protocol
+
+
+def test_planner_role_allows_draft_only_and_blocks_execution():
+    ok = invoke(
+        "kernel",
+        "check-role",
+        "--session-role",
+        "planner",
+        "--action",
+        "write_draft_plan",
+        "--output",
+        ".vibe/cycles/c001/draft_plan_manifest.json",
+    )
+    assert ok.exit_code == 0
+
+    blocked = invoke(
+        "kernel",
+        "check-role",
+        "--session-role",
+        "planner",
+        "--action",
+        "execute_manifest",
+        "--output",
+        ".vibe/runs/r001/result_report.md",
+    )
+    assert blocked.exit_code == 1
+    assert "forbids action" in blocked.output
+
+
+def test_reviewer_and_temporary_roles_are_bounded():
+    reviewer = invoke(
+        "kernel",
+        "check-role",
+        "--session-role",
+        "reviewer",
+        "--action",
+        "execute_manifest",
+    )
+    assert reviewer.exit_code == 1
+    assert "Reviewer forbids action" in reviewer.output
+
+    scout_ok = invoke(
+        "kernel",
+        "check-role",
+        "--session-role",
+        "scout",
+        "--action",
+        "write_mechanism_card",
+        "--output",
+        ".vibe/scout/mechanism_card.md",
+    )
+    assert scout_ok.exit_code == 0
+
+    scout_blocked = invoke(
+        "kernel",
+        "check-role",
+        "--session-role",
+        "scout",
+        "--action",
+        "write_execution_manifest",
+        "--output",
+        ".vibe/runs/r001/execution_manifest.json",
+    )
+    assert scout_blocked.exit_code == 1
+    assert "Scout forbids action" in scout_blocked.output
+
+
+def test_unknown_role_requires_human_and_low_quota_prioritizes_executor():
+    unknown = invoke(
+        "kernel",
+        "check-role",
+        "--session-role",
+        "optimizer",
+        "--action",
+        "start",
+        "--budget-checked",
+    )
+    assert unknown.exit_code == 1
+    assert "ASK_HUMAN" in unknown.output
+
+    planner_low = invoke(
+        "kernel",
+        "check-role",
+        "--session-role",
+        "planner",
+        "--action",
+        "write_draft_plan",
+        "--quota-percent",
+        "15",
+    )
+    assert planner_low.exit_code == 1
+    assert "must pause new work" in planner_low.output
+
+    executor_checkpoint = invoke(
+        "kernel",
+        "check-role",
+        "--session-role",
+        "executor",
+        "--action",
+        "checkpoint",
+        "--quota-percent",
+        "15",
+    )
+    assert executor_checkpoint.exit_code == 0
+
+    executor_execute_critical = invoke(
+        "kernel",
+        "check-role",
+        "--session-role",
+        "executor",
+        "--action",
+        "execute_manifest",
+        "--quota-percent",
+        "8",
+    )
+    assert executor_execute_critical.exit_code == 1
+    assert "below 10%" in executor_execute_critical.output
