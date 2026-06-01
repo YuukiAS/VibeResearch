@@ -93,6 +93,7 @@ REVISED_DECISIONS = {
     "blocked_missing_decision",
     "blocked_missing_adapter",
     "blocked_missing_resource_plan",
+    "blocked_missing_artifact_adapter",
     "blocked_repeating_evidence",
 }
 

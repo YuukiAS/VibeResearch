@@ -921,7 +921,7 @@ def compile_explicit_local_resource_plan(paths: VibePaths, cycle_id: str, action
                 "import json,pathlib; "
                 f"p=pathlib.Path({output!r}); "
                 "p.parent.mkdir(parents=True, exist_ok=True); "
-                f"p.write_text(json.dumps({{'status':'completed','action':{action!r}}})+'\\n')"
+                f"p.write_text(json.dumps({{'status':'completed','action':{action!r},'cycle_id':{cycle_id!r},'artifact_body':'Local artifact adapter generated substantive closure evidence for {action}.','source':'portfolio_explicit_local_action'}})+'\\n')"
             )
         )
         runs[action] = {

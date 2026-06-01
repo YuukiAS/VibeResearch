@@ -64,6 +64,10 @@ def compile_decision(paths: VibePaths, cycle_id: str) -> tuple[bool, str]:
         return False, f"missing decision: {exc}"
     if decision.decision_type not in EXECUTABLE_DECISIONS:
         reason = f"Decision {decision.decision_type} is not executable; no resource plan can be compiled"
+        if decision.decision_type == "blocked_missing_artifact_adapter":
+            write_block_decision(paths, cycle_id, decision.rationale or reason, decision_type="blocked_missing_artifact_adapter")
+            record_event(paths, "resource_plan_blocked", f"{cycle_id}: artifact adapter repair required", cycle_id=cycle_id, status="blocked_missing_artifact_adapter")
+            return False, decision.rationale or reason
         write_block_decision(paths, cycle_id, reason, decision_type="blocked_missing_resource_plan")
         record_event(paths, "resource_plan_blocked", f"{cycle_id}: non-executable decision", cycle_id=cycle_id, status="blocked_missing_resource_plan")
         return False, reason
@@ -124,6 +128,8 @@ def load_or_synthesize_cycle_decision(paths: VibePaths, cycle_id: str) -> Resear
     try:
         existing = load_decision(paths, cycle_id)
         if existing.decision_type in EXECUTABLE_DECISIONS:
+            return existing
+        if existing.decision_type == "blocked_missing_artifact_adapter":
             return existing
         if existing.decision_type not in BLOCK_DECISIONS:
             return existing

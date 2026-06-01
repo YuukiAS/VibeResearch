@@ -18,7 +18,7 @@ from vibe_research.locks import active_advance_lock, advancing_lock
 from vibe_research.loop_guard import apply_loop_guard
 from vibe_research.paths import VibePaths
 from vibe_research.project import create_cycle, sync_resource_plan_from_portfolio
-from vibe_research.promotion import validate_resource_plan
+from vibe_research.promotion import compile_decision, validate_resource_plan
 from vibe_research.scheduler import dependencies_blocked
 
 
@@ -351,3 +351,65 @@ none
     )
     issues = validate_artifact(paths, "revised_plan", run_id)
     assert any("missing required section `## Result interpretation`" in issue.message for issue in issues)
+
+
+def test_v0133_cycle_preserves_blocked_missing_artifact_adapter(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    cycle_id = "c019"
+    (paths.cycles / cycle_id).mkdir(parents=True, exist_ok=True)
+    text = """# Cycle Revised Plan
+
+## Cycle-level interpretation
+Cycle did not produce substantive research evidence.
+Verdict: BLOCKED_MISSING_ARTIFACT_ADAPTER
+
+## Direction decisions
+blocked_missing_artifact_adapter
+trust_metric_audit_repair
+reference_evidence_review_repair
+mednext_route_decision_repair
+reference_only
+
+## Portfolio mode update
+patch_required_artifact_adapter_repair
+
+## Next portfolio sketch
+repair local artifact adapters only
+
+## Resource update
+No Slurm and no GPU work.
+
+## Literature and deep research decision
+Literature: no. Deep research: no.
+
+## Idea pool update
+none
+
+## User decision needed
+none
+
+## Stop condition
+stop placeholder artifact metrics
+"""
+    decision = ensure_decision_after_revise(paths, cycle_id, text)
+    assert decision.decision_type == "blocked_missing_artifact_adapter"
+    assert "trust_metric_audit_repair" in decision.blocking_questions
+    assert "reference_evidence_review_repair" in decision.blocking_questions
+    assert "mednext_route_decision_repair" in decision.blocking_questions
+    ok, message = compile_decision(paths, cycle_id)
+    assert ok is False
+    assert "artifact adapter" in message.lower()
+    assert load_decision(paths, cycle_id).decision_type == "blocked_missing_artifact_adapter"
+
+
+def test_v0133_reference_only_is_not_collect_more_metrics(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    cycle_id = "c020"
+    (paths.cycles / cycle_id).mkdir(parents=True, exist_ok=True)
+    decision = ensure_decision_after_revise(
+        paths,
+        cycle_id,
+        "## Direction decisions\nreference_only\nMedNeXt route stance remains reference_only; do not collect more metrics for this route.",
+    )
+    assert decision.decision_type == "stop_direction"
+    assert decision.required_action != "collect_more_metrics"

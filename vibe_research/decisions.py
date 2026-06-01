@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -29,6 +30,7 @@ DecisionType = Literal[
     "blocked_contract_test_failed",
     "blocked_resource_policy",
     "blocked_missing_resource_plan",
+    "blocked_missing_artifact_adapter",
     "blocked_repeating_evidence",
 ]
 TargetType = Literal["run", "cycle"]
@@ -45,6 +47,7 @@ BLOCK_DECISIONS = {
     "blocked_contract_test_failed",
     "blocked_resource_policy",
     "blocked_missing_resource_plan",
+    "blocked_missing_artifact_adapter",
     "blocked_repeating_evidence",
 }
 EXECUTABLE_DECISIONS = {"collect_more_metrics", "launch_gpu_gate", "promote_to_baseline_compare"}
@@ -249,6 +252,11 @@ def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text
             return decision
         return write_block_decision(paths, target_id, "offline fallback cannot make a structured research decision", decision_type="blocked_missing_decision")
     decision_type = infer_decision_type(markdown_text)
+    if decision_type == "blocked_missing_artifact_adapter":
+        decision = make_artifact_adapter_block_decision(paths, target_id, markdown_text)
+        write_decision(paths, decision)
+        set_block_state(paths, target_id, decision.rationale, decision.decision_type)
+        return decision
     artifact_guard = artifact_only_promotion_guard_decision(paths, target_id, decision_type)
     if artifact_guard:
         write_decision(paths, artifact_guard)
@@ -272,6 +280,31 @@ def ensure_decision_after_revise(paths: VibePaths, target_id: str, markdown_text
     )
     write_decision(paths, decision)
     return decision
+
+
+def make_artifact_adapter_block_decision(paths: VibePaths, target_id: str, text: str) -> ResearchDecision:
+    directions = artifact_adapter_directions(text)
+    rationale = "Cycle artifacts diagnose a missing artifact adapter; this is a local framework/adapter repair route, not a collect-more-metrics request."
+    if directions:
+        rationale += " Missing artifact directions: " + ", ".join(directions)
+    return make_decision(
+        paths,
+        target_id,
+        "blocked_missing_artifact_adapter",
+        rationale=rationale,
+        blocking_questions=directions or ["repair or enable the local artifact adapter for the requested artifact-only work"],
+        expected_evidence={"artifact_adapter_directions": directions, "reference_only_valid": "reference_only" in text.lower()},
+        provenance={"source": "artifact_adapter_diagnosis", "directions": directions},
+        confidence="blocked",
+    )
+
+
+def artifact_adapter_directions(text: str) -> list[str]:
+    directions: list[str] = []
+    for token in re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)*_repair\b", text.lower()):
+        if token not in directions:
+            directions.append(token)
+    return directions
 
 
 def artifact_only_promotion_guard_decision(paths: VibePaths, target_id: str, inferred_decision_type: str) -> ResearchDecision | None:
@@ -401,6 +434,10 @@ def offline_run_has_trusted_candidate_metrics(paths: VibePaths, target_id: str) 
 
 def infer_decision_type(text: str) -> DecisionType:
     lowered = text.lower()
+    if "blocked_missing_artifact_adapter" in lowered or "patch_required_artifact_adapter_repair" in lowered:
+        return "blocked_missing_artifact_adapter"
+    if "reference_only" in lowered:
+        return "stop_direction"
     if "failed_stop_or_redesign" in lowered or "route_exhausted" in lowered or "needs_new_hypothesis" in lowered or "do_not_promote" in lowered:
         return "stop_direction"
     if "deep_research_needed" in lowered or "deep research: yes" in lowered:

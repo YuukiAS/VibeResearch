@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.14.1 - 2026-05-31
+
+- Add first-class `blocked_missing_artifact_adapter` decisions so artifact-only
+  adapter repair diagnoses are not collapsed into missing metric capabilities.
+- Preserve explicit artifact-adapter repair directions from cycle reflection and
+  revised-plan text in structured blocking questions.
+- Treat `reference_only` as a terminal/constraint stance instead of a request to
+  collect more metrics.
+- Make explicit local artifact commands emit substantive artifact bodies rather
+  than placeholder status-only JSON.
+- Add regression coverage that artifact-adapter blocks remain distinct from
+  `blocked_missing_capability`.
+
 ## 0.14.0 - 2026-05-31
 
 - Add a Planner Session draft-plan schema with failure anchor, hypothesis,
