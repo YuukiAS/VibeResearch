@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 from typer.testing import CliRunner
@@ -10,6 +11,7 @@ from vibe_research.automation import auto_cycle
 from vibe_research.cli import app
 from vibe_research.daemon import daemon_autonomy_audit, daemon_status
 from vibe_research.decisions import ensure_decision_after_revise, load_decision, make_decision, write_decision
+from vibe_research.git_ops import create_branch
 from vibe_research.io import write_json, write_yaml
 from vibe_research.locks import active_advance_lock, advancing_lock
 from vibe_research.paths import VibePaths
@@ -194,6 +196,43 @@ def test_v0124_explicit_no_job_portfolio_actions_preserved(tmp_path: Path):
         assert spec["resources"]["gpu"] == 0
         assert spec["resources"]["allowed_backends"] == ["local"]
         assert spec["entrypoint"]["type"] == "local"
+        assert spec["run_kind"] == "artifact_only"
         assert spec["adapter_metadata"]["source"] == "portfolio_explicit_local_action"
         assert spec["adapter_metadata"]["action"] == action
+        assert spec["adapter_metadata"]["no_job"] is True
     assert validate_resource_plan(paths, cycle) == []
+
+
+def test_v0125_artifact_only_branch_records_logical_branch_with_dirty_git(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    (tmp_path / "dirty.txt").write_text("uncommitted\n")
+    run_id = "r001_artifact_audit"
+    (paths.runs / run_id).mkdir(parents=True, exist_ok=True)
+    write_json(
+        paths.state / "state.json",
+        {
+            "runs": {
+                run_id: {
+                    "run_id": run_id,
+                    "cycle_id": "c001",
+                    "status": "reviewed",
+                    "branch": "vibe/r001-artifact-audit",
+                    "run_kind": "artifact_only",
+                    "adapter_metadata": {"no_job": True},
+                }
+            }
+        },
+    )
+    branch = create_branch(paths, run_id)
+    state = json.loads((paths.state / "state.json").read_text())
+    run = state["runs"][run_id]
+    assert branch == "vibe/r001-artifact-audit"
+    assert run["status"] == "patched"
+    assert run["branch_mode"] == "logical_no_git"
+    assert state["next_action"] == f"vibe dryrun {run_id}"
+    assert "branch_recorded=logical_no_git" in (paths.runs / run_id / "branch.txt").read_text()
+    assert (paths.runs / run_id / "patch.diff").read_text() == ""
+    status = invoke("status", "--target", str(tmp_path))
+    assert status.exit_code == 0
+    assert "logical/no-git" in status.output

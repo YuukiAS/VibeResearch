@@ -935,9 +935,9 @@ def compile_explicit_local_resource_plan(paths: VibePaths, cycle_id: str, action
             "outputs": {"expected_output_path": output},
             "evaluation": {"metrics_file_path": output, "metrics_schema": {"status": "string", "action": "string"}},
             "resources": {"gpu": 0, "cpus": 1, "mem_gb": 1, "time": "00:05:00", "allowed_backends": ["local"], "automatic_submission_allowed": False},
-            "run_kind": "local_no_job_artifact",
+            "run_kind": "artifact_only",
             "success_criteria": {"status": "completed"},
-            "adapter_metadata": {"source": "portfolio_explicit_local_action", "action": action},
+            "adapter_metadata": {"source": "portfolio_explicit_local_action", "action": action, "no_job": True},
             "research_metadata": {"portfolio_explicit_local_actions": actions, "no_job_requested": portfolio_requests_no_job(portfolio_text)},
         }
     return {

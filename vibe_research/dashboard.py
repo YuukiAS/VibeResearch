@@ -75,8 +75,11 @@ def render_status(paths: VibePaths) -> str:
         for run_id, run in sorted(runs.items()):
             metrics = read_json(paths.runs / run_id / "metrics.json", {})
             adapter_meta = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata", {}), dict) else {}
+            branch = run.get("branch", "")
+            if run.get("branch_mode") == "logical_no_git":
+                branch = f"{branch} (logical/no-git)"
             lines.append(
-                f"| `{run_id}` | `{run.get('direction_id', '')}` | `{run.get('status', '')}` | `{run.get('branch', '')}` | `{run.get('cost', '')}` | "
+                f"| `{run_id}` | `{run.get('direction_id', '')}` | `{run.get('status', '')}` | `{branch}` | `{run.get('cost', '')}` | "
                 f"`{metrics.get('trust_status', '')}` | `{metrics.get('schema_status', '')}` | `{adapter_meta.get('capability_id', '')}` |"
             )
     decisions = read_jsonl(paths.state / "decisions.jsonl")

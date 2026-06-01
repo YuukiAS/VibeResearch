@@ -52,6 +52,11 @@ def adapter_run_requires_no_patch(run: dict) -> bool:
     return bool(adapter_metadata.get("capability_id")) and run.get("run_kind") == "real_experiment"
 
 
+def artifact_run_uses_logical_branch(run: dict) -> bool:
+    adapter_metadata = run.get("adapter_metadata", {}) if isinstance(run.get("adapter_metadata"), dict) else {}
+    return run.get("run_kind") == "artifact_only" or bool(adapter_metadata.get("no_job"))
+
+
 def create_branch(paths: VibePaths, run_id: str) -> str:
     paths.require_initialized()
     state = read_json(paths.state / "state.json", {})
@@ -59,6 +64,17 @@ def create_branch(paths: VibePaths, run_id: str) -> str:
     if not run:
         raise ValueError(f"Unknown run: {run_id}")
     branch = run["branch"]
+    if artifact_run_uses_logical_branch(run):
+        run["status"] = "patched"
+        run["branch_mode"] = "logical_no_git"
+        (paths.runs / run_id / "branch.txt").write_text(f"{branch}\nbranch_recorded=logical_no_git\n")
+        write_text(paths.runs / run_id / "patch.diff", "")
+        record_event(paths, "branch_recorded", f"Recorded logical branch for artifact-only run {run_id}", run_id=run_id, status="logical_no_git")
+        state["runs"][run_id] = run
+        state["next_action"] = f"vibe dryrun {run_id}"
+        state["updated_at"] = utc_now()
+        write_json(paths.state / "state.json", state)
+        return branch
     if adapter_run_requires_no_patch(run):
         run["status"] = "patched"
         (paths.runs / run_id / "branch.txt").write_text(f"{branch}\nbranch_skipped=adapter_backed_run\n")

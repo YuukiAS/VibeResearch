@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.12.5 - 2026-05-31
+
+- Allow artifact-only/no-job runs to record logical branches without requiring a
+  clean git worktree or creating a real git branch.
+- Mark generated local portfolio actions as `artifact_only` with explicit
+  `adapter_metadata.no_job` provenance.
+- Show logical no-git branch status in run status output.
+- Add regression coverage that dirty target repositories can still advance
+  artifact-only audit runs to dry-run.
+
 ## 0.12.4 - 2026-05-31
 
 - Compile explicit local/no-job portfolio actions into concrete artifact-only
