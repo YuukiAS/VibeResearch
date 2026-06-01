@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.15.1 - 2026-06-01
+
+- Add MVE contracts to compiled execution manifests with input asset, minimal
+  command, expected artifact, metric/evidence reader, success and failure
+  conditions, cost cap, and next promotion rule.
+- Add `vibe mve validate` and `vibe mve promote-success` commands.
+- Block execution manifests without MVE contracts unless a human-approved MVE
+  exception is recorded.
+- Add MVE completion checks so missing MVE artifacts cannot close execution.
+- Generate next evidence debt after MVE success instead of allowing direct
+  mainline success claims.
+
 ## 0.15.0 - 2026-06-01
 
 - Add a Compiler Session that turns accepted reviewed plans into auditable

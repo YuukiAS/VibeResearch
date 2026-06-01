@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .io import read_json, slugify, utc_now, write_json, write_text
+from .mve import build_mve_contract, validate_mve_contract
 from .paths import VibePaths
 
 
@@ -51,6 +52,13 @@ def compile_reviewed_plan(paths: VibePaths, reviewed: dict[str, Any]) -> dict[st
         "stop_conditions": [body.get("stop_condition", "")],
         "fallbacks": [{"command": f"echo {body.get('fallback', 'record blocker')!r}", "rationale": body.get("fallback", "")}],
         "artifact_inventory": [{"path": expected_artifact, "required": True, "reader": metric_reader}],
+        "mve_contract": build_mve_contract(
+            body,
+            expected_artifact=expected_artifact,
+            metric_reader=metric_reader,
+            minimal_command=command,
+            cost_cap=infer_resource_plan(str(body.get("compute_cost", ""))),
+        ),
         "safety_checks": {
             "review_verdict": review.get("verdict"),
             "allow_compiler": review.get("allow_compiler"),
@@ -139,6 +147,7 @@ def validate_execution_manifest(manifest: dict[str, Any]) -> list[str]:
     safety = manifest.get("safety_checks", {})
     if safety.get("review_verdict") != "ACCEPT" or not safety.get("allow_compiler"):
         issues.append("accepted review approval must be preserved")
+    issues.extend(validate_mve_contract(manifest))
     return issues
 
 

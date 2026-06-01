@@ -123,6 +123,9 @@ requested draft fields.
 Accepted reviewed plans are compiled with `vibe compiler compile`, which writes
 `execution_manifest.json`, a local script draft, a Slurm draft, expected
 artifact inventory, evaluation command, stop condition, and fallback command.
+Every compiled manifest includes an MVE contract. `vibe mve validate` checks
+the contract before execution, and `vibe mve promote-success` records the next
+evidence debt instead of declaring mainline success.
 
 ```mermaid
 flowchart TD

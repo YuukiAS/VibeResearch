@@ -95,6 +95,8 @@ Reviewer 检查通过 `vibe reviewer review` 执行；只有 `ACCEPT` verdict �
 通过 review 的 plan 使用 `vibe compiler compile` 编译，输出
 `execution_manifest.json`、本地脚本草案、Slurm 草案、预期 artifact inventory、
 evaluation command、stop condition 和 fallback command。
+每个编译后的 manifest 都包含 MVE contract。`vibe mve validate` 在执行前检查
+最小实验契约，`vibe mve promote-success` 在成功后记录下一层证据债务，而不是直接宣布主线成功。
 
 ```mermaid
 flowchart TD

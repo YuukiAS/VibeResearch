@@ -74,6 +74,8 @@ from .internalization import (
 )
 from .manifest import validate_manifest
 from .meeting import export_meeting_report
+from .mve import load_manifest as load_mve_manifest
+from .mve import promotion_debt_for_success, validate_mve_completion, validate_mve_contract, write_promotion_debt
 from .next_action import compute_next_action
 from .owned import owned_contract, owned_design_audit, owned_shadow_plan, scaffold_owned_framework
 from .optimization import external_deemphasis_plan, plan_ablation, promote_champion, record_optimization_memory, record_regression_suite, register_challenger
@@ -141,6 +143,7 @@ research_app = typer.Typer(help="Initialize and audit bounded autonomous researc
 hypothesis_app = typer.Typer(help="Manage hypothesis registry records.")
 experiment_app = typer.Typer(help="Manage experiment registry and evidence links.")
 memory_app = typer.Typer(help="Build multi-cycle research memory packs.")
+mve_app = typer.Typer(help="Validate minimum viable experiment contracts.")
 portfolio_app = typer.Typer(help="Plan, schedule, and audit bounded experiment portfolios.")
 policy_app = typer.Typer(help="Inspect and lint research policies.")
 budget_app = typer.Typer(help="Reserve, reconcile, and inspect research budget.")
@@ -172,6 +175,7 @@ app.add_typer(research_app, name="research")
 app.add_typer(hypothesis_app, name="hypothesis")
 app.add_typer(experiment_app, name="experiment")
 app.add_typer(memory_app, name="memory")
+app.add_typer(mve_app, name="mve")
 app.add_typer(portfolio_app, name="portfolio")
 app.add_typer(policy_app, name="policy")
 app.add_typer(budget_app, name="budget")
@@ -1095,6 +1099,36 @@ def memory_build_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -
 
     pack = build_memory_pack(paths(target))
     console.print_json(data={"path": str(paths(target).research / "memory_pack.json"), "active_hypotheses": len(pack["active_hypotheses"]), "duplicate_risk_warnings": len(pack["duplicate_risk_warnings"])})
+
+
+@mve_app.command("validate")
+def mve_validate_cmd(
+    manifest: Path = typer.Argument(..., help="Execution manifest JSON path."),
+    check_artifact: bool = typer.Option(False, "--check-artifact"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Validate MVE contract fields and optionally require the artifact."""
+
+    data = load_mve_manifest(manifest)
+    issues = validate_mve_completion(paths(target).root, data) if check_artifact else validate_mve_contract(data)
+    console.print(f"MVE validation: {'ok' if not issues else 'blocked'}")
+    for issue in issues:
+        console.print(f"Issue: {issue}")
+    if issues:
+        raise typer.Exit(1)
+
+
+@mve_app.command("promote-success")
+def mve_promote_success_cmd(
+    manifest: Path = typer.Argument(..., help="Execution manifest JSON path."),
+    output: str = typer.Option(".vibe/kernel/mve_promotion_debt.json", "--output"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Record the next evidence debt after MVE success."""
+
+    output_path = paths(target).root / output
+    write_promotion_debt(output_path, promotion_debt_for_success(load_mve_manifest(manifest)))
+    console.print(f"MVE promotion debt: {output_path}")
 
 
 @portfolio_app.command("plan")
