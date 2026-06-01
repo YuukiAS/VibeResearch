@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.14.0 - 2026-05-31
+
+- Add a Planner Session draft-plan schema with failure anchor, hypothesis,
+  mechanism, minimum experiment, expected artifact, expected belief update,
+  compute cost, risk, fallback, and stop condition fields.
+- Add `vibe planner draft` and `vibe planner validate` for Planner-only draft
+  manifest generation and validation.
+- Read kernel context while drafting and surface negative-memory, open-debt,
+  smoke-only, confidence-class, and missing-field diagnostics.
+- Keep Planner output bounded to draft manifests; it does not approve plans or
+  create execution manifests.
+
 ## 0.13.2 - 2026-05-31
 
 - Accept clear `reflect` artifact aliases for `## Result interpretation`,
