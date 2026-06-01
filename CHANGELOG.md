@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-05-31
+
+- Add generic long-run reliability and soak diagnostics under
+  `vibe reliability`.
+- Report stale active jobs, state/queue mismatches, stale blockers, budget
+  drift, memo freshness, adapter evolution, dashboard export freshness, and
+  dual-track health without mutating live jobs.
+- Add append-only soak checkpoints and checkpoint comparisons for multi-day
+  reliability tracking.
+- Emit explicit safe operator recommendations for recovery while filtering out
+  live submission, cancellation, destructive git, and deletion commands.
+- Add doctor output with a `no_live_mutation` guarantee for dogfood and
+  downstream repository soak checks.
+
 ## 0.11.1 - 2026-05-31
 
 - Add final convergence policy state with `open_exploration`,

@@ -105,6 +105,7 @@ from .research_manager import (
     sustained_round_audit,
 )
 from .real_experiments import summarize_real_experiment_progress
+from .reliability import compare_checkpoints, reliability_checkpoint, reliability_doctor, reliability_report
 from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
 from .scheduler import operator_fallback_requeue
@@ -140,6 +141,7 @@ owned_app = typer.Typer(help="Generate and audit downstream owned framework alph
 optimize_app = typer.Typer(help="Manage champion/challenger owned optimization loops.")
 present_app = typer.Typer(help="Export presentation-ready research packages.")
 converge_app = typer.Typer(help="Control final convergence and freeze policy.")
+reliability_app = typer.Typer(help="Run long-run reliability and soak diagnostics.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -166,6 +168,7 @@ app.add_typer(owned_app, name="owned")
 app.add_typer(optimize_app, name="optimize")
 app.add_typer(present_app, name="present")
 app.add_typer(converge_app, name="converge")
+app.add_typer(reliability_app, name="reliability")
 console = Console()
 
 
@@ -1455,6 +1458,49 @@ def converge_risk_review_cmd(target: Path = typer.Option(Path("."), "--target", 
     """Write the known-risk review required for final freeze."""
 
     console.print_json(data=write_known_risk_review(paths(target), text))
+
+
+@reliability_app.command("report")
+def reliability_report_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    stale_hours: float = typer.Option(24.0, "--stale-hours"),
+    memo_fresh_hours: float = typer.Option(24.0, "--memo-fresh-hours"),
+) -> None:
+    """Write a long-run reliability report without mutating live jobs."""
+
+    console.print_json(data=reliability_report(paths(target), stale_hours=stale_hours, memo_fresh_hours=memo_fresh_hours))
+
+
+@reliability_app.command("checkpoint")
+def reliability_checkpoint_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), label: str = typer.Option("", "--label")) -> None:
+    """Append a soak checkpoint for later comparison."""
+
+    console.print_json(data=reliability_checkpoint(paths(target), label=label))
+
+
+@reliability_app.command("compare")
+def reliability_compare_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    older_id: str = typer.Option("", "--older-id"),
+    newer_id: str = typer.Option("", "--newer-id"),
+) -> None:
+    """Compare two soak checkpoints, defaulting to the latest two."""
+
+    console.print_json(data=compare_checkpoints(paths(target), older_id=older_id, newer_id=newer_id))
+
+
+@reliability_app.command("doctor")
+def reliability_doctor_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    stale_hours: float = typer.Option(24.0, "--stale-hours"),
+    memo_fresh_hours: float = typer.Option(24.0, "--memo-fresh-hours"),
+) -> None:
+    """Run reliability diagnostics and print safe operator recommendations."""
+
+    result = reliability_doctor(paths(target), stale_hours=stale_hours, memo_fresh_hours=memo_fresh_hours)
+    console.print_json(data=result)
+    if result.get("status") == "blocked":
+        raise typer.Exit(1)
 
 
 @policy_app.command("lint")
