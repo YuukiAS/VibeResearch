@@ -142,6 +142,11 @@ mainline success, and smoke/import success remains feasibility evidence.
 feasibility, mechanism, metric, robustness, and negative evidence are recorded
 separately so a useful mechanism can be preserved even when a headline metric
 does not improve.
+`vibe registry record` and `vibe registry check` maintain the immune system:
+plans are fingerprinted by failure anchor, mechanism, action type, artifact
+type, metrics, review/reflect decisions, and evidence type. Renamed repeats are
+blocked unless they introduce a new mechanism, information source, artifact, or
+evidence path.
 
 ```mermaid
 flowchart TD

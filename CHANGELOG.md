@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.18.0 - 2026-06-01
+
+- Add a Research Registry and Immune System for route fingerprints and failure
+  antigens.
+- Add `vibe registry record`, `vibe registry check`, and
+  `vibe registry budget-recovery` commands.
+- Fingerprint failure anchors, mechanisms, action types, artifact types, metric
+  vectors, review verdicts, reflect decisions, and evidence types.
+- Connect registry checks to Planner diagnostics and Reviewer rejection so
+  renamed repeats are blocked unless they include a new mechanism, source,
+  artifact, or evidence path.
+- Convert STOP/PIVOT, guardrail regressions, adapter-impossible states, orphan
+  knowledge, and metadata-only loops into immune memory.
+- Index budget checkpoint, resume, and low-quota interruption records for
+  recovery.
+
 ## 0.17.1 - 2026-06-01
 
 - Add a Belief Ratchet that converts Reflector outputs into layered evidence

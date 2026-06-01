@@ -8,6 +8,7 @@ from typing import Any
 from .io import read_json, read_jsonl, utc_now, write_json
 from .kernel import missing_kernel_files
 from .paths import VibePaths
+from .immune_registry import planner_registry_diagnostic
 
 
 GENERATION_MODES = {"exploit", "recombine", "invent"}
@@ -94,7 +95,12 @@ def build_draft_plan(
         "diagnostics": [],
     }
     plan["diagnostics"] = planner_diagnostics(plan, context)
+    registry_diagnostic = planner_registry_diagnostic(paths, plan)
+    if registry_diagnostic:
+        plan["diagnostics"].append(registry_diagnostic)
     if any(item["code"] in {"smoke_only", "negative_memory_overlap", "non_reviewable_confidence"} for item in plan["diagnostics"]):
+        plan["review_route"] = "requires_revision"
+    if any(item["code"] in {"registry_repeat_route"} for item in plan["diagnostics"]):
         plan["review_route"] = "requires_revision"
     return plan
 

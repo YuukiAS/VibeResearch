@@ -108,6 +108,9 @@ artifact inventory、metric artifact、logs 和 MVE contract，然后写 `reflec
 promotion debt，不会直接宣布主线成功；smoke/import 成功只能算 feasibility evidence。
 `vibe ratchet apply` 把 reflection 写回分层 belief memory：feasibility、mechanism、
 metric、robustness 和 negative evidence 分开记录，所以即使最终指标没涨，有价值的机制证据也会保留下来。
+`vibe registry record` 和 `vibe registry check` 维护 immune system：计划会按 failure anchor、
+mechanism、action type、artifact type、metrics、review/reflect decision 和 evidence type 生成 fingerprint。
+旧实验换名重跑会被拦截，除非它带来新机制、新信息源、新 artifact 或新 evidence path。
 
 ```mermaid
 flowchart TD

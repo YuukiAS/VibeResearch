@@ -62,6 +62,7 @@ from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
 from .io import read_json, read_jsonl, read_yaml
+from .immune_registry import immune_check, load_budget_recovery, record_registry_event
 from .kernel import SESSION_ROLES, check_role_permission
 from .kernel import check_protocol as kernel_check_protocol
 from .kernel import initialize_kernel, kernel_status, record_evidence
@@ -172,6 +173,7 @@ converge_app = typer.Typer(help="Control final convergence and freeze policy.")
 reliability_app = typer.Typer(help="Run long-run reliability and soak diagnostics.")
 reflector_app = typer.Typer(help="Interpret Executor outputs as an independent Reflector Session.")
 ratchet_app = typer.Typer(help="Apply layered belief updates from Reflector outputs.")
+registry_app = typer.Typer(help="Record and query research registry immune memory.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -208,6 +210,7 @@ app.add_typer(converge_app, name="converge")
 app.add_typer(reliability_app, name="reliability")
 app.add_typer(reflector_app, name="reflector")
 app.add_typer(ratchet_app, name="ratchet")
+app.add_typer(registry_app, name="registry")
 console = Console()
 
 
@@ -830,6 +833,39 @@ def ratchet_validate_cmd(record: Path = typer.Argument(..., help="Belief ratchet
         console.print(f"Issue: {issue}")
     if issues:
         raise typer.Exit(1)
+
+
+@registry_app.command("record")
+def registry_record_cmd(
+    event_type: str = typer.Option(..., "--event-type"),
+    payload: Path = typer.Argument(..., help="JSON payload to fingerprint and record."),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Append a fingerprinted research registry event."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    record = record_registry_event(paths_, event_type=event_type, payload=read_json(payload, {}))
+    console.print_json(data=record)
+
+
+@registry_app.command("check")
+def registry_check_cmd(plan: Path = typer.Argument(..., help="Draft plan or plan-like JSON."), target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Check whether a candidate route repeats immune memory."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    result = immune_check(paths_, read_json(plan, {}))
+    console.print_json(data=result)
+    if result["blocked"]:
+        raise typer.Exit(1)
+
+
+@registry_app.command("budget-recovery")
+def registry_budget_recovery_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Show budget checkpoint/resume events indexed by the registry."""
+
+    console.print_json(data=load_budget_recovery(paths(target)))
 
 
 @kernel_app.command("status")

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .io import append_jsonl, read_json, read_jsonl, utc_now, write_json, write_text
+from .immune_registry import reviewer_registry_criterion
 from .paths import VibePaths
 from .planner import REQUIRED_FIELDS, load_draft_plan, meaningful_artifact
 from .revision import enforce_loop_limit
@@ -35,6 +36,9 @@ def reviewer_context(paths: VibePaths) -> dict[str, Any]:
 def review_draft_plan(paths: VibePaths, draft: dict[str, Any]) -> dict[str, Any]:
     context = reviewer_context(paths)
     criteria = review_criteria(draft, context)
+    registry_criterion = reviewer_registry_criterion(paths, draft)
+    if registry_criterion:
+        criteria.append(registry_criterion)
     verdict = choose_verdict(criteria)
     required_changes = [item["message"] for item in criteria if item["outcome"] == "revise"]
     blocking_risks = [item["message"] for item in criteria if item["outcome"] == "ask_human"]
