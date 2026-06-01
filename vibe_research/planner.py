@@ -10,6 +10,7 @@ from .immune_registry import planner_registry_diagnostic
 from .io import read_json, read_jsonl, utc_now, write_json
 from .kernel import missing_kernel_files
 from .paths import VibePaths
+from .scout import validate_mechanism_card
 
 
 GENERATION_MODES = {"exploit", "recombine", "invent"}
@@ -108,6 +109,36 @@ def build_draft_plan(
         plan["review_route"] = "requires_revision"
     if any(item["code"] in {"open_decision_debt_priority"} for item in plan["diagnostics"]):
         plan["review_route"] = "requires_revision"
+    return plan
+
+
+def build_draft_from_mechanism_card(
+    paths: VibePaths,
+    card: dict[str, Any],
+    *,
+    confidence: str = "speculative_mechanism",
+) -> dict[str, Any]:
+    issues = validate_mechanism_card(card)
+    if issues:
+        raise ValueError("; ".join(issues))
+    artifact_slug = str(card.get("card_id") or "mechanism_card").replace("_", "-")
+    plan = build_draft_plan(
+        paths,
+        mode="recombine",
+        failure_anchor=str(card.get("failure_anchor", "")),
+        hypothesis=f"If {card.get('claim', '')}, then {card.get('mechanism_extraction', '')} can change belief on the failure anchor.",
+        mechanism=str(card.get("mechanism_extraction", "")),
+        minimum_experiment=str(card.get("possible_mve", "")),
+        expected_artifact=f".vibe/runs/{artifact_slug}/mechanism_card_metrics.json",
+        expected_belief_update=f"Decide whether mechanism card {card.get('card_id', '')} provides transferable mechanism evidence.",
+        compute_cost="local cpu under 10 minutes unless Reviewer approves more",
+        risk="; ".join(str(item) for item in card.get("risks", [])) or "external knowledge may not transfer",
+        fallback=f"archive mechanism card {card.get('card_id', '')} as negative or background evidence",
+        stop_condition=str(card.get("stop_reason", "")),
+        confidence=confidence,
+        source=f"mechanism_card:{card.get('card_id', '')}",
+    )
+    plan["mechanism_card"] = card
     return plan
 
 

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.19.0 - 2026-06-01
+
+- Add a Knowledge-to-Experiment pipeline based on Scout mechanism cards.
+- Add `vibe scout mechanism-card`, `vibe scout validate-card`, and
+  `vibe planner draft-from-card`.
+- Require mechanism cards to include source, claim, mechanism extraction, why it
+  matters, failure anchor, possible MVE, required assets, risks, and stop reason.
+- Archive mechanism cards without a possible MVE instead of allowing them into
+  planning or execution.
+- Preserve mechanism-card provenance in Compiler manifests and reject
+  clone/install-only goals as experiment targets.
+
 ## 0.18.1 - 2026-06-01
 
 - Add structured Decision Debt TTL records for WATCH/REFINE outcomes.

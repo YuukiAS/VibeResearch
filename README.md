@@ -151,6 +151,11 @@ evidence path.
 records the missing evidence, repayment MVE, TTL, promotion condition, pivot
 condition, stop condition, and owner session. Expired debt becomes STOP negative
 memory or a PIVOT plan seed that must return through Reviewer.
+`vibe scout mechanism-card` and `vibe planner draft-from-card` route external
+knowledge through mechanism extraction before planning. Papers, repositories,
+deep research notes, and user ideas must become a `mechanism_card.md` with a
+possible MVE before Planner/Reviewer/Compiler can turn them into execution
+manifests; clone or install steps alone are not experiment goals.
 
 ```mermaid
 flowchart TD

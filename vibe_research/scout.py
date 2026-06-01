@@ -101,6 +101,23 @@ class ScoutClaimRecord(BaseModel):
     created_at: str = Field(default_factory=utc_now)
 
 
+class MechanismCardRecord(BaseModel):
+    card_id: str
+    source_type: str = "paper"
+    source: str
+    claim: str
+    mechanism_extraction: str
+    why_it_matters: str
+    failure_anchor: str
+    possible_mve: str = ""
+    required_assets: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    stop_reason: str
+    status: str = "PLAN_CANDIDATE"
+    card_path: str = ""
+    created_at: str = Field(default_factory=utc_now)
+
+
 def scout_dir(paths: VibePaths):
     return ensure_dir(paths.research / "scout")
 
@@ -113,6 +130,8 @@ def scout_paths(paths: VibePaths) -> dict[str, Any]:
         "claims": base / "claims.jsonl",
         "negative": base / "negative_evidence.jsonl",
         "queries": base / "queries.jsonl",
+        "mechanism_cards": base / "mechanism_cards",
+        "mechanism_registry": base / "mechanism_cards.jsonl",
         "audit": base / "audit.json",
         "memo": base / "memo.md",
     }
@@ -201,6 +220,113 @@ def create_scout_claim(
     ).model_dump()
     append_jsonl(files["claims"], record)
     return record
+
+
+def create_mechanism_card(
+    paths: VibePaths,
+    *,
+    source: str,
+    claim: str,
+    mechanism_extraction: str,
+    why_it_matters: str,
+    failure_anchor: str,
+    possible_mve: str = "",
+    required_assets: list[str] | None = None,
+    risks: list[str] | None = None,
+    stop_reason: str,
+    source_type: str = "paper",
+) -> dict[str, Any]:
+    files = scout_paths(paths)
+    existing = [row.get("card_id", "") for row in read_jsonl(files["mechanism_registry"])]
+    card_id = next_numeric_id(existing, "card_")
+    status = "PLAN_CANDIDATE" if possible_mve.strip() else "ARCHIVED_NO_MVE"
+    card_dir = ensure_dir(files["mechanism_cards"] / card_id)
+    card_path = card_dir / "mechanism_card.md"
+    record = MechanismCardRecord(
+        card_id=card_id,
+        source_type=source_type,
+        source=source,
+        claim=claim,
+        mechanism_extraction=mechanism_extraction,
+        why_it_matters=why_it_matters,
+        failure_anchor=failure_anchor,
+        possible_mve=possible_mve,
+        required_assets=required_assets or [],
+        risks=risks or [],
+        stop_reason=stop_reason,
+        status=status,
+        card_path=str(card_path.relative_to(paths.root)),
+    ).model_dump()
+    write_text(card_path, render_mechanism_card(record))
+    write_json(card_dir / "mechanism_card.json", record)
+    append_jsonl(files["mechanism_registry"], record)
+    return record
+
+
+def render_mechanism_card(card: dict[str, Any]) -> str:
+    assets = "\n".join(f"- {item}" for item in card.get("required_assets", [])) or "- none"
+    risks = "\n".join(f"- {item}" for item in card.get("risks", [])) or "- none"
+    return "\n".join(
+        [
+            "# Mechanism Card",
+            "",
+            f"card_id: {card.get('card_id', '')}",
+            f"status: {card.get('status', '')}",
+            "",
+            "## Source",
+            f"{card.get('source_type', '')}: {card.get('source', '')}",
+            "",
+            "## Claim",
+            str(card.get("claim", "")),
+            "",
+            "## Mechanism Extraction",
+            str(card.get("mechanism_extraction", "")),
+            "",
+            "## Why It Matters",
+            str(card.get("why_it_matters", "")),
+            "",
+            "## Failure Anchor",
+            str(card.get("failure_anchor", "")),
+            "",
+            "## Possible MVE",
+            str(card.get("possible_mve", "")),
+            "",
+            "## Required Assets",
+            assets,
+            "",
+            "## Risks",
+            risks,
+            "",
+            "## Stop Reason",
+            str(card.get("stop_reason", "")),
+            "",
+        ]
+    )
+
+
+def validate_mechanism_card(card: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for field in ("source", "claim", "mechanism_extraction", "why_it_matters", "failure_anchor", "stop_reason"):
+        if not str(card.get(field, "")).strip():
+            issues.append(f"{field} is required")
+    if not str(card.get("possible_mve", "")).strip():
+        issues.append("possible_mve is required before planning")
+    if card.get("status") == "ARCHIVED_NO_MVE":
+        issues.append("mechanism card is archived because it has no possible MVE")
+    return issues
+
+
+def load_mechanism_card(paths: VibePaths, card_id_or_path: str) -> dict[str, Any]:
+    files = scout_paths(paths)
+    for row in read_jsonl(files["mechanism_registry"]):
+        if row.get("card_id") == card_id_or_path:
+            return row
+    path = paths.root / card_id_or_path
+    if path.name == "mechanism_card.md":
+        json_path = path.with_suffix(".json")
+    else:
+        json_path = path
+    return read_json(json_path, {})
 
 
 def scout_query_context(paths: VibePaths) -> dict[str, Any]:

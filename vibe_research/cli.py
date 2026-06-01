@@ -85,7 +85,7 @@ from .owned import owned_contract, owned_design_audit, owned_shadow_plan, scaffo
 from .optimization import external_deemphasis_plan, plan_ablation, promote_champion, record_optimization_memory, record_regression_suite, register_challenger
 from .papers import add_paper, auto_method_search, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
-from .planner import build_draft_plan, load_draft_plan, validate_draft_plan, write_draft_plan
+from .planner import build_draft_from_mechanism_card, build_draft_plan, load_draft_plan, validate_draft_plan, write_draft_plan
 from .portal import build_portal
 from .presentation import build_framework_spec, build_narrative, build_presentation_package, build_reproducibility_package, export_presentation_tables
 from .project import add_directive, add_idea, create_cycle, generate_runs, init_project, sync_resource_plan_from_portfolio, vendor_runtime
@@ -125,7 +125,7 @@ from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
 from .scheduler import operator_fallback_requeue
 from .scheduler import queue_run, review_cycle, review_run, run_dryrun, submit_queue
-from .scout import add_scout_finding, create_scout_claim, scout_audit, scout_query_context, triage_scout_finding
+from .scout import add_scout_finding, create_mechanism_card, create_scout_claim, load_mechanism_card, scout_audit, scout_query_context, triage_scout_finding, validate_mechanism_card
 from .selftests import sustained_round_selftest
 from .session_budget_guard import (
     guard_session_action,
@@ -1072,6 +1072,32 @@ def planner_validate_cmd(plan: Path = typer.Argument(..., help="Draft plan JSON 
         raise typer.Exit(1)
 
 
+@planner_app.command("draft-from-card")
+def planner_draft_from_card_cmd(
+    card: str = typer.Argument(..., help="Mechanism card id or JSON sidecar path."),
+    confidence: str = typer.Option("speculative_mechanism", "--confidence"),
+    output: str = typer.Option("draft_plan_manifest.json", "--output"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Create a Planner draft from a validated mechanism card."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    try:
+        draft = build_draft_from_mechanism_card(paths_, load_mechanism_card(paths_, card), confidence=confidence)
+    except ValueError as exc:
+        console.print(str(exc))
+        raise typer.Exit(1) from exc
+    ok, diagnostics = validate_draft_plan(draft)
+    path = write_draft_plan(paths_, draft, output=output)
+    console.print(f"Draft plan: {path}")
+    console.print(f"Review route: {draft['review_route']}")
+    for item in diagnostics:
+        console.print(f"{item['level']}: {item['code']} - {item['message']}")
+    if not ok:
+        raise typer.Exit(1)
+
+
 @planner_app.command("resubmit")
 def planner_resubmit_cmd(
     revision_packet: Path = typer.Option(..., "--revision-packet"),
@@ -1837,6 +1863,54 @@ def scout_claim_cmd(
             confidence=confidence,
         )
     )
+
+
+@scout_app.command("mechanism-card")
+def scout_mechanism_card_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    source: str = typer.Option(..., "--source"),
+    claim: str = typer.Option(..., "--claim"),
+    mechanism_extraction: str = typer.Option(..., "--mechanism-extraction"),
+    why_it_matters: str = typer.Option(..., "--why-it-matters"),
+    failure_anchor: str = typer.Option(..., "--failure-anchor"),
+    possible_mve: str = typer.Option("", "--possible-mve"),
+    required_asset: list[str] = typer.Option([], "--required-asset"),
+    risk: list[str] = typer.Option([], "--risk"),
+    stop_reason: str = typer.Option(..., "--stop-reason"),
+    source_type: str = typer.Option("paper", "--source-type"),
+) -> None:
+    """Write a Scout mechanism_card.md without creating execution manifests."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    card = create_mechanism_card(
+        paths_,
+        source=source,
+        claim=claim,
+        mechanism_extraction=mechanism_extraction,
+        why_it_matters=why_it_matters,
+        failure_anchor=failure_anchor,
+        possible_mve=possible_mve,
+        required_assets=required_asset,
+        risks=risk,
+        stop_reason=stop_reason,
+        source_type=source_type,
+    )
+    console.print_json(data=card)
+
+
+@scout_app.command("validate-card")
+def scout_validate_card_cmd(card: str = typer.Argument(...), target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Validate a mechanism card before Planner consumes it."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    issues = validate_mechanism_card(load_mechanism_card(paths_, card))
+    console.print(f"Mechanism card validation: {'ok' if not issues else 'blocked'}")
+    for issue in issues:
+        console.print(f"Issue: {issue}")
+    if issues:
+        raise typer.Exit(1)
 
 
 @scout_app.command("audit")

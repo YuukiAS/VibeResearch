@@ -18,10 +18,14 @@ def compile_reviewed_plan(paths: VibePaths, reviewed: dict[str, Any]) -> dict[st
     body = draft.get("plan", {}) if isinstance(draft.get("plan"), dict) else {}
     expected_artifact = str(body.get("expected_artifact", "")).strip()
     metric_reader = metric_reader_for(expected_artifact)
+    mechanism_card = draft.get("mechanism_card", body.get("mechanism_card", {}))
+    mechanism_card_path = mechanism_card.get("card_path", "") if isinstance(mechanism_card, dict) else str(mechanism_card or "")
     if not concrete_artifact_path(expected_artifact):
         raise ValueError("expected artifact must be a concrete repo-local path")
     if not metric_reader:
         raise ValueError("metric reader cannot be inferred from expected artifact")
+    if clone_or_install_only(str(body.get("minimum_experiment", ""))):
+        raise ValueError("clone/install cannot be the experiment target; compile a mechanism-card MVE instead")
 
     mechanism_slug = slugify(str(body.get("mechanism", "execution")), max_len=32)
     script_path = f".vibe/executor/scripts/{mechanism_slug}.sh"
@@ -39,7 +43,8 @@ def compile_reviewed_plan(paths: VibePaths, reviewed: dict[str, Any]) -> dict[st
             "script": script_path,
             "slurm_draft": slurm_path,
         },
-        "input_assets": [".vibe/kernel/reviewed_plan_manifest.json"],
+        "input_assets": [item for item in [".vibe/kernel/reviewed_plan_manifest.json", mechanism_card_path] if item],
+        "mechanism_card": mechanism_card if isinstance(mechanism_card, dict) else {"card_path": mechanism_card_path},
         "mechanism": body.get("mechanism", ""),
         "minimum_experiment": body.get("minimum_experiment", ""),
         "commands": {
@@ -78,6 +83,13 @@ def compile_reviewed_plan(paths: VibePaths, reviewed: dict[str, Any]) -> dict[st
 
 def concrete_artifact_path(path: str) -> bool:
     return bool(path and path.startswith(".vibe/") and not path.endswith("/") and " " not in path)
+
+
+def clone_or_install_only(minimum_experiment: str) -> bool:
+    lowered = minimum_experiment.strip().lower()
+    has_setup = any(term in lowered for term in ("clone ", "git clone", "install ", "pip install", "download repo"))
+    has_experiment = any(term in lowered for term in ("mve", "evaluate", "metric", "artifact", "ablation", "verify", "run subset"))
+    return has_setup and not has_experiment
 
 
 def metric_reader_for(path: str) -> str:
