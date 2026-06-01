@@ -106,6 +106,8 @@ evidence-grade artifact、安全红线、stop condition、fallback command 和 f
 artifact inventory、metric artifact、logs 和 MVE contract，然后写 `reflect_report.md`，
 结论只能是 `PROCEED`、`REFINE`、`PIVOT`、`STOP` 或 `ASK_HUMAN`。MVE 成功只会生成
 promotion debt，不会直接宣布主线成功；smoke/import 成功只能算 feasibility evidence。
+`vibe ratchet apply` 把 reflection 写回分层 belief memory：feasibility、mechanism、
+metric、robustness 和 negative evidence 分开记录，所以即使最终指标没涨，有价值的机制证据也会保留下来。
 
 ```mermaid
 flowchart TD

@@ -44,6 +44,7 @@ from .bootstrap import (
     import_legacy,
     run_dogfood,
 )
+from .belief_ratchet import apply_belief_ratchet, load_ratchet_record, validate_ratchet_record
 from .codex_adapter import artifact_path, prompt_packet, run_codex
 from .compiler import compile_reviewed_plan, load_reviewed_plan, validate_execution_manifest, write_execution_package
 from .config import detect_config, load_config, migrate_project, validate_config
@@ -170,6 +171,7 @@ present_app = typer.Typer(help="Export presentation-ready research packages.")
 converge_app = typer.Typer(help="Control final convergence and freeze policy.")
 reliability_app = typer.Typer(help="Run long-run reliability and soak diagnostics.")
 reflector_app = typer.Typer(help="Interpret Executor outputs as an independent Reflector Session.")
+ratchet_app = typer.Typer(help="Apply layered belief updates from Reflector outputs.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -205,6 +207,7 @@ app.add_typer(present_app, name="present")
 app.add_typer(converge_app, name="converge")
 app.add_typer(reliability_app, name="reliability")
 app.add_typer(reflector_app, name="reflector")
+app.add_typer(ratchet_app, name="ratchet")
 console = Console()
 
 
@@ -792,6 +795,37 @@ def reflector_validate_cmd(reflection: Path = typer.Argument(..., help="Reflect 
 
     issues = validate_reflection(load_reflection(reflection))
     console.print(f"Reflect validation: {'ok' if not issues else 'blocked'}")
+    for issue in issues:
+        console.print(f"Issue: {issue}")
+    if issues:
+        raise typer.Exit(1)
+
+
+@ratchet_app.command("apply")
+def ratchet_apply_cmd(
+    reflection: Optional[Path] = typer.Option(None, "--reflection", help="Reflect manifest; defaults to .vibe/kernel/reflect_manifest.json."),
+    execution_manifest: Optional[Path] = typer.Option(None, "--execution-manifest"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Apply layered belief updates from a Reflector manifest."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    record = apply_belief_ratchet(paths_, reflection_path=reflection, execution_manifest=execution_manifest)
+    console.print(f"Ratchet evidence type: {record.get('evidence_type', '')}")
+    console.print(f"Ratchet record: {paths_.kernel / 'belief_ratchet_record.json'}")
+    if record.get("validation_issues"):
+        for issue in record["validation_issues"]:
+            console.print(f"Issue: {issue}")
+        raise typer.Exit(1)
+
+
+@ratchet_app.command("validate")
+def ratchet_validate_cmd(record: Path = typer.Argument(..., help="Belief ratchet record JSON path.")) -> None:
+    """Validate a Belief Ratchet record."""
+
+    issues = validate_ratchet_record(load_ratchet_record(record))
+    console.print(f"Ratchet validation: {'ok' if not issues else 'blocked'}")
     for issue in issues:
         console.print(f"Issue: {issue}")
     if issues:

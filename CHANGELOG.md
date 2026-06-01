@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.17.1 - 2026-06-01
+
+- Add a Belief Ratchet that converts Reflector outputs into layered evidence
+  updates rather than simple success/failure labels.
+- Add `vibe ratchet apply` and `vibe ratchet validate` commands.
+- Track feasibility, mechanism, metric, robustness, and negative evidence
+  separately in ratchet records.
+- Update Problem, Mechanism, Experiment, Negative, and Open Debt memory files
+  according to evidence type.
+- Preserve mechanism evidence without treating it as metric progress, and keep
+  one-case evidence from becoming robustness belief.
+
 ## 0.17.0 - 2026-06-01
 
 - Add an independent Reflector Session for post-execution interpretation.

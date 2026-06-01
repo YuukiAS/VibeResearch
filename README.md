@@ -138,6 +138,10 @@ reads the Executor result manifest, artifact inventory, metric artifact, logs,
 and MVE contract, then writes `reflect_report.md` with `PROCEED`, `REFINE`,
 `PIVOT`, `STOP`, or `ASK_HUMAN`. MVE success creates promotion debt rather than
 mainline success, and smoke/import success remains feasibility evidence.
+`vibe ratchet apply` turns that reflection into layered belief memory:
+feasibility, mechanism, metric, robustness, and negative evidence are recorded
+separately so a useful mechanism can be preserved even when a headline metric
+does not improve.
 
 ```mermaid
 flowchart TD
