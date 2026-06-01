@@ -115,6 +115,8 @@ Planner drafts are created explicitly with `vibe planner draft` and checked
 with `vibe planner validate`. A draft must include a failure anchor, hypothesis,
 mechanism, minimum experiment, expected artifact, expected belief update,
 compute cost, risk, fallback, and stop condition before it can be reviewed.
+Reviewer checks run through `vibe reviewer review`; only an `ACCEPT` verdict
+writes `reviewed_plan_manifest.json` for the Compiler.
 
 ```mermaid
 flowchart TD

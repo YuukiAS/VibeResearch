@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.14.2 - 2026-06-01
+
+- Add a Reviewer Session that independently reviews Planner draft manifests
+  before compilation or execution.
+- Add `vibe reviewer review` and `vibe reviewer validate` commands.
+- Emit `ACCEPT`, `REVISE`, `REJECT`, or `ASK_HUMAN` review verdicts with
+  traceable criteria, required changes, blocking risks, and rejection reasons.
+- Write `reviewed_plan_manifest.json` only for accepted plans and record review
+  provenance in `PLAN_REVIEW_REGISTRY.jsonl`.
+- Add regression coverage for generic U-Net rejection, metadata/smoke-only
+  rejection, MVE acceptance, safety `ASK_HUMAN`, and traceable reports.
+
 ## 0.14.1 - 2026-05-31
 
 - Add first-class `blocked_missing_artifact_adapter` decisions so artifact-only

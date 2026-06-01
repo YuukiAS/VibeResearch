@@ -85,6 +85,7 @@ from .project import add_directive, add_idea, create_cycle, generate_runs, init_
 from .promotion import compile_decision as compile_cycle_decision
 from .promotion import validate_resource_plan
 from .research import deep_request, ingest_deep_research, literature_refresh, literature_refresh_idea, reflect, reflect_cycle, revise_cycle, revise_plan
+from .reviewer import review_draft_file, write_review_outputs
 from .reports import generate_alignment_after_changes, generate_dogfood_reports, write_portal_docs
 from .research_manager import (
     add_evidence,
@@ -132,6 +133,7 @@ script_app = typer.Typer(help="Bootstrap downstream execution wrapper scripts.")
 bootstrap_app = typer.Typer(help="Run resumable project bootstrap, readiness, archive, and dogfood workflows.")
 kernel_app = typer.Typer(help="Manage the session-oriented research kernel.")
 planner_app = typer.Typer(help="Generate reviewable Planner Session draft plans.")
+reviewer_app = typer.Typer(help="Review Planner draft plans before compilation or execution.")
 research_app = typer.Typer(help="Initialize and audit bounded autonomous research state.")
 hypothesis_app = typer.Typer(help="Manage hypothesis registry records.")
 experiment_app = typer.Typer(help="Manage experiment registry and evidence links.")
@@ -161,6 +163,7 @@ app.add_typer(script_app, name="script")
 app.add_typer(bootstrap_app, name="bootstrap")
 app.add_typer(kernel_app, name="kernel")
 app.add_typer(planner_app, name="planner")
+app.add_typer(reviewer_app, name="reviewer")
 app.add_typer(research_app, name="research")
 app.add_typer(hypothesis_app, name="hypothesis")
 app.add_typer(experiment_app, name="experiment")
@@ -697,6 +700,40 @@ def planner_validate_cmd(plan: Path = typer.Argument(..., help="Draft plan JSON 
     for item in diagnostics:
         console.print(f"{item['level']}: {item['code']} - {item['message']}")
     if not ok:
+        raise typer.Exit(1)
+
+
+@reviewer_app.command("review")
+def reviewer_review_cmd(
+    draft: Optional[Path] = typer.Option(None, "--draft", help="Draft plan JSON path; defaults to .vibe/kernel/draft_plan_manifest.json."),
+    report_output: str = typer.Option("plan_review_report.md", "--report-output"),
+    reviewed_output: str = typer.Option("reviewed_plan_manifest.json", "--reviewed-output"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Review a Planner draft and write report plus accepted manifest only."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    draft_path = draft or (paths_.kernel / "draft_plan_manifest.json")
+    review = review_draft_file(paths_, draft_path)
+    outputs = write_review_outputs(paths_, review, report_name=report_output, reviewed_name=reviewed_output)
+    console.print(f"Verdict: {review['verdict']}")
+    console.print(f"Report: {outputs['report']}")
+    if outputs["reviewed_manifest"]:
+        console.print(f"Reviewed manifest: {outputs['reviewed_manifest']}")
+    if review["verdict"] != "ACCEPT":
+        raise typer.Exit(1)
+
+
+@reviewer_app.command("validate")
+def reviewer_validate_cmd(review_json: Path = typer.Argument(..., help="Review JSON path to validate.")) -> None:
+    """Validate a structured review JSON without executing it."""
+
+    review = read_json(review_json, {})
+    verdict = review.get("verdict", "")
+    console.print(f"Review validation: {'ok' if verdict in {'ACCEPT', 'REVISE', 'REJECT', 'ASK_HUMAN'} else 'blocked'}")
+    console.print(f"Verdict: {verdict}")
+    if verdict not in {"ACCEPT", "REVISE", "REJECT", "ASK_HUMAN"}:
         raise typer.Exit(1)
 
 

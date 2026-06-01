@@ -88,6 +88,8 @@ Planner draft 通过 `vibe planner draft` 创建，并用 `vibe planner validate
 每个 draft 进入 review 前，必须写清 failure anchor、hypothesis、mechanism、
 minimum experiment、expected artifact、expected belief update、compute cost、
 risk、fallback 和 stop condition。
+Reviewer 检查通过 `vibe reviewer review` 执行；只有 `ACCEPT` verdict 才会写出
+`reviewed_plan_manifest.json` 交给 Compiler。
 
 ```mermaid
 flowchart TD
