@@ -44,6 +44,263 @@ Typical use cases include:
   automatically;
 - producing status dashboards, daily memos, and meeting-ready summaries.
 
+## VibeResearch OS Architecture
+
+VibeResearch OS is not a wrapper around an external auto-research framework and
+it is not a single super-agent that plans, approves, executes, and declares
+success by itself. It is a session-oriented research operating system built
+around separated Codex sessions, shared files, evidence levels, negative
+memory, and budget-aware runtime rules.
+
+The design goal is not to make agents look busy. Each research cycle must
+produce auditable evidence, a belief update, negative evidence, or a concrete
+next debt. An action that cannot move from idea to artifact, then to metric and
+decision, is preparation or diagnostics; it is not research progress.
+
+### Design Principles
+
+- Separate duties before increasing autonomy. Planning, reviewing, executing,
+  and reflecting are different responsibilities and should run in different
+  Codex sessions.
+- A plan cannot approve itself. The Reviewer Session is the execution gate
+  before Slurm, code changes, or expensive experiments.
+- Artifacts are not enough. Every artifact must support an evidence type and a
+  belief update.
+- Failed routes are immune memory, not ordinary logs. Similar future plans must
+  explain their new mechanism or be rejected.
+- Budget and safety are runtime constraints. They are not reminders in a prompt.
+
+### Layers And Sessions
+
+The architecture has eight layers. A layer is an architectural concern; a
+session is an operating role that may be run by Codex.
+
+1. Kernel / Memory Layer: stores the project goal, problem state, failure
+   signatures, open debts, negative memory, safety boundaries, and budget state.
+2. Planner Layer: proposes candidate plans and bold mechanisms.
+3. Reviewer / Reviser Layer: reviews plans before execution, as a human mentor
+   or reviewer would.
+4. Compiler / MVE Layer: compiles accepted plans into minimum viable
+   experiments and execution manifests.
+5. Executor Layer: uses Codex to edit code, write runners, submit Slurm jobs,
+   and produce artifacts and metrics.
+6. Monitor / Safety / Budget Layer: provides Slurm monitoring, quota guards,
+   checkpoint/resume, safety rules, and queue limits.
+7. Reflector / Belief Ratchet Layer: interprets results after execution and
+   returns `PROCEED`, `REFINE`, `PIVOT`, or `STOP`.
+8. Registry / Immune System Layer: records fingerprints, negative evidence,
+   WATCH TTL, and anti-duplication logic.
+
+The minimum standing configuration has four Codex sessions:
+
+- Planner Session: writes `draft_plan_manifest.json`; it cannot edit code,
+  submit Slurm jobs, or approve its own plan.
+- Reviewer Session: read-only review and revise; it writes
+  `plan_review_report.md` and `reviewed_plan_manifest.json`, and returns
+  `ACCEPT`, `REVISE`, `REJECT`, or `ASK_HUMAN`.
+- Executor Session: executes reviewed manifests; it may edit code, run scripts,
+  and submit Slurm jobs, but it cannot change the scientific direction or count
+  smoke tests as progress.
+- Reflector Session: reads results, interprets metrics, updates memory and
+  negative evidence, and cannot run extra experiments.
+
+Two sessions are optional and should be opened only when needed:
+
+- Scout Session: searches papers, repositories, leaderboards, or new methods.
+  Its only output is a `mechanism_card.md`; it cannot enter the execution queue.
+- Archivist Session: compresses long-term memory, maintains registry state, and
+  clears WATCH debts; it does not execute experiments.
+
+```mermaid
+flowchart TD
+    A["Kernel / Memory Layer<br/>PROJECT_KERNEL<br/>PROBLEM_STATE<br/>FAILURE_SIGNATURES<br/>OPEN_DEBTS<br/>NEGATIVE_MEMORY<br/>SESSION_BUDGET_STATE"] --> B["Planner Session<br/>draft_plan_manifest.json"]
+
+    B --> C["Reviewer / Reviser Session<br/>plan_review_report.md<br/>ACCEPT / REVISE / REJECT / ASK_HUMAN"]
+
+    C -- REVISE --> B
+    C -- ACCEPT --> D["Reviewed Plan<br/>reviewed_plan_manifest.json"]
+
+    D --> E["Compiler / MVE Layer<br/>execution_manifest.json<br/>minimum viable experiment<br/>artifact contract<br/>stop condition"]
+
+    E --> F["Executor Session<br/>Codex implementation<br/>code changes<br/>runner scripts<br/>Slurm jobs<br/>NIfTI / CSV / model artifacts"]
+
+    F --> G["Artifacts and Metrics<br/>prediction files<br/>QC masks<br/>trained verifier<br/>case-level metrics<br/>route manifest<br/>job logs"]
+
+    G --> H["Reflector Session<br/>reflect_report.md<br/>PROCEED / REFINE / PIVOT / STOP<br/>belief update"]
+
+    H --> I["Registry / Immune System<br/>EVIDENCE_LEDGER<br/>experiment fingerprints<br/>negative evidence<br/>WATCH TTL<br/>anti-duplication"]
+
+    I --> A
+    I --> B
+    I --> C
+
+    J["Monitor / Safety / Budget Runtime<br/>Slurm status<br/>quota guard<br/>checkpoint / resume<br/>no auto-upload<br/>no external training data<br/>queue limits"] -. guards .-> B
+    J -. guards .-> C
+    J -. guards .-> E
+    J -. guards .-> F
+    J -. guards .-> H
+
+    K["Optional Scout Session<br/>paper / repo / method search<br/>mechanism_card.md only"] --> B
+    K --> C
+
+    L["Optional Archivist Session<br/>memory compression<br/>registry cleanup<br/>debt clearing"] --> I
+```
+
+### Standard Workflow
+
+The workflow is not "Codex writes a plan and then runs it." The standard loop
+is:
+
+1. The Problem Kernel fixes the goal, failure signatures, open debts, negative
+   evidence, budget state, and safety boundaries.
+2. The Planner Session reads that state and writes `draft_plan_manifest.json`.
+   Each candidate states its failure anchor, hypothesis, mechanism, expected
+   artifact, expected belief update, minimum experiment, cost, fallback, and
+   stop condition.
+3. The Reviewer Session reads the draft and registry, then writes
+   `plan_review_report.md`. It returns `ACCEPT`, `REVISE`, `REJECT`, or
+   `ASK_HUMAN`. Only accepted plans become `reviewed_plan_manifest.json`.
+4. The Compiler / MVE Layer turns the reviewed plan into `execution_manifest.json`.
+5. The Executor Session runs the accepted manifest and writes scripts, Slurm
+   jobs, artifact inventory, metrics, and job logs.
+6. Monitor / Safety / Budget Runtime watches jobs cheaply, enforces queue and
+   quota limits, and writes checkpoints before interruption.
+7. The Reflector Session reads the outputs and writes `reflect_report.md` with
+   `PROCEED`, `REFINE`, `PIVOT`, or `STOP`.
+8. Registry and memory files are updated. The next Planner cycle starts from
+   the updated belief state, not from a blank prompt.
+
+There are two revising gates. Pre-execution revise is done by Reviewer and
+prevents wasted compute. Post-execution revise is done by Reflector and updates
+research belief.
+
+### Shared File Protocol
+
+Sessions hand off through files, not through chat memory. In the installed
+framework these kernel files live under `.vibe/kernel/`, and `vibe kernel`
+commands initialize, inspect, append evidence, and check protocol boundaries:
+
+- `PROJECT_KERNEL.md`: long-term goal and absolute boundaries.
+- `PROBLEM_STATE.md`: current state of the research problem.
+- `FAILURE_SIGNATURES.md`: concrete failure modes currently being attacked.
+- `OPEN_DEBTS.md`: unresolved research debts, WATCH items, and required next
+  evidence.
+- `NEGATIVE_MEMORY.md`: failed mechanisms and routes that should not be
+  repeated without a new mechanism.
+- `EVIDENCE_LEDGER.jsonl`: append-only evidence, decisions, artifact pointers,
+  and belief updates.
+- `SESSION_BUDGET_STATE.json`: Codex quota, weekly quota, active session,
+  running jobs, resume command, and checkpoint path.
+- `draft_plan_manifest.json`: written by Planner.
+- `plan_review_report.md` and `reviewed_plan_manifest.json`: written by
+  Reviewer.
+- `execution_manifest.json`: written by Compiler.
+- `artifact_inventory.json`, metrics CSVs, and job logs: written by Executor.
+- `reflect_report.md`: written by Reflector.
+
+The kernel command surface is intentionally small:
+
+- `vibe kernel init`: create or repair required kernel files.
+- `vibe kernel status`: verify a new session can recover state from files.
+- `vibe kernel record-evidence`: append an auditable evidence ledger row.
+- `vibe kernel check-protocol`: detect missing files and closed-loop role
+  violations.
+
+### Anti-Stall Rules
+
+VibeResearch avoids laziness structurally:
+
+- A plan without a failure anchor cannot enter Reviewer.
+- A plan without an expected artifact and expected belief update cannot be
+  accepted.
+- A repository or paper that cannot become a mechanism card and MVE cannot
+  enter the execution queue.
+- Smoke, import, clone, metadata, cache, and readiness checks are diagnostic
+  evidence only. They are not progress evidence.
+- Every WATCH must state the next debt and TTL; expired WATCH items become
+  `STOP` or `PIVOT`.
+- A renamed version of an old failed experiment is blocked by Registry unless
+  it introduces a new mechanism, information source, artifact, or evidence path.
+- A one-case positive result cannot jump to submission. It must promote through
+  subset, fold0, and then multi-fold or packaging evidence.
+
+### Evidence Promotion
+
+Evidence has levels:
+
+- Feasibility evidence: proves whether something can run, such as import/load
+  or shape checks.
+- Mechanism evidence: shows that a mechanism may work, such as a one-case
+  component veto.
+- Metric evidence: shows metric movement, such as subset or fold0 Dice/HD95.
+- Robustness evidence: shows stability across cases, centers, folds, or
+  protected metrics.
+- Negative evidence: shows which routes should not be repeated.
+
+The normal promotion ladder is feasibility -> one-case -> subset -> fold0 ->
+multi-fold or packaging. The system cannot jump from smoke to success.
+
+### Budget-Aware Runtime
+
+All Codex sessions are quota-aware. Each session reads
+`SESSION_BUDGET_STATE.json` before starting work, before long tasks, before
+revision, before reflection, and before sleep or resume.
+
+When the 5-hour quota is below 20%, sessions may only close work, write
+checkpoints, submit an already prepared short job, summarize results, or update
+memory. When it is below 10%, sessions must stop new reasoning, write
+`RESUME.md`, record the current phase, next command, open debts, job id, and
+actions that must not be repeated, then sleep or exit until renewal.
+
+Executor has priority at low quota because it must preserve the engineering
+state. Reflector is next because it preserves interpretation. Planner and
+Reviewer should pause. During long Slurm jobs, Codex should not repeatedly read
+logs; zero-cost shell monitoring should wait for the job and leave a resume
+command.
+
+### Codex Roles
+
+Codex can serve as Planner, Reviewer, Executor, or Reflector, but those roles
+must run in separate sessions with separate permissions. Codex is most useful
+as Executor because it can read code, edit code, write scripts, fix errors,
+submit Slurm jobs, and organize artifacts. Codex can also serve as Reviewer,
+but only in a read-only Reviewer Session. The same session must not propose,
+approve, execute, and declare success.
+
+Reviewer is the most important anti-stall gate. Without it, the system tends to
+confuse "can run" with "worth running."
+
+### Version Roadmap
+
+The post-0.12 roadmap is VibeResearch's own OS architecture, not a wrapper
+around an external auto-research framework:
+
+- 0.13: session-oriented kernel and shared file protocol.
+- 0.14: Planner, Reviewer, and revision loop.
+- 0.15: Compiler and MVE contract.
+- 0.16: Executor boundary.
+- 0.16.2: Budget-Aware Session Runtime.
+- 0.17: Reflector and Belief Ratchet.
+- 0.18: Research Registry, Immune System, and WATCH TTL.
+- 0.19: Knowledge-to-Experiment pipeline.
+- 0.20: VibeResearch OS Beta and Anti-Stall Benchmark.
+
+### Minimal Operating Procedure
+
+1. Open a Planner Codex session. It may only generate
+   `draft_plan_manifest.json`.
+2. Open a Reviewer Codex session. It may only generate
+   `plan_review_report.md` and `reviewed_plan_manifest.json`.
+3. Open an Executor Codex session. It may only run a reviewed
+   `execution_manifest.json`.
+4. Open a Reflector Codex session. It reads results and updates
+   `reflect_report.md`, `NEGATIVE_MEMORY.md`, `OPEN_DEBTS.md`, and
+   `EVIDENCE_LEDGER.jsonl`.
+5. If new papers, repositories, or methods must be searched, open a temporary
+   Scout Session.
+6. If memory or registry state becomes noisy, open a temporary Archivist
+   Session.
+
 ## Installation
 
 Install from a clone of this repository:

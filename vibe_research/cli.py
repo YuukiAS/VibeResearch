@@ -59,6 +59,8 @@ from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
 from .io import read_json, read_jsonl, read_yaml
+from .kernel import check_protocol as kernel_check_protocol
+from .kernel import initialize_kernel, kernel_status, record_evidence
 from .locks import active_advance_lock
 from .internalization import (
     add_external_asset,
@@ -126,6 +128,7 @@ decision_app = typer.Typer(help="Inspect and write structured research decisions
 adapter_app = typer.Typer(help="Manage adapter onboarding, readiness, and capability activation.")
 script_app = typer.Typer(help="Bootstrap downstream execution wrapper scripts.")
 bootstrap_app = typer.Typer(help="Run resumable project bootstrap, readiness, archive, and dogfood workflows.")
+kernel_app = typer.Typer(help="Manage the session-oriented research kernel.")
 research_app = typer.Typer(help="Initialize and audit bounded autonomous research state.")
 hypothesis_app = typer.Typer(help="Manage hypothesis registry records.")
 experiment_app = typer.Typer(help="Manage experiment registry and evidence links.")
@@ -153,6 +156,7 @@ app.add_typer(decision_app, name="decision")
 app.add_typer(adapter_app, name="adapter")
 app.add_typer(script_app, name="script")
 app.add_typer(bootstrap_app, name="bootstrap")
+app.add_typer(kernel_app, name="kernel")
 app.add_typer(research_app, name="research")
 app.add_typer(hypothesis_app, name="hypothesis")
 app.add_typer(experiment_app, name="experiment")
@@ -510,6 +514,89 @@ def bootstrap_sandbox_cmd(target: Path = typer.Option(Path("."), "--target", "-t
 
     path = create_local_dogfood_profile(paths(target).root, profile)
     console.print(str(path))
+
+
+@kernel_app.command("init")
+def kernel_init_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), force: bool = typer.Option(False, "--force")) -> None:
+    """Create or repair the shared session-oriented research kernel files."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    written = initialize_kernel(paths_, force=force)
+    console.print(f"Kernel initialized: {len(written)} file(s) written")
+
+
+@kernel_app.command("status")
+def kernel_status_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Show whether a new session can recover shared kernel state."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    status_ = kernel_status(paths_)
+    console.print(f"Kernel: {status_['kernel_dir']}")
+    console.print(f"Status: {'ok' if status_['ok'] else 'missing_required_files'}")
+    console.print(f"Evidence records: {status_['evidence_count']}")
+    if status_["missing_files"]:
+        console.print("Missing: " + ", ".join(status_["missing_files"]))
+        raise typer.Exit(1)
+
+
+@kernel_app.command("record-evidence")
+def kernel_record_evidence_cmd(
+    session_role: str = typer.Option(..., "--session-role"),
+    source: str = typer.Option(..., "--source"),
+    artifact: str = typer.Option(..., "--artifact"),
+    evidence_type: str = typer.Option(..., "--evidence-type"),
+    belief_update: str = typer.Option(..., "--belief-update"),
+    next_action: str = typer.Option(..., "--next-action"),
+    session_id: str = typer.Option("", "--session-id"),
+    target_id: str = typer.Option("", "--target-id"),
+    action: str = typer.Option("", "--action"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Append an auditable evidence record to the kernel ledger."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    try:
+        record = record_evidence(
+            paths_,
+            session_role=session_role,
+            source=source,
+            artifact=artifact,
+            evidence_type=evidence_type,
+            belief_update=belief_update,
+            next_action=next_action,
+            session_id=session_id,
+            target_id=target_id,
+            action=action,
+        )
+    except ValueError as exc:
+        console.print(f"Kernel evidence rejected: {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Evidence recorded: {record['created_at']}")
+
+
+@kernel_app.command("check-protocol")
+def kernel_check_protocol_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    session_id: str = typer.Option("", "--session-id"),
+    target_id: str = typer.Option("", "--target-id"),
+    action: str = typer.Option("", "--action"),
+) -> None:
+    """Check required kernel files and closed-loop role-boundary violations."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    result = kernel_check_protocol(paths_, proposed_session_id=session_id, proposed_target_id=target_id, proposed_action=action)
+    console.print(f"Protocol: {'ok' if result.ok else 'blocked'}")
+    console.print(f"Evidence records: {result.evidence_count}")
+    if result.missing_files:
+        console.print("Missing: " + ", ".join(result.missing_files))
+    for violation in result.violations:
+        console.print(f"Violation: {violation}")
+    if not result.ok:
+        raise typer.Exit(1)
 
 
 @research_app.command("init")

@@ -17,6 +17,7 @@ from .ideas import create_idea as create_pool_idea
 from .ideas import ensure_idea_pool
 from .ideas import render_idea_views
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, slugify, utc_now, write_json, write_text, write_yaml
+from .kernel import initialize_kernel
 from .models import IdeaRecord, ProjectConfig, RunManifest, default_budget, default_state
 from .papers import connect
 from .paths import VibePaths
@@ -39,6 +40,7 @@ DIRS = [
     "leaderboard/snapshots",
     "scheduler",
     "executor/templates",
+    "kernel",
     "resources",
     "research/deep_requests",
     "policies",
@@ -158,6 +160,7 @@ def init_project(
     write_text(paths.state / "memory.md", "# Vibe Memory\n\n")
     touch_jsonl(paths.state / "decisions.jsonl")
     touch_jsonl(paths.state / "open_questions.jsonl")
+    initialize_kernel(paths, project_goal=project_brief["goal"])
 
     write_text(paths.inbox / "ideas.md", "## New Ideas Inbox\n\n- [ ] idea:\n")
     write_text(paths.inbox / "user_prompts.md", "# User Prompts\n\n")

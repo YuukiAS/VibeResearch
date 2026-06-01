@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.13.0 - 2026-05-31
+
+- Add a session-oriented research kernel under `.vibe/kernel/` with shared
+  project kernel, problem state, failure signatures, open debts, negative
+  memory, session protocol, and append-only evidence ledger files.
+- Create kernel files during `vibe init` and expose `vibe kernel init`,
+  `status`, `record-evidence`, and `check-protocol` commands.
+- Require traceable evidence records with session role, source, artifact,
+  evidence type, belief update, and next action fields.
+- Block missing-kernel protocol checks and single-session closed-loop claims
+  across plan, review, execute, and reflect duties.
+
 ## 0.12.6 - 2026-05-31
 
 - Exclude artifact-only/no-job runs from repeated zero-metric loop-guard

@@ -12,7 +12,7 @@ PortfolioMode = Literal["exploration", "balanced", "exploitation"]
 
 class ProjectConfig(BaseModel):
     project_name: str = "Generic Research Repo"
-    vibe_version: str = "0.12.6"
+    vibe_version: str = "0.13.0"
     project: dict[str, Any] = Field(
         default_factory=lambda: {
             "name": "Generic Research Repo",

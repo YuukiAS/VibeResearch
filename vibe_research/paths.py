@@ -20,6 +20,7 @@ class VibePaths:
         self.leaderboard = self.vibe / "leaderboard"
         self.scheduler = self.vibe / "scheduler"
         self.executor = self.vibe / "executor"
+        self.kernel = self.vibe / "kernel"
         self.research = self.vibe / "research"
         self.policies = self.vibe / "policies"
         self.memos = self.vibe / "memos"
