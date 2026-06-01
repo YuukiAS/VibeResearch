@@ -8,6 +8,7 @@ from typing import Any
 from .io import append_jsonl, read_json, read_jsonl, utc_now, write_json, write_text
 from .paths import VibePaths
 from .planner import REQUIRED_FIELDS, load_draft_plan, meaningful_artifact
+from .revision import enforce_loop_limit
 
 
 VERDICTS = {"ACCEPT", "REVISE", "REJECT", "ASK_HUMAN"}
@@ -38,7 +39,7 @@ def review_draft_plan(paths: VibePaths, draft: dict[str, Any]) -> dict[str, Any]
     required_changes = [item["message"] for item in criteria if item["outcome"] == "revise"]
     blocking_risks = [item["message"] for item in criteria if item["outcome"] == "ask_human"]
     rejection_reasons = [item["message"] for item in criteria if item["outcome"] == "reject"]
-    return {
+    review = {
         "schema_version": 1,
         "created_at": utc_now(),
         "session_role": "reviewer",
@@ -59,6 +60,7 @@ def review_draft_plan(paths: VibePaths, draft: dict[str, Any]) -> dict[str, Any]
             "checked_failure_signatures": True,
         },
     }
+    return enforce_loop_limit(draft, review)
 
 
 def review_criteria(draft: dict[str, Any], context: dict[str, Any]) -> list[dict[str, str]]:
@@ -175,7 +177,16 @@ def write_review_outputs(
     reviewed_path: Path | None = None
     if review["verdict"] == "ACCEPT":
         reviewed_path = paths.kernel / reviewed_name
-        write_json(reviewed_path, {"schema_version": 1, "created_at": utc_now(), "review": review, "draft_plan": review["reviewed_plan"]})
+        write_json(
+            reviewed_path,
+            {
+                "schema_version": 1,
+                "created_at": utc_now(),
+                "review": review,
+                "draft_plan": review["reviewed_plan"],
+                "revision_history": (review["reviewed_plan"] or {}).get("revision_history", []),
+            },
+        )
     append_jsonl(
         paths.kernel / "PLAN_REVIEW_REGISTRY.jsonl",
         {

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.14.3 - 2026-06-01
+
+- Add Planner-Reviewer revision packets with failed criteria, required changes,
+  optional suggestions, blocking risks, evidence gaps, and resubmission
+  deadlines.
+- Add `vibe reviewer revision-packet` and `vibe planner resubmit` commands.
+- Restrict Planner resubmissions to fields requested by Reviewer and preserve
+  revision history on accepted reviewed manifests.
+- Add revision loop limit handling so unresolved repeated `REVISE` outcomes
+  escalate to `ASK_HUMAN`.
+- Record revision provenance in `PLAN_REVISION_REGISTRY.jsonl`.
+
 ## 0.14.2 - 2026-06-01
 
 - Add a Reviewer Session that independently reviews Planner draft manifests

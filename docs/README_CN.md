@@ -90,6 +90,8 @@ minimum experiment、expected artifact、expected belief update、compute cost�
 risk、fallback 和 stop condition。
 Reviewer 检查通过 `vibe reviewer review` 执行；只有 `ACCEPT` verdict 才会写出
 `reviewed_plan_manifest.json` 交给 Compiler。
+当 Reviewer 返回 `REVISE` 时，`vibe reviewer revision-packet` 生成结构化修改请求，
+`vibe planner resubmit` 只能更新 packet 指定的 draft 字段。
 
 ```mermaid
 flowchart TD

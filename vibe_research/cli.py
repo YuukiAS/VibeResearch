@@ -86,6 +86,7 @@ from .promotion import compile_decision as compile_cycle_decision
 from .promotion import validate_resource_plan
 from .research import deep_request, ingest_deep_research, literature_refresh, literature_refresh_idea, reflect, reflect_cycle, revise_cycle, revise_plan
 from .reviewer import review_draft_file, write_review_outputs
+from .revision import build_revision_packet, load_revision_packet, resubmit_draft, write_resubmitted_draft, write_revision_packet
 from .reports import generate_alignment_after_changes, generate_dogfood_reports, write_portal_docs
 from .research_manager import (
     add_evidence,
@@ -703,6 +704,36 @@ def planner_validate_cmd(plan: Path = typer.Argument(..., help="Draft plan JSON 
         raise typer.Exit(1)
 
 
+@planner_app.command("resubmit")
+def planner_resubmit_cmd(
+    revision_packet: Path = typer.Option(..., "--revision-packet"),
+    draft: Optional[Path] = typer.Option(None, "--draft"),
+    set_field: list[str] = typer.Option([], "--set", help="Allowed field update as field=value; may repeat."),
+    addressed: list[str] = typer.Option([], "--addressed"),
+    not_addressed: list[str] = typer.Option([], "--not-addressed"),
+    output: str = typer.Option("draft_plan_manifest.json", "--output"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Resubmit a Planner draft by changing only fields requested by Reviewer."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    draft_path = draft or (paths_.kernel / "draft_plan_manifest.json")
+    updates: dict[str, str] = {}
+    for item in set_field:
+        field, sep, value = item.partition("=")
+        if not sep or not field.strip():
+            raise typer.BadParameter("--set must use field=value")
+        updates[field.strip()] = value
+    try:
+        revised = resubmit_draft(load_draft_plan(draft_path), load_revision_packet(revision_packet), updates, addressed=addressed, not_addressed=not_addressed)
+    except ValueError as exc:
+        console.print(f"Resubmission rejected: {exc}")
+        raise typer.Exit(1) from exc
+    path = write_resubmitted_draft(paths_, revised, output=output)
+    console.print(f"Resubmitted draft: {path}")
+
+
 @reviewer_app.command("review")
 def reviewer_review_cmd(
     draft: Optional[Path] = typer.Option(None, "--draft", help="Draft plan JSON path; defaults to .vibe/kernel/draft_plan_manifest.json."),
@@ -722,6 +753,27 @@ def reviewer_review_cmd(
     if outputs["reviewed_manifest"]:
         console.print(f"Reviewed manifest: {outputs['reviewed_manifest']}")
     if review["verdict"] != "ACCEPT":
+        raise typer.Exit(1)
+
+
+@reviewer_app.command("revision-packet")
+def reviewer_revision_packet_cmd(
+    draft: Optional[Path] = typer.Option(None, "--draft"),
+    output: str = typer.Option("revision_packet.json", "--output"),
+    max_rounds: int = typer.Option(2, "--max-rounds"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Create a structured revision packet from the current review result."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    draft_path = draft or (paths_.kernel / "draft_plan_manifest.json")
+    review = review_draft_file(paths_, draft_path)
+    packet = build_revision_packet(review, max_rounds=max_rounds)
+    path = write_revision_packet(paths_, packet, output=output)
+    console.print(f"Revision packet: {path}")
+    console.print(f"Verdict: {packet['verdict']}")
+    if packet["verdict"] != "REVISE":
         raise typer.Exit(1)
 
 

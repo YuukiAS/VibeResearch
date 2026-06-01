@@ -117,6 +117,9 @@ mechanism, minimum experiment, expected artifact, expected belief update,
 compute cost, risk, fallback, and stop condition before it can be reviewed.
 Reviewer checks run through `vibe reviewer review`; only an `ACCEPT` verdict
 writes `reviewed_plan_manifest.json` for the Compiler.
+When Reviewer returns `REVISE`, `vibe reviewer revision-packet` creates the
+structured revision request and `vibe planner resubmit` may update only the
+requested draft fields.
 
 ```mermaid
 flowchart TD
