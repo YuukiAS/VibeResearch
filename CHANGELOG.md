@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.11.1 - 2026-05-31
+
+- Add final convergence policy state with `open_exploration`,
+  `dual_track_optimization`, `owned_candidate_focus`,
+  `external_regression_only`, and `final_owned_freeze` stages.
+- Add `vibe converge` commands for stage transitions, freeze checks,
+  late-stage risk gates, external dependency audits, user-approved overrides,
+  budget closure, and known-risk review records.
+- Require trusted schema-valid evidence, protected-metric stability,
+  reproducibility package readiness, budget closure, known-risk review, and
+  user approval before final owned freeze.
+- Block late-stage protected-metric, reproducibility, core-mechanism, and large
+  external-method risks unless an explicit user-approved override applies.
+- Classify final dependencies as necessary, reference, regression, removal
+  candidate, or owned-core evidence before declaring the main path sufficiently
+  owned.
+
 ## 0.11.0 - 2026-05-31
 
 - Add `vibe present` exports for narrative, reproducibility, presentation

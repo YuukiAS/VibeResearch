@@ -46,6 +46,7 @@ from .bootstrap import (
 )
 from .codex_adapter import artifact_path, prompt_packet, run_codex
 from .config import detect_config, load_config, migrate_project, validate_config
+from .convergence import close_convergence_budget, dependency_audit, freeze_check, record_override, risk_gate, set_convergence_stage, write_known_risk_review
 from .daemon import daemon_start, daemon_status, daemon_stop
 from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .dashboard_site import build_dashboard_site, serve_dashboard_site
@@ -138,6 +139,7 @@ scout_app = typer.Typer(help="Triage scout findings into evidence-grade research
 owned_app = typer.Typer(help="Generate and audit downstream owned framework alpha scaffolds.")
 optimize_app = typer.Typer(help="Manage champion/challenger owned optimization loops.")
 present_app = typer.Typer(help="Export presentation-ready research packages.")
+converge_app = typer.Typer(help="Control final convergence and freeze policy.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -163,6 +165,7 @@ app.add_typer(scout_app, name="scout")
 app.add_typer(owned_app, name="owned")
 app.add_typer(optimize_app, name="optimize")
 app.add_typer(present_app, name="present")
+app.add_typer(converge_app, name="converge")
 console = Console()
 
 
@@ -1356,6 +1359,102 @@ def present_package_cmd(
 
     claims = read_json(claims_file, []) if claims_file else None
     console.print_json(data=build_presentation_package(paths(target), claims=claims))
+
+
+@converge_app.command("stage")
+def converge_stage_cmd(
+    stage: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    rationale: str = typer.Option("", "--rationale"),
+    user_approved: bool = typer.Option(False, "--user-approved"),
+) -> None:
+    """Set the convergence stage, enforcing freeze gates for final freeze."""
+
+    result = set_convergence_stage(paths(target), stage, rationale=rationale, user_approved=user_approved)
+    console.print_json(data=result)
+    if not result.get("accepted"):
+        raise typer.Exit(1)
+
+
+@converge_app.command("freeze-check")
+def converge_freeze_check_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    user_approved: bool = typer.Option(False, "--user-approved"),
+    known_risk_review: str = typer.Option("", "--known-risk-review"),
+    risk_review_file: Optional[Path] = typer.Option(None, "--risk-review-file"),
+    budget_closed: bool = typer.Option(False, "--budget-closed"),
+) -> None:
+    """Check whether final owned freeze is allowed."""
+
+    review = risk_review_file.read_text() if risk_review_file else known_risk_review
+    result = freeze_check(paths(target), user_approved=user_approved, known_risk_review=review, budget_closed=budget_closed)
+    console.print_json(data=result)
+    if not result.get("accepted"):
+        raise typer.Exit(1)
+
+
+@converge_app.command("risk-gate")
+def converge_risk_gate_cmd(
+    change_type: str = typer.Argument(...),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    stage: Optional[str] = typer.Option(None, "--stage"),
+    protected_metric_risk: bool = typer.Option(False, "--protected-metric-risk"),
+    reproducibility_risk: bool = typer.Option(False, "--reproducibility-risk"),
+    core_mechanism_change: bool = typer.Option(False, "--core-mechanism-change"),
+    external_method_size: str = typer.Option("none", "--external-method-size"),
+    override_id: str = typer.Option("", "--override-id"),
+    rationale: str = typer.Option("", "--rationale"),
+) -> None:
+    """Gate late-stage changes against freeze and convergence policy."""
+
+    result = risk_gate(
+        paths(target),
+        change_type=change_type,
+        stage=stage,
+        protected_metric_risk=protected_metric_risk,
+        reproducibility_risk=reproducibility_risk,
+        core_mechanism_change=core_mechanism_change,
+        external_method_size=external_method_size,
+        override_id=override_id,
+        rationale=rationale,
+    )
+    console.print_json(data=result)
+    if result.get("decision") == "block":
+        raise typer.Exit(1)
+
+
+@converge_app.command("dependency-audit")
+def converge_dependency_audit_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Classify external and owned dependencies for final convergence."""
+
+    console.print_json(data=dependency_audit(paths(target)))
+
+
+@converge_app.command("override")
+def converge_override_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    target_name: str = typer.Option(..., "--target-name"),
+    reason: str = typer.Option(..., "--reason"),
+    approved_by_user: bool = typer.Option(False, "--approved-by-user"),
+    scope: list[str] = typer.Option([], "--scope"),
+) -> None:
+    """Record a user-approved exception to a convergence gate."""
+
+    console.print_json(data=record_override(paths(target), target=target_name, reason=reason, approved_by_user=approved_by_user, scope=scope))
+
+
+@converge_app.command("close-budget")
+def converge_close_budget_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), rationale: str = typer.Option("", "--rationale")) -> None:
+    """Record budget closure for final freeze."""
+
+    console.print_json(data=close_convergence_budget(paths(target), rationale=rationale))
+
+
+@converge_app.command("risk-review")
+def converge_risk_review_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), text: str = typer.Option(..., "--text")) -> None:
+    """Write the known-risk review required for final freeze."""
+
+    console.print_json(data=write_known_risk_review(paths(target), text))
 
 
 @policy_app.command("lint")
