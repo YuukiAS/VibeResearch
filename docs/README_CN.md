@@ -92,6 +92,9 @@ Reviewer 检查通过 `vibe reviewer review` 执行；只有 `ACCEPT` verdict �
 `reviewed_plan_manifest.json` 交给 Compiler。
 当 Reviewer 返回 `REVISE` 时，`vibe reviewer revision-packet` 生成结构化修改请求，
 `vibe planner resubmit` 只能更新 packet 指定的 draft 字段。
+通过 review 的 plan 使用 `vibe compiler compile` 编译，输出
+`execution_manifest.json`、本地脚本草案、Slurm 草案、预期 artifact inventory、
+evaluation command、stop condition 和 fallback command。
 
 ```mermaid
 flowchart TD

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.15.0 - 2026-06-01
+
+- Add a Compiler Session that turns accepted reviewed plans into auditable
+  `execution_manifest.json` packages.
+- Add `vibe compiler compile` and `vibe compiler validate` commands.
+- Require accepted Reviewer approval before compilation and preserve Reviewer
+  criteria, risks, required changes, review trace, and revision history.
+- Generate concrete local script and Slurm draft paths, expected artifacts,
+  metric readers, evaluation commands, stop conditions, fallback commands, and
+  artifact inventory entries.
+- Add boundary validation coverage for missing approvals, missing artifact or
+  metric readers, preserved reviewer constraints, and valid execution packages.
+
 ## 0.14.3 - 2026-06-01
 
 - Add Planner-Reviewer revision packets with failed criteria, required changes,

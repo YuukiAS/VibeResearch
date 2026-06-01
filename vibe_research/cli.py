@@ -45,6 +45,7 @@ from .bootstrap import (
     run_dogfood,
 )
 from .codex_adapter import artifact_path, prompt_packet, run_codex
+from .compiler import compile_reviewed_plan, load_reviewed_plan, validate_execution_manifest, write_execution_package
 from .config import detect_config, load_config, migrate_project, validate_config
 from .convergence import close_convergence_budget, dependency_audit, freeze_check, record_override, risk_gate, set_convergence_stage, write_known_risk_review
 from .daemon import daemon_autonomy_audit, daemon_start, daemon_status, daemon_stop
@@ -132,6 +133,7 @@ decision_app = typer.Typer(help="Inspect and write structured research decisions
 adapter_app = typer.Typer(help="Manage adapter onboarding, readiness, and capability activation.")
 script_app = typer.Typer(help="Bootstrap downstream execution wrapper scripts.")
 bootstrap_app = typer.Typer(help="Run resumable project bootstrap, readiness, archive, and dogfood workflows.")
+compiler_app = typer.Typer(help="Compile accepted reviewed plans into execution manifests.")
 kernel_app = typer.Typer(help="Manage the session-oriented research kernel.")
 planner_app = typer.Typer(help="Generate reviewable Planner Session draft plans.")
 reviewer_app = typer.Typer(help="Review Planner draft plans before compilation or execution.")
@@ -162,6 +164,7 @@ app.add_typer(decision_app, name="decision")
 app.add_typer(adapter_app, name="adapter")
 app.add_typer(script_app, name="script")
 app.add_typer(bootstrap_app, name="bootstrap")
+app.add_typer(compiler_app, name="compiler")
 app.add_typer(kernel_app, name="kernel")
 app.add_typer(planner_app, name="planner")
 app.add_typer(reviewer_app, name="reviewer")
@@ -522,6 +525,40 @@ def bootstrap_sandbox_cmd(target: Path = typer.Option(Path("."), "--target", "-t
 
     path = create_local_dogfood_profile(paths(target).root, profile)
     console.print(str(path))
+
+
+@compiler_app.command("compile")
+def compiler_compile_cmd(
+    reviewed: Optional[Path] = typer.Option(None, "--reviewed", help="Reviewed plan manifest; defaults to .vibe/kernel/reviewed_plan_manifest.json."),
+    output: str = typer.Option("execution_manifest.json", "--output"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Compile an accepted reviewed plan into an execution package."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    reviewed_path = reviewed or (paths_.kernel / "reviewed_plan_manifest.json")
+    try:
+        manifest = compile_reviewed_plan(paths_, load_reviewed_plan(reviewed_path))
+        outputs = write_execution_package(paths_, manifest, output=output)
+    except ValueError as exc:
+        console.print(f"Compile rejected: {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Execution manifest: {outputs['manifest']}")
+    console.print(f"Script draft: {outputs['script']}")
+    console.print(f"Slurm draft: {outputs['slurm_draft']}")
+
+
+@compiler_app.command("validate")
+def compiler_validate_cmd(manifest: Path = typer.Argument(..., help="Execution manifest JSON path to validate.")) -> None:
+    """Validate a compiled execution manifest boundary contract."""
+
+    issues = validate_execution_manifest(read_json(manifest, {}))
+    console.print(f"Execution manifest validation: {'ok' if not issues else 'blocked'}")
+    for issue in issues:
+        console.print(f"Issue: {issue}")
+    if issues:
+        raise typer.Exit(1)
 
 
 @kernel_app.command("init")

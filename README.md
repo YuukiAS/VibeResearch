@@ -120,6 +120,9 @@ writes `reviewed_plan_manifest.json` for the Compiler.
 When Reviewer returns `REVISE`, `vibe reviewer revision-packet` creates the
 structured revision request and `vibe planner resubmit` may update only the
 requested draft fields.
+Accepted reviewed plans are compiled with `vibe compiler compile`, which writes
+`execution_manifest.json`, a local script draft, a Slurm draft, expected
+artifact inventory, evaluation command, stop condition, and fallback command.
 
 ```mermaid
 flowchart TD
