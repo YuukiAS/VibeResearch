@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.12.1 - 2026-05-31
+
+- Add daemon autonomy status fields for actionable next actions, queued/active
+  counts, and monitor-only/`auto_next=false`/dry-submit blockers.
+- Add `vibe daemon audit-autonomy` so continuation sessions fail visibly when
+  an actionable next step cannot advance under the current daemon mode.
+- Return a concrete restart recommendation for autonomous real-submit loops
+  instead of silently accepting monitor-only daemon state.
+
 ## 0.12.0 - 2026-05-31
 
 - Add generic long-run reliability and soak diagnostics under

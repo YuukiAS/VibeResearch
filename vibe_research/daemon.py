@@ -31,11 +31,19 @@ def daemon_status(paths: VibePaths) -> dict[str, Any]:
     active = read_json(paths.scheduler / "active_jobs.json", {"active": []}).get("active", [])
     completed = read_jsonl(paths.scheduler / "completed_jobs.jsonl")
     state = read_json(paths.state / "state.json", {})
+    next_action = str(state.get("next_action", "") or "")
     next_collect = [
         run_id
         for run_id, run in state.get("runs", {}).items()
         if run.get("status") in {"finished", "submitted_dry"} and not non_counting_run(run)
     ]
+    actionable = actionable_next_action(next_action)
+    autonomous_blockers = daemon_autonomy_blockers(
+        mode=str(daemon_state.get("mode", "")),
+        auto_next=daemon_state.get("auto_next"),
+        dry_submit=daemon_state.get("dry_submit"),
+        actionable_next=actionable,
+    )
     base = {
         "session": session,
         "target_root": target_root,
@@ -49,6 +57,10 @@ def daemon_status(paths: VibePaths) -> dict[str, Any]:
         "queued_jobs": len(queue),
         "active_jobs": len(active),
         "completed_jobs": len(completed),
+        "next_action": next_action,
+        "actionable_next_action": actionable,
+        "autonomous_progress_ok": not autonomous_blockers,
+        "autonomous_progress_blockers": autonomous_blockers,
         "next_collection_runs": next_collect,
     }
     if not shutil.which("tmux"):
@@ -197,4 +209,50 @@ def daemon_stop(paths: VibePaths) -> dict[str, Any]:
         result = subprocess.run(["tmux", "kill-session", "-t", status["session"]], text=True, capture_output=True, check=False)
         status["stop_returncode"] = result.returncode
         status["stderr"] = result.stderr
-    return status
+    return {"before": status, "after": daemon_status(paths)}
+
+
+def daemon_autonomy_audit(paths: VibePaths, *, expect_autonomous: bool = True, expect_real_submit: bool = False) -> dict[str, Any]:
+    status = daemon_status(paths)
+    blockers = []
+    if expect_autonomous:
+        blockers.extend(status.get("autonomous_progress_blockers", []))
+        if not status.get("running"):
+            blockers.append("daemon_not_running")
+    if expect_real_submit and status.get("dry_submit") is True:
+        blockers.append("daemon_dry_submit_enabled_while_real_submit_expected")
+    result = {
+        "created_at": utc_now(),
+        "ok": not blockers,
+        "blockers": blockers,
+        "status": status,
+        "restart_recommendation": "",
+    }
+    if blockers:
+        result["restart_recommendation"] = "vibe daemon stop --target <repo> && vibe daemon start --target <repo> --mode auto-cycle --auto-next --real-submit --interval 300"
+    return result
+
+
+def actionable_next_action(next_action: str) -> bool:
+    text = next_action.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered in {"none", "noop", "done", "complete"}:
+        return False
+    if lowered.startswith(("wait", "blocked", "manual", "no ")):
+        return False
+    return lowered.startswith("vibe ")
+
+
+def daemon_autonomy_blockers(*, mode: str, auto_next: Any, dry_submit: Any, actionable_next: bool) -> list[str]:
+    if not actionable_next:
+        return []
+    blockers = []
+    if mode == "monitor":
+        blockers.append("daemon_monitor_only_while_next_action_is_actionable")
+    if auto_next is False:
+        blockers.append("daemon_auto_next_false_while_next_action_is_actionable")
+    if dry_submit is True:
+        blockers.append("daemon_dry_submit_true_while_next_action_is_actionable")
+    return blockers

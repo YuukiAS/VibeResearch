@@ -47,7 +47,7 @@ from .bootstrap import (
 from .codex_adapter import artifact_path, prompt_packet, run_codex
 from .config import detect_config, load_config, migrate_project, validate_config
 from .convergence import close_convergence_budget, dependency_audit, freeze_check, record_override, risk_gate, set_convergence_stage, write_known_risk_review
-from .daemon import daemon_start, daemon_status, daemon_stop
+from .daemon import daemon_autonomy_audit, daemon_start, daemon_status, daemon_stop
 from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .dashboard_site import build_dashboard_site, serve_dashboard_site
 from .decisions import decision_json, make_decision, validate_decision_file, write_block_decision, write_decision
@@ -2737,6 +2737,20 @@ def daemon_status_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) 
     """Show tmux supervisor status."""
 
     console.print(daemon_status(paths(target)))
+
+
+@daemon_app.command("audit-autonomy")
+def daemon_audit_autonomy_cmd(
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    expect_autonomous: bool = typer.Option(True, "--expect-autonomous/--no-expect-autonomous"),
+    expect_real_submit: bool = typer.Option(False, "--expect-real-submit"),
+) -> None:
+    """Fail if daemon mode cannot advance an actionable autonomous next step."""
+
+    result = daemon_autonomy_audit(paths(target), expect_autonomous=expect_autonomous, expect_real_submit=expect_real_submit)
+    console.print_json(data=result)
+    if not result.get("ok"):
+        raise typer.Exit(1)
 
 
 @daemon_app.command("logs")
