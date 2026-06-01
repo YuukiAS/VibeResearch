@@ -7,6 +7,7 @@ import subprocess
 import pytest
 from typer.testing import CliRunner
 
+from vibe_research.artifacts import validate_artifact
 from vibe_research.automation import auto_cycle
 from vibe_research.cli import app
 from vibe_research.daemon import daemon_autonomy_audit, daemon_status
@@ -299,3 +300,54 @@ def test_v0126_artifact_only_revised_plan_does_not_promote_on_baseline_word(tmp_
     assert decision.decision_type == "collect_more_metrics"
     assert decision.baseline_comparison_target == ""
     assert decision.provenance["source"] == "artifact_only_promotion_guard"
+
+
+def test_v0127_reflect_accepts_result_interpretation_aliases_only_for_reflect(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    run_id = "r001_alias_reflect"
+    (paths.runs / run_id).mkdir(parents=True, exist_ok=True)
+    (paths.runs / run_id / "reflect.md").write_text("# Reflect\n\n## Completed Result Interpretation\nusable local artifact\n")
+    assert validate_artifact(paths, "reflect", run_id) == []
+
+    (paths.runs / run_id / "reflect.md").write_text("# Reflect\n\n## Result Interpretation\nusable local artifact\n")
+    assert validate_artifact(paths, "reflect", run_id) == []
+
+    (paths.runs / run_id / "revised_plan.md").write_text(
+        """# Revised Plan
+
+## Completed Result Interpretation
+ok
+
+## Decision
+collect_more_metrics
+
+## Plan update
+none
+
+## Required changes
+none
+
+## Evidence needed
+artifact output
+
+## Literature refresh decision
+no
+
+## Deep research decision
+no
+
+## Idea pool update
+none
+
+## Portfolio implication
+none
+
+## Next experiment proposal
+none
+
+## Stop condition
+none
+"""
+    )
+    issues = validate_artifact(paths, "revised_plan", run_id)
+    assert any("missing required section `## Result interpretation`" in issue.message for issue in issues)

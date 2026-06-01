@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.13.2 - 2026-05-31
+
+- Accept clear `reflect` artifact aliases for `## Result interpretation`,
+  including `## Result Interpretation` and
+  `## Completed Result Interpretation`.
+- Keep strict required-section validation for unrelated roles such as
+  `revised_plan`.
+- Add regression coverage that reflect aliases do not block progress while
+  unrelated artifacts remain canonical.
+
 ## 0.13.1 - 2026-05-31
 
 - Render `SESSION_PROTOCOL.md` from a structured role catalog covering Planner,

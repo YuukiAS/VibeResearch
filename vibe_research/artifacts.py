@@ -70,6 +70,13 @@ REQUIRED_SECTIONS = {
     ],
 }
 
+SECTION_ALIASES = {
+    ("reflect", "## Result interpretation"): {
+        "## Result Interpretation",
+        "## Completed Result Interpretation",
+    }
+}
+
 PORTFOLIO_VERDICTS = {"APPROVE_PORTFOLIO", "APPROVE_WITH_RESOURCE_GUARDS", "REVISE_PORTFOLIO", "BLOCK_PORTFOLIO"}
 RUN_VERDICTS = {"APPROVE", "APPROVE_WITH_GUARDS", "REVISE_OR_BLOCK"}
 REVISED_DECISIONS = {
@@ -99,7 +106,7 @@ def validate_artifact(paths: VibePaths, role: str, target_id: str) -> list[Artif
     if not text.strip():
         issues.append(ArtifactIssue("error", f"empty artifact: {path}"))
     for section in REQUIRED_SECTIONS.get(role, []):
-        if section not in text:
+        if not has_required_section(text, role, section):
             issues.append(ArtifactIssue("error", f"missing required section `{section}` in {path.name}"))
     if role == "portfolio_reviewer":
         verdict = extract_value(text, "Verdict:")
@@ -191,6 +198,12 @@ def validate_hard_rules(paths: VibePaths) -> list[ArtifactIssue]:
 
 def has_text(path: Path) -> bool:
     return path.exists() and bool(path.read_text().strip())
+
+
+def has_required_section(text: str, role: str, section: str) -> bool:
+    if section in text:
+        return True
+    return any(alias in text for alias in SECTION_ALIASES.get((role, section), set()))
 
 
 def extract_value(text: str, label: str) -> str:
