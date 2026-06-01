@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.19.1 - 2026-06-01
+
+- Add No Orphan Knowledge lifecycle tracking for repo, paper, deep-note,
+  mechanism-card, and user-idea inputs.
+- Add `vibe knowledge ingest`, `vibe knowledge advance-ttl`, and
+  `vibe knowledge audit` commands.
+- Track `INGESTED`, `MECHANISM_CARD`, `PLAN_CANDIDATE`,
+  `ACTIVE_MECHANISM`, `NEGATIVE_EVIDENCE`, `ARCHIVED_REFERENCE`, and
+  `EXPIRED_ORPHAN` states.
+- Expire unresolved active knowledge after two cycles and write expired orphans
+  into the Research Registry as negative evidence.
+- Mark mechanism cards as plan candidates when Planner consumes them and active
+  mechanisms when Compiler emits an MVE manifest.
+
 ## 0.19.0 - 2026-06-01
 
 - Add a Knowledge-to-Experiment pipeline based on Scout mechanism cards.

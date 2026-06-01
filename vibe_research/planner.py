@@ -8,6 +8,7 @@ from typing import Any
 from .decision_debt import planner_debt_diagnostic
 from .immune_registry import planner_registry_diagnostic
 from .io import read_json, read_jsonl, utc_now, write_json
+from .knowledge_lifecycle import mark_card_plan_candidate
 from .kernel import missing_kernel_files
 from .paths import VibePaths
 from .scout import validate_mechanism_card
@@ -139,6 +140,7 @@ def build_draft_from_mechanism_card(
         source=f"mechanism_card:{card.get('card_id', '')}",
     )
     plan["mechanism_card"] = card
+    mark_card_plan_candidate(paths, card, draft_id=plan["created_at"])
     return plan
 
 

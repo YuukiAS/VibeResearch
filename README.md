@@ -156,6 +156,10 @@ knowledge through mechanism extraction before planning. Papers, repositories,
 deep research notes, and user ideas must become a `mechanism_card.md` with a
 possible MVE before Planner/Reviewer/Compiler can turn them into execution
 manifests; clone or install steps alone are not experiment goals.
+`vibe knowledge audit` and `vibe knowledge advance-ttl` enforce No Orphan
+Knowledge. Active repo, paper, deep-note, mechanism-card, and user-idea inputs
+expire after two cycles unless they become an active mechanism, negative
+evidence, or archived reference; expired orphans are recorded in the registry.
 
 ```mermaid
 flowchart TD

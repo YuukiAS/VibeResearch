@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .io import read_json, slugify, utc_now, write_json, write_text
+from .knowledge_lifecycle import mark_card_active_mechanism
 from .mve import build_mve_contract, validate_mve_contract
 from .paths import VibePaths
 
@@ -78,6 +79,8 @@ def compile_reviewed_plan(paths: VibePaths, reviewed: dict[str, Any]) -> dict[st
     issues = validate_execution_manifest(manifest)
     if issues:
         raise ValueError("; ".join(issues))
+    if isinstance(mechanism_card, dict) and mechanism_card.get("card_id"):
+        mark_card_active_mechanism(paths, mechanism_card, manifest_id=manifest["created_at"])
     return manifest
 
 

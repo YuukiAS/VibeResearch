@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, utc_now, write_json, write_text
+from .knowledge_lifecycle import record_card_lifecycle
 from .paths import VibePaths
 from .research_manager import load_hypotheses
 
@@ -260,6 +261,7 @@ def create_mechanism_card(
     write_text(card_path, render_mechanism_card(record))
     write_json(card_dir / "mechanism_card.json", record)
     append_jsonl(files["mechanism_registry"], record)
+    record_card_lifecycle(paths, record)
     return record
 
 

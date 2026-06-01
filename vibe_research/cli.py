@@ -64,6 +64,7 @@ from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
 from .io import read_json, read_jsonl, read_yaml
 from .immune_registry import immune_check, load_budget_recovery, record_registry_event
+from .knowledge_lifecycle import advance_knowledge_ttl, load_orphan_audit, orphan_audit, record_knowledge_event
 from .kernel import SESSION_ROLES, check_role_permission
 from .kernel import check_protocol as kernel_check_protocol
 from .kernel import initialize_kernel, kernel_status, record_evidence
@@ -176,6 +177,7 @@ reflector_app = typer.Typer(help="Interpret Executor outputs as an independent R
 ratchet_app = typer.Typer(help="Apply layered belief updates from Reflector outputs.")
 registry_app = typer.Typer(help="Record and query research registry immune memory.")
 debt_app = typer.Typer(help="Inspect and clear bounded WATCH/REFINE decision debt.")
+knowledge_app = typer.Typer(help="Track knowledge lifecycle and clear orphan knowledge.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -214,6 +216,7 @@ app.add_typer(reflector_app, name="reflector")
 app.add_typer(ratchet_app, name="ratchet")
 app.add_typer(registry_app, name="registry")
 app.add_typer(debt_app, name="debt")
+app.add_typer(knowledge_app, name="knowledge")
 console = Console()
 
 
@@ -900,6 +903,44 @@ def debt_clear_cmd(rounds: int = typer.Option(1, "--rounds", min=1), target: Pat
     paths_.require_initialized()
     result = clear_expired_decision_debts(paths_, rounds=rounds)
     console.print_json(data=result)
+
+
+@knowledge_app.command("ingest")
+def knowledge_ingest_cmd(
+    source_type: str = typer.Option(..., "--source-type"),
+    source: str = typer.Option(..., "--source"),
+    status: str = typer.Option("INGESTED", "--status"),
+    card_id: str = typer.Option("", "--card-id"),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Record a lifecycle event for repo/paper/deep-note/user-idea knowledge."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    try:
+        record = record_knowledge_event(paths_, source_type=source_type, source=source, status=status, card_id=card_id)
+    except ValueError as exc:
+        console.print(str(exc))
+        raise typer.Exit(1) from exc
+    console.print_json(data=record)
+
+
+@knowledge_app.command("advance-ttl")
+def knowledge_advance_ttl_cmd(cycles: int = typer.Option(1, "--cycles", min=1), target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Advance active knowledge TTL and expire unresolved orphans."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    console.print_json(data=advance_knowledge_ttl(paths_, cycles=cycles))
+
+
+@knowledge_app.command("audit")
+def knowledge_audit_cmd(refresh: bool = typer.Option(True, "--refresh/--cached"), target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Report active, archived, negative, and expired knowledge counts."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    console.print_json(data=orphan_audit(paths_) if refresh else load_orphan_audit(paths_))
 
 
 @kernel_app.command("status")
