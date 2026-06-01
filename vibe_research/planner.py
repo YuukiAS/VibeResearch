@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .decision_debt import planner_debt_diagnostic
+from .immune_registry import planner_registry_diagnostic
 from .io import read_json, read_jsonl, utc_now, write_json
 from .kernel import missing_kernel_files
 from .paths import VibePaths
-from .immune_registry import planner_registry_diagnostic
 
 
 GENERATION_MODES = {"exploit", "recombine", "invent"}
@@ -95,12 +96,17 @@ def build_draft_plan(
         "diagnostics": [],
     }
     plan["diagnostics"] = planner_diagnostics(plan, context)
+    debt_diagnostic = planner_debt_diagnostic(paths, plan)
+    if debt_diagnostic:
+        plan["diagnostics"].append(debt_diagnostic)
     registry_diagnostic = planner_registry_diagnostic(paths, plan)
     if registry_diagnostic:
         plan["diagnostics"].append(registry_diagnostic)
     if any(item["code"] in {"smoke_only", "negative_memory_overlap", "non_reviewable_confidence"} for item in plan["diagnostics"]):
         plan["review_route"] = "requires_revision"
     if any(item["code"] in {"registry_repeat_route"} for item in plan["diagnostics"]):
+        plan["review_route"] = "requires_revision"
+    if any(item["code"] in {"open_decision_debt_priority"} for item in plan["diagnostics"]):
         plan["review_route"] = "requires_revision"
     return plan
 

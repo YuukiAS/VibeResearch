@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.18.1 - 2026-06-01
+
+- Add structured Decision Debt TTL records for WATCH/REFINE outcomes.
+- Add `vibe debt list`, `vibe debt validate`, and `vibe debt clear` commands.
+- Require REFINE/WATCH debt to name missing evidence, repayment MVE, TTL,
+  promotion condition, pivot condition, stop condition, and owner session.
+- Connect Reflector outputs to open debt records and Planner diagnostics so new
+  plans cannot ignore unresolved high-value debt.
+- Clear expired debt after two rounds into STOP negative memory or PIVOT plan
+  seeds, and record debt clearances in the Research Registry.
+
 ## 0.18.0 - 2026-06-01
 
 - Add a Research Registry and Immune System for route fingerprints and failure

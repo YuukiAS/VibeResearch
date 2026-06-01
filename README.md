@@ -147,6 +147,10 @@ plans are fingerprinted by failure anchor, mechanism, action type, artifact
 type, metrics, review/reflect decisions, and evidence type. Renamed repeats are
 blocked unless they introduce a new mechanism, information source, artifact, or
 evidence path.
+`vibe debt list` and `vibe debt clear` bound WATCH/REFINE debt: every open debt
+records the missing evidence, repayment MVE, TTL, promotion condition, pivot
+condition, stop condition, and owner session. Expired debt becomes STOP negative
+memory or a PIVOT plan seed that must return through Reviewer.
 
 ```mermaid
 flowchart TD

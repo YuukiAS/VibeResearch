@@ -111,6 +111,9 @@ metric、robustness 和 negative evidence 分开记录，所以即使最终指�
 `vibe registry record` 和 `vibe registry check` 维护 immune system：计划会按 failure anchor、
 mechanism、action type、artifact type、metrics、review/reflect decision 和 evidence type 生成 fingerprint。
 旧实验换名重跑会被拦截，除非它带来新机制、新信息源、新 artifact 或新 evidence path。
+`vibe debt list` 和 `vibe debt clear` 约束 WATCH/REFINE 债务：每个 open debt 都记录 missing
+evidence、repayment MVE、TTL、promotion condition、pivot condition、stop condition 和 owner
+session。过期 debt 会变成 STOP negative memory，或变成必须回到 Reviewer 的 PIVOT plan seed。
 
 ```mermaid
 flowchart TD

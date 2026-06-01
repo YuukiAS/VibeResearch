@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .decision_debt import debt_record_from_reflection, open_decision_debt, reflection_requires_debt, validate_debt_record
 from .io import append_jsonl, read_json, read_jsonl, utc_now, write_json, write_text
 from .mve import promotion_debt_for_success
 from .paths import VibePaths
@@ -88,12 +89,24 @@ def interpret_reflection(paths: VibePaths, result: dict[str, Any], manifest: dic
     elif feasibility_only or metric.get("evidence_type") == "feasibility":
         verdict = "REFINE"
         evidence = {"type": "feasibility", "summary": "smoke/import success is feasibility evidence only"}
-        next_action = {"type": "refinement_debt", "reason": "replace smoke/import evidence with MVE artifact"}
+        next_action = {
+            "type": "refinement_debt",
+            "reason": "replace smoke/import evidence with MVE artifact",
+            "missing_evidence": "trusted mechanism or metric evidence beyond smoke/import",
+            "repayment_mve": "run the reviewed MVE and save an evidence-grade metric artifact",
+            "ttl_rounds": 2,
+        }
         belief = "Feasibility improved, but research belief should not move without evidence-grade artifacts."
     elif subset_failed and mve_level in {"one_case", "component_dataset"}:
         verdict = "REFINE"
         evidence = {"type": "subset_failure", "summary": "one-case or component evidence did not survive subset check"}
-        next_action = {"type": "refinement_debt", "reason": "subset failure blocks promotion"}
+        next_action = {
+            "type": "refinement_debt",
+            "reason": "subset failure blocks promotion",
+            "missing_evidence": "subset robustness evidence",
+            "repayment_mve": "run subset robustness MVE on the reviewed mechanism",
+            "ttl_rounds": 2,
+        }
         belief = "Initial evidence is insufficient for promotion because subset validation failed."
     elif metric.get("trusted"):
         verdict = "PROCEED"
@@ -196,6 +209,9 @@ def validate_reflection(reflection: dict[str, Any]) -> list[str]:
             issues.append(f"{field} is required")
     if reflection.get("verdict") == "PROCEED" and reflection.get("next_action", {}).get("type") != "promotion_debt":
         issues.append("PROCEED requires promotion debt, not mainline success")
+    if reflection_requires_debt(reflection):
+        debt = debt_record_from_reflection(reflection)
+        issues.extend(f"decision_debt: {issue}" for issue in validate_debt_record(debt))
     return issues
 
 
@@ -207,7 +223,12 @@ def write_reflection_outputs(paths: VibePaths, reflection: dict[str, Any], *, pa
     append_jsonl(paths.root / REFLECT_REGISTRY, reflection)
     if reflection["verdict"] in {"STOP", "PIVOT"}:
         append_negative_memory(paths, reflection)
-    if reflection.get("next_action", {}).get("type") in {"promotion_debt", "refinement_debt"}:
+    if reflection_requires_debt(reflection):
+        debt = open_decision_debt(paths, reflection)
+        if debt.get("validation_issues"):
+            reflection.setdefault("validation_issues", []).extend(f"decision_debt: {issue}" for issue in debt["validation_issues"])
+            write_json(manifest_path, reflection)
+    elif reflection.get("next_action", {}).get("type") == "promotion_debt":
         append_open_debt(paths, reflection)
     append_jsonl(
         paths.kernel / "EVIDENCE_LEDGER.jsonl",

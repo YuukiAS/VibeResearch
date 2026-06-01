@@ -52,6 +52,7 @@ from .convergence import close_convergence_budget, dependency_audit, freeze_chec
 from .daemon import daemon_autonomy_audit, daemon_start, daemon_status, daemon_stop
 from .dashboard import render_leaderboard, render_status, sync_dashboard
 from .dashboard_site import build_dashboard_site, serve_dashboard_site
+from .decision_debt import clear_expired_decision_debts, load_debt_state, load_open_decision_debts, validate_debt_record
 from .decisions import decision_json, make_decision, validate_decision_file, write_block_decision, write_decision
 from .directions import set_direction_status
 from .dual_track import create_track_experiment, parallel_comparison_plan, track_budget_audit, track_memo, track_transition_audit
@@ -174,6 +175,7 @@ reliability_app = typer.Typer(help="Run long-run reliability and soak diagnostic
 reflector_app = typer.Typer(help="Interpret Executor outputs as an independent Reflector Session.")
 ratchet_app = typer.Typer(help="Apply layered belief updates from Reflector outputs.")
 registry_app = typer.Typer(help="Record and query research registry immune memory.")
+debt_app = typer.Typer(help="Inspect and clear bounded WATCH/REFINE decision debt.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -211,6 +213,7 @@ app.add_typer(reliability_app, name="reliability")
 app.add_typer(reflector_app, name="reflector")
 app.add_typer(ratchet_app, name="ratchet")
 app.add_typer(registry_app, name="registry")
+app.add_typer(debt_app, name="debt")
 console = Console()
 
 
@@ -866,6 +869,37 @@ def registry_budget_recovery_cmd(target: Path = typer.Option(Path("."), "--targe
     """Show budget checkpoint/resume events indexed by the registry."""
 
     console.print_json(data=load_budget_recovery(paths(target)))
+
+
+@debt_app.command("list")
+def debt_list_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Show open WATCH/REFINE decision debts."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    console.print_json(data={"open_debts": load_open_decision_debts(paths_), "state": load_debt_state(paths_)})
+
+
+@debt_app.command("validate")
+def debt_validate_cmd(record: Path = typer.Argument(..., help="Decision debt record JSON path.")) -> None:
+    """Validate a structured decision debt record."""
+
+    issues = validate_debt_record(read_json(record, {}))
+    console.print(f"Debt validation: {'ok' if not issues else 'blocked'}")
+    for issue in issues:
+        console.print(f"Issue: {issue}")
+    if issues:
+        raise typer.Exit(1)
+
+
+@debt_app.command("clear")
+def debt_clear_cmd(rounds: int = typer.Option(1, "--rounds", min=1), target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Advance debt TTL and clear expired debts into STOP or PIVOT."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    result = clear_expired_decision_debts(paths_, rounds=rounds)
+    console.print_json(data=result)
 
 
 @kernel_app.command("status")
