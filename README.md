@@ -133,6 +133,11 @@ missing expected artifacts produce a blocker report instead of a completed run.
 `vibe executor guard` checks the same entry boundary without running commands:
 review approval consistency, evidence-grade artifacts, safety red lines, stop
 condition, fallback command, and failure-report path.
+Post-execution interpretation runs through `vibe reflector reflect`. Reflector
+reads the Executor result manifest, artifact inventory, metric artifact, logs,
+and MVE contract, then writes `reflect_report.md` with `PROCEED`, `REFINE`,
+`PIVOT`, `STOP`, or `ASK_HUMAN`. MVE success creates promotion debt rather than
+mainline success, and smoke/import success remains feasibility evidence.
 
 ```mermaid
 flowchart TD

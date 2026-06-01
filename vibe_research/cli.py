@@ -116,6 +116,7 @@ from .research_manager import (
     sustained_round_audit,
 )
 from .real_experiments import summarize_real_experiment_progress
+from .reflector import load_reflection, reflect_executor_result, validate_reflection
 from .reliability import compare_checkpoints, reliability_checkpoint, reliability_doctor, reliability_report
 from .scheduler import collect as collect_run
 from .scheduler import cancel_run, monitor as monitor_jobs
@@ -168,6 +169,7 @@ optimize_app = typer.Typer(help="Manage champion/challenger owned optimization l
 present_app = typer.Typer(help="Export presentation-ready research packages.")
 converge_app = typer.Typer(help="Control final convergence and freeze policy.")
 reliability_app = typer.Typer(help="Run long-run reliability and soak diagnostics.")
+reflector_app = typer.Typer(help="Interpret Executor outputs as an independent Reflector Session.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -202,6 +204,7 @@ app.add_typer(optimize_app, name="optimize")
 app.add_typer(present_app, name="present")
 app.add_typer(converge_app, name="converge")
 app.add_typer(reliability_app, name="reliability")
+app.add_typer(reflector_app, name="reflector")
 console = Console()
 
 
@@ -762,6 +765,37 @@ def session_budget_wait_mode_cmd(
         console.print(str(exc))
         raise typer.Exit(1) from exc
     console.print_json(data=record)
+
+
+@reflector_app.command("reflect")
+def reflector_reflect_cmd(
+    result_manifest: Optional[Path] = typer.Option(None, "--result-manifest", help="Executor result manifest; defaults to .vibe/executor/result_manifest.json."),
+    execution_manifest: Optional[Path] = typer.Option(None, "--execution-manifest", help="Execution manifest; defaults to .vibe/kernel/execution_manifest.json."),
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+) -> None:
+    """Interpret Executor outputs and write reflect_report.md."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    reflection = reflect_executor_result(paths_, result_manifest=result_manifest, execution_manifest=execution_manifest)
+    console.print(f"Reflect verdict: {reflection.get('verdict', '')}")
+    console.print(f"Reflect report: {paths_.kernel / 'reflect_report.md'}")
+    if reflection.get("validation_issues"):
+        for issue in reflection["validation_issues"]:
+            console.print(f"Issue: {issue}")
+        raise typer.Exit(1)
+
+
+@reflector_app.command("validate")
+def reflector_validate_cmd(reflection: Path = typer.Argument(..., help="Reflect manifest JSON path to validate.")) -> None:
+    """Validate a Reflector manifest."""
+
+    issues = validate_reflection(load_reflection(reflection))
+    console.print(f"Reflect validation: {'ok' if not issues else 'blocked'}")
+    for issue in issues:
+        console.print(f"Issue: {issue}")
+    if issues:
+        raise typer.Exit(1)
 
 
 @kernel_app.command("status")

@@ -102,6 +102,10 @@ Executor 通过 `vibe executor run` 执行通过审查的 `execution_manifest.js
 result report；命令失败或缺少预期 artifact 时写 blocker report，不能把执行标记为完成。
 `vibe executor guard` 可以只检查入口边界而不执行命令：review approval 一致性、
 evidence-grade artifact、安全红线、stop condition、fallback command 和 failure report path。
+执行后的解释由 `vibe reflector reflect` 完成。Reflector 读取 Executor result manifest、
+artifact inventory、metric artifact、logs 和 MVE contract，然后写 `reflect_report.md`，
+结论只能是 `PROCEED`、`REFINE`、`PIVOT`、`STOP` 或 `ASK_HUMAN`。MVE 成功只会生成
+promotion debt，不会直接宣布主线成功；smoke/import 成功只能算 feasibility evidence。
 
 ```mermaid
 flowchart TD

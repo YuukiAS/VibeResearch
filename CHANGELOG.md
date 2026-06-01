@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.17.0 - 2026-06-01
+
+- Add an independent Reflector Session for post-execution interpretation.
+- Add `vibe reflector reflect` and `vibe reflector validate` commands.
+- Read Executor result manifests, artifact inventory, expected artifacts,
+  metric JSON, execution logs, and MVE contracts before writing
+  `reflect_report.md`.
+- Enforce bounded Reflector verdicts: `PROCEED`, `REFINE`, `PIVOT`, `STOP`, and
+  `ASK_HUMAN`.
+- Convert MVE success into promotion debt, treat smoke/import success as
+  feasibility evidence only, and block PROCEED on missing artifacts or guardrail
+  regressions.
+- Integrate with 0.16.2 budget runtime so low-quota reflection writes partial
+  reflect output and `RESUME.md`.
+
 ## 0.16.2 - 2026-06-01
 
 - Add Budget-Aware Session Runtime state in `SESSION_BUDGET_STATE.json`.
