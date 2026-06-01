@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -838,10 +839,17 @@ def sync_resource_plan_from_portfolio(paths: VibePaths, cycle_id: str) -> dict[s
     """Ensure a machine resource plan exists after a human/Codex plan is written."""
 
     plan = load_resource_plan(paths, cycle_id)
+    portfolio_text = portfolio_plan_text(paths, cycle_id)
     plan["cycle_id"] = cycle_id
     plan.setdefault("mode", read_json(paths.state / "state.json", {}).get("portfolio_mode", "exploration"))
     plan.setdefault("runs", {})
     plan.setdefault("cancel_rules", [])
+    explicit_actions = explicit_local_portfolio_actions(portfolio_text)
+    if explicit_actions and portfolio_requests_no_job(portfolio_text) and generic_placeholder_resource_plan(plan):
+        plan = compile_explicit_local_resource_plan(paths, cycle_id, explicit_actions, portfolio_text)
+        write_yaml(paths.cycles / cycle_id / "resource_plan.yaml", plan)
+        record_event(paths, "portfolio_explicit_local_resource_plan_compiled", f"Compiled {cycle_id} from explicit local portfolio actions", cycle_id=cycle_id, status="compiled")
+        return plan
     write_yaml(paths.cycles / cycle_id / "resource_plan.yaml", plan)
     if should_compile_post_target_continuation(paths, plan):
         ok, message = ensure_executable_resource_plan(paths, cycle_id)
@@ -857,6 +865,96 @@ def sync_resource_plan_from_portfolio(paths: VibePaths, cycle_id: str) -> dict[s
             return compiled
         record_event(paths, "post_target_resource_plan_blocked", f"{cycle_id}: {message}", cycle_id=cycle_id, status="blocked_missing_resource_plan")
     return plan
+
+
+def portfolio_plan_text(paths: VibePaths, cycle_id: str) -> str:
+    path = paths.cycles / cycle_id / "portfolio_plan.md"
+    return path.read_text() if path.exists() else ""
+
+
+def explicit_local_portfolio_actions(text: str) -> list[str]:
+    actions: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if not stripped.startswith(("-", "*", "1.", "2.", "3.")) and "run " not in lowered:
+            continue
+        for token in re.findall(r"`([a-z][a-z0-9]*(?:[_-][a-z0-9]+)+)`|\b([a-z][a-z0-9]*(?:[_-][a-z0-9]+)+)\b", stripped):
+            candidate = next(part for part in token if part)
+            action = candidate.strip("`").replace("-", "_").lower()
+            if action in EXPLICIT_ACTION_STOPWORDS:
+                continue
+            if action not in seen:
+                actions.append(action)
+                seen.add(action)
+    return actions
+
+
+EXPLICIT_ACTION_STOPWORDS = {
+    "no_gpu",
+    "no_slurm",
+    "no_gpu_no_slurm",
+    "long_running",
+    "resource_plan",
+    "baseline_check",
+    "diagnostic_check",
+    "first_hypothesis",
+}
+
+
+def portfolio_requests_no_job(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in ("no long-running jobs", "no slurm", "no slurm submissions", "no gpu", "no_gpu_no_slurm", "local/no-job", "local no-job"))
+
+
+def compile_explicit_local_resource_plan(paths: VibePaths, cycle_id: str, actions: list[str], portfolio_text: str) -> dict[str, Any]:
+    runs: dict[str, Any] = {}
+    for index, action in enumerate(actions, start=1):
+        output = f".vibe/results/{cycle_id}/{action}.json"
+        command = (
+            "python -c "
+            + repr(
+                "import json,pathlib; "
+                f"p=pathlib.Path({output!r}); "
+                "p.parent.mkdir(parents=True, exist_ok=True); "
+                f"p.write_text(json.dumps({{'status':'completed','action':{action!r}}})+'\\n')"
+            )
+        )
+        runs[action] = {
+            "priority": index,
+            "direction_id": action,
+            "hypothesis": f"Execute local artifact action {action} from the portfolio plan.",
+            "expected_learning": f"Whether {action} resolves the portfolio's local evidence gap.",
+            "cost": "low",
+            "can_parallel": True,
+            "depends_on": [],
+            "cancel_if_failed": [],
+            "dryrun": {"command": "python -c " + repr(f"print('dryrun {action}')")},
+            "entrypoint": {"type": "local", "command": command},
+            "outputs": {"expected_output_path": output},
+            "evaluation": {"metrics_file_path": output, "metrics_schema": {"status": "string", "action": "string"}},
+            "resources": {"gpu": 0, "cpus": 1, "mem_gb": 1, "time": "00:05:00", "allowed_backends": ["local"], "automatic_submission_allowed": False},
+            "run_kind": "local_no_job_artifact",
+            "success_criteria": {"status": "completed"},
+            "adapter_metadata": {"source": "portfolio_explicit_local_action", "action": action},
+            "research_metadata": {"portfolio_explicit_local_actions": actions, "no_job_requested": portfolio_requests_no_job(portfolio_text)},
+        }
+    return {
+        "cycle_id": cycle_id,
+        "mode": "portfolio_explicit_local",
+        "decision_id": f"{cycle_id}_portfolio_explicit_local",
+        "max_parallel_jobs": max(1, len(runs)),
+        "max_gpu_jobs": 0,
+        "runs": runs,
+        "cancel_rules": [],
+        "portfolio_explicit_local": {
+            "source": "portfolio_plan.md",
+            "actions": actions,
+            "no_job_requested": True,
+            "compiled_at": utc_now(),
+        },
+    }
 
 
 def should_compile_post_target_continuation(paths: VibePaths, plan: dict[str, Any]) -> bool:

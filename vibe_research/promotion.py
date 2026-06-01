@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .adapters import get_adapter, validate_compiled_plan
@@ -245,9 +246,48 @@ def validate_resource_plan(paths: VibePaths, cycle_id: str) -> list[str]:
     plan = read_yaml(paths.cycles / cycle_id / "resource_plan.yaml", {})
     if not isinstance(plan, dict):
         return [f"{cycle_id}: resource_plan.yaml is not a mapping"]
-    return [f"{cycle_id}: {error}" for error in validate_compiled_plan(plan)]
+    errors = validate_compiled_plan(plan)
+    explicit_actions = explicit_local_portfolio_actions_for_guard(paths, cycle_id)
+    if explicit_actions and generic_placeholder_resource_plan_for_guard(plan):
+        errors.append(
+            "portfolio_plan.md contains explicit local/no-job actions "
+            f"{', '.join(explicit_actions)} but resource_plan.yaml is still a generic placeholder"
+        )
+    return [f"{cycle_id}: {error}" for error in errors]
 
 
 def resource_plan_is_compiled(paths: VibePaths, cycle_id: str) -> bool:
     plan = read_yaml(paths.cycles / cycle_id / "resource_plan.yaml", {})
     return isinstance(plan, dict) and bool(plan.get("decision_id")) and not validate_compiled_plan(plan)
+
+
+def explicit_local_portfolio_actions_for_guard(paths: VibePaths, cycle_id: str) -> list[str]:
+    path = paths.cycles / cycle_id / "portfolio_plan.md"
+    if not path.exists():
+        return []
+    text = path.read_text()
+    lowered = text.lower()
+    if not any(token in lowered for token in ("no long-running jobs", "no slurm", "no slurm submissions", "no gpu", "no_gpu_no_slurm", "local/no-job", "local no-job")):
+        return []
+    actions: list[str] = []
+    seen: set[str] = set()
+    stopwords = {"no_gpu", "no_slurm", "no_gpu_no_slurm", "long_running", "resource_plan", "baseline_check", "diagnostic_check", "first_hypothesis"}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(("-", "*", "1.", "2.", "3.")) and "run " not in stripped.lower():
+            continue
+        for token in re.findall(r"`([a-z][a-z0-9]*(?:[_-][a-z0-9]+)+)`|\b([a-z][a-z0-9]*(?:[_-][a-z0-9]+)+)\b", stripped):
+            candidate = next(part for part in token if part)
+            action = candidate.strip("`").replace("-", "_").lower()
+            if action in stopwords:
+                continue
+            if action not in seen:
+                actions.append(action)
+                seen.add(action)
+    return actions
+
+
+def generic_placeholder_resource_plan_for_guard(plan: dict[str, Any]) -> bool:
+    runs = plan.get("runs", {}) if isinstance(plan.get("runs"), dict) else {}
+    names = set(runs)
+    return bool(names) and names.issubset({"baseline-check", "diagnostic-check", "first-hypothesis"})

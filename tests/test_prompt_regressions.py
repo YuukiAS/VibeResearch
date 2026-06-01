@@ -14,6 +14,7 @@ from vibe_research.io import write_json, write_yaml
 from vibe_research.locks import active_advance_lock, advancing_lock
 from vibe_research.paths import VibePaths
 from vibe_research.project import create_cycle, sync_resource_plan_from_portfolio
+from vibe_research.promotion import validate_resource_plan
 
 
 runner = CliRunner()
@@ -156,3 +157,43 @@ def test_v0123_negative_untrusted_metrics_do_not_promote(tmp_path: Path):
     loaded = load_decision(paths, run_id)
     assert repaired.decision_type == "stop_direction"
     assert loaded.decision_type == "stop_direction"
+
+
+def test_v0124_explicit_no_job_portfolio_actions_preserved(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    activate_three_executable_capabilities(paths)
+    cycle = create_cycle(paths)
+    portfolio = paths.cycles / cycle / "portfolio_plan.md"
+    portfolio.write_text(
+        """# Portfolio plan
+
+## Resource policy
+- No long-running jobs.
+- No Slurm submissions.
+- no_gpu_no_slurm.
+
+## Selected actions
+- run `trust_repair_and_metric_audit`
+- run `reference_evidence_review`
+- run `mednext_route_decision`
+- do not repeat old smoke routes without a new ablation or trust repair purpose.
+"""
+    )
+    errors_before = validate_resource_plan(paths, cycle)
+    assert any("explicit local/no-job actions" in error for error in errors_before)
+
+    plan = sync_resource_plan_from_portfolio(paths, cycle)
+    expected_order = ["trust_repair_and_metric_audit", "reference_evidence_review", "mednext_route_decision"]
+    expected = set(expected_order)
+    assert list(plan["runs"]) == expected_order
+    assert not {"baseline-check", "diagnostic-check", "first-hypothesis"}.intersection(plan["runs"])
+    assert plan["max_gpu_jobs"] == 0
+    assert plan["mode"] == "portfolio_explicit_local"
+    assert plan["portfolio_explicit_local"]["actions"] == expected_order
+    for action, spec in plan["runs"].items():
+        assert spec["resources"]["gpu"] == 0
+        assert spec["resources"]["allowed_backends"] == ["local"]
+        assert spec["entrypoint"]["type"] == "local"
+        assert spec["adapter_metadata"]["source"] == "portfolio_explicit_local_action"
+        assert spec["adapter_metadata"]["action"] == action
+    assert validate_resource_plan(paths, cycle) == []

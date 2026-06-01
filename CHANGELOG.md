@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.12.4 - 2026-05-31
+
+- Compile explicit local/no-job portfolio actions into concrete artifact-only
+  resource-plan runs instead of falling back to generic placeholders.
+- Preserve no-GPU/no-Slurm portfolio intent with `max_gpu_jobs: 0`, local
+  backend metadata, and no-job run descriptors.
+- Add a resource-plan validation guard when portfolio Markdown contains
+  explicit local/no-job actions but the machine plan remains generic.
+- Add regression coverage for artifact-only audit/review/decision actions being
+  preserved from a corrected portfolio plan.
+
 ## 0.12.3 - 2026-05-31
 
 - Add target-scoped advancing locks for `auto-next` and `auto-cycle`, including
