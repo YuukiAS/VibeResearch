@@ -160,6 +160,10 @@ manifests; clone or install steps alone are not experiment goals.
 Knowledge. Active repo, paper, deep-note, mechanism-card, and user-idea inputs
 expire after two cycles unless they become an active mechanism, negative
 evidence, or archived reference; expired orphans are recorded in the registry.
+`vibe os-beta run` executes a toy closed-loop harness across Planner, Reviewer,
+Compiler, Executor, Reflector, Registry, Ratchet, and next Planner artifacts. It
+checks role boundaries, budget guards, duplicate blocking, debt clearing, and
+low-quota resume behavior without running a downstream CARE round.
 
 ```mermaid
 flowchart TD

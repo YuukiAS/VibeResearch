@@ -84,6 +84,7 @@ from .mve import promotion_debt_for_success, validate_mve_completion, validate_m
 from .next_action import compute_next_action
 from .owned import owned_contract, owned_design_audit, owned_shadow_plan, scaffold_owned_framework
 from .optimization import external_deemphasis_plan, plan_ablation, promote_champion, record_optimization_memory, record_regression_suite, register_challenger
+from .os_beta import run_closed_loop_harness, validate_closed_loop
 from .papers import add_paper, auto_method_search, download_paper, list_papers, paper_search, pdf_to_markdown, wiki_ingest_paper
 from .paths import VibePaths
 from .planner import build_draft_from_mechanism_card, build_draft_plan, load_draft_plan, validate_draft_plan, write_draft_plan
@@ -178,6 +179,7 @@ ratchet_app = typer.Typer(help="Apply layered belief updates from Reflector outp
 registry_app = typer.Typer(help="Record and query research registry immune memory.")
 debt_app = typer.Typer(help="Inspect and clear bounded WATCH/REFINE decision debt.")
 knowledge_app = typer.Typer(help="Track knowledge lifecycle and clear orphan knowledge.")
+os_beta_app = typer.Typer(help="Run and validate the OS beta closed-loop harness.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -217,6 +219,7 @@ app.add_typer(ratchet_app, name="ratchet")
 app.add_typer(registry_app, name="registry")
 app.add_typer(debt_app, name="debt")
 app.add_typer(knowledge_app, name="knowledge")
+app.add_typer(os_beta_app, name="os-beta")
 console = Console()
 
 
@@ -941,6 +944,30 @@ def knowledge_audit_cmd(refresh: bool = typer.Option(True, "--refresh/--cached")
     paths_ = paths(target)
     paths_.require_initialized()
     console.print_json(data=orphan_audit(paths_) if refresh else load_orphan_audit(paths_))
+
+
+@os_beta_app.command("run")
+def os_beta_run_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Run the generic closed-loop OS beta harness."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    result = run_closed_loop_harness(paths_)
+    console.print_json(data=result)
+    if not result.get("chain_complete"):
+        raise typer.Exit(1)
+
+
+@os_beta_app.command("validate")
+def os_beta_validate_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Validate closed-loop OS beta harness artifacts."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    result = validate_closed_loop(paths_)
+    console.print_json(data=result)
+    if not result.get("ok"):
+        raise typer.Exit(1)
 
 
 @kernel_app.command("status")

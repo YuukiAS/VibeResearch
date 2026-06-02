@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.20.0 - 2026-06-01
+
+- Add a VibeResearch OS Beta closed-loop harness for generic multi-session
+  integration tests.
+- Add `vibe os-beta run` and `vibe os-beta validate` commands.
+- Verify Planner, Reviewer, Compiler, Executor, Reflector, Registry, Ratchet,
+  and next Planner artifacts in one auditable loop.
+- Exercise Budget-Aware Session Runtime guards, role isolation,
+  review-before-execute, manifest-driven execution, registry duplicate
+  blocking, decision debt clearing, and low-quota checkpoint/resume behavior.
+- Keep the harness toy and framework-level; it does not run CARE rounds.
+
 ## 0.19.1 - 2026-06-01
 
 - Add No Orphan Knowledge lifecycle tracking for repo, paper, deep-note,

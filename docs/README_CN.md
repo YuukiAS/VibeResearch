@@ -120,6 +120,9 @@ paper、repo、deep research note 和用户想法都必须先形成带 possible 
 `vibe knowledge audit` 和 `vibe knowledge advance-ttl` 执行 No Orphan Knowledge：repo、
 paper、deep-note、mechanism-card 和用户想法如果两轮内没有变成 active mechanism、negative
 evidence 或 archived reference，就会过期为 EXPIRED_ORPHAN 并写入 registry。
+`vibe os-beta run` 会跑一个 toy closed-loop harness，串起 Planner、Reviewer、Compiler、
+Executor、Reflector、Registry、Ratchet 和下一轮 Planner artifact。它检查角色边界、budget
+guard、重复路线拦截、debt clearing 和低 quota resume，但不会执行下游 CARE round。
 
 ```mermaid
 flowchart TD
