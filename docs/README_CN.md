@@ -29,8 +29,8 @@ VibeResearch 是一个本地优先的研究流程管理框架，面向已经存�
 - 持续多轮推进一个研究项目，并保留每轮决策依据；
 - 将项目自己的训练、评估或推理脚本接入统一的编排层；
 - 在本地或 Slurm 集群上运行实验，同时保留预算和就绪检查；
-- 跟踪外部基线、scout 证据、内化决策、自有框架雏形和
-  champion/challenger 优化过程；
+- 跟踪外部基线、检索证据、内化决策、自有框架雏形，以及
+  “主版本/挑战版本”（champion/challenger）优化过程；
 - 归档旧失败状态，把它作为历史经验，而不是直接当成可信证据；
 - 生成状态看板、每日记录和组会材料。
 
@@ -42,109 +42,107 @@ VibeResearch OS 不是把某个外部自动科研框架包一层，也不是让�
 判断进展，用负证据登记表防止旧路线换名重跑，用预算感知运行时
 保证长时间运行时不会在关键阶段断掉。
 
-它的目标不是让 agent 一直显得很忙，而是让每一轮研究都留下可审计的
+它的目标不是让代理一直显得很忙，而是让每一轮研究都留下可审计的
 证据、信念更新或负证据。一个动作如果不能从想法走到产物，再走到指标和决策，
 就只能算准备或诊断，不能算真正进展。
 
 ### 设计原则
 
 - 先拆职责，再谈自治。计划、审查、执行、复盘是不同职责，应该由不同
-  Codex session 承担。
-- 计划不能自己批准自己。Reviewer Session 是 Slurm、代码修改和高成本实验之前的正式闸门。
-- artifact 不是终点。每个 artifact 都必须支持某类证据和某个信念更新。
+  Codex 会话承担。
+- 计划不能自己批准自己。审查会话是 Slurm、代码修改和高成本实验之前的正式闸门。
+- 产物不是终点。每个产物都必须支持某类证据和某个信念更新。
 - 失败路线不是普通日志，而是免疫记忆。后续相似计划必须说明新机制，否则应被拒绝。
-- 预算和安全是运行时约束，不是 prompt 里的提醒。
+- 预算和安全是运行时约束，不是提示词里的提醒。
 
 ### 层与运行角色
 
-这里要区分两件事：层是架构概念，session 是运行角色。VibeResearch OS
+这里要区分两件事：层是架构概念，会话是运行角色。VibeResearch OS
 采用八层结构：
 
-1. Kernel / Memory Layer：保存项目目标、当前问题状态、失败签名、开放债务、负证据、安全边界和预算状态。
-2. Planner Layer：提出候选计划和大胆机制。
-3. Reviewer / Reviser Layer：执行前像导师或审稿人一样审查计划。
-4. Compiler / MVE Layer：把通过审查的计划编译成最小可行实验和执行清单。
-5. Executor Layer：由 Codex 改代码、写 runner、提交 Slurm，并产出 artifacts 和 metrics。
-6. Monitor / Safety / Budget Layer：负责 Slurm 低成本监控、quota guard、checkpoint/resume、安全红线和队列上限。
-7. Reflector / Belief Ratchet Layer：实验后解释结果，给出 `PROCEED`、`REFINE`、`PIVOT` 或 `STOP`。
-8. Registry / Immune System Layer：记录实验 fingerprint、负证据、WATCH TTL 和反重复逻辑。
+1. 内核 / 记忆层（Kernel / Memory）：保存项目目标、当前问题状态、失败签名、开放债务、负证据、安全边界和预算状态。
+2. 计划层（Planner）：提出候选计划和大胆机制。
+3. 审查 / 修订层（Reviewer / Reviser）：执行前像导师或审稿人一样审查计划。
+4. 编译 / 最小可行实验层（Compiler / MVE）：把通过审查的计划编译成最小实验和执行清单。
+5. 执行层（Executor）：由 Codex 改代码、写运行脚本、提交 Slurm，并产出产物和指标。
+6. 监控 / 安全 / 预算层（Monitor / Safety / Budget）：负责 Slurm 低成本监控、额度保护、检查点/恢复、安全红线和队列上限。
+7. 复盘 / 信念推进层（Reflector / Belief Ratchet）：实验后解释结果，给出 `PROCEED`、`REFINE`、`PIVOT` 或 `STOP`。
+8. 登记 / 免疫层（Registry / Immune System）：记录实验指纹、负证据、WATCH 时限和反重复逻辑。
 
-最小常驻配置是四个 Codex session：
+最小常驻配置是四个 Codex 会话：
 
-- Planner Session：只写 `draft_plan_manifest.json`，不能改代码、不能提交 Slurm、不能批准自己的计划。
-- Reviewer Session：只读、只审查、只 revise，写 `plan_review_report.md` 和
+- 计划会话（Planner）：只写 `draft_plan_manifest.json`，不能改代码、不能提交 Slurm、不能批准自己的计划。
+- 审查会话（Reviewer）：只读、只审查、只修订，写 `plan_review_report.md` 和
   `reviewed_plan_manifest.json`，输出 `ACCEPT`、`REVISE`、`REJECT` 或 `ASK_HUMAN`。
-- Executor Session：只执行已经通过 review 的 manifest，可以改代码、跑脚本、提交 Slurm，
-  但不能擅自改变科学方向，也不能把 smoke 当成果。
-- Reflector Session：只读结果、解释指标、更新 memory 和 negative evidence，不能补跑实验。
+- 执行会话（Executor）：只执行已经通过审查的清单，可以改代码、跑脚本、提交 Slurm，
+  但不能擅自改变科学方向，也不能把冒烟检查当成果。
+- 复盘会话（Reflector）：只读结果、解释指标、更新记忆和负证据，不能补跑实验。
 
-可选 session 只有两个，按需临时打开：
+可选会话只有两个，按需临时打开：
 
-- Scout Session：集中查论文、repo、leaderboard 或新方法，只能输出 `mechanism_card.md`，
+- 检索会话（Scout）：集中查论文、仓库、排行榜或新方法，只能输出 `mechanism_card.md`，
   不能直接进入执行队列。
-- Archivist Session：压缩长期 memory、整理 registry、清算 WATCH 债务，不参与实验执行。
+- 归档会话（Archivist）：压缩长期记忆、整理登记表、清算 WATCH 债务，不参与实验执行。
 
-Planner draft 通过 `vibe planner draft` 创建，并用 `vibe planner validate` 检查。
-每个 draft 进入 review 前，必须写清 failure anchor、hypothesis、mechanism、
-minimum experiment、expected artifact、expected belief update、compute cost、
-risk、fallback 和 stop condition。
-Reviewer 检查通过 `vibe reviewer review` 执行；只有 `ACCEPT` verdict 才会写出
-`reviewed_plan_manifest.json` 交给 Compiler。
-当 Reviewer 返回 `REVISE` 时，`vibe reviewer revision-packet` 生成结构化修改请求，
-`vibe planner resubmit` 只能更新 packet 指定的 draft 字段。
-通过 review 的 plan 使用 `vibe compiler compile` 编译，输出
-`execution_manifest.json`、本地脚本草案、Slurm 草案、预期 artifact inventory、
-evaluation command、stop condition 和 fallback command。
-每个编译后的 manifest 都包含 MVE contract。`vibe mve validate` 在执行前检查
+计划草案通过 `vibe planner draft` 创建，并用 `vibe planner validate` 检查。
+每个草案进入审查前，必须写清失败锚点、假设、机制、最小实验、预期产物、
+预期信念更新、计算成本、风险、回退方案和停止条件。
+审查通过 `vibe reviewer review` 执行；只有结论为 `ACCEPT` 时，才会写出
+`reviewed_plan_manifest.json` 交给编译层。
+当审查返回 `REVISE` 时，`vibe reviewer revision-packet` 生成结构化修改请求，
+`vibe planner resubmit` 只能更新修改包指定的草案字段。
+通过审查的计划使用 `vibe compiler compile` 编译，输出
+`execution_manifest.json`、本地脚本草案、Slurm 草案、预期产物清单、
+评估命令、停止条件和回退命令。
+每个编译后的执行清单都包含 MVE 契约。`vibe mve validate` 在执行前检查
 最小实验契约，`vibe mve promote-success` 在成功后记录下一层证据债务，而不是直接宣布主线成功。
 Executor 通过 `vibe executor run` 执行通过审查的 `execution_manifest.json`，
-写出 execution log、artifact inventory、result manifest 和 Reflector 可读的
-result report；命令失败或缺少预期 artifact 时写 blocker report，不能把执行标记为完成。
-`vibe executor guard` 可以只检查入口边界而不执行命令：review approval 一致性、
-evidence-grade artifact、安全红线、stop condition、fallback command 和 failure report path。
-执行后的解释由 `vibe reflector reflect` 完成。Reflector 读取 Executor result manifest、
-artifact inventory、metric artifact、logs 和 MVE contract，然后写 `reflect_report.md`，
+写出执行日志、产物清单、结果清单和复盘会话可读的结果报告；命令失败或缺少预期产物时
+写阻塞报告，不能把执行标记为完成。
+`vibe executor guard` 可以只检查入口边界而不执行命令：审查批准是否一致、
+证据级产物、安全红线、停止条件、回退命令和失败报告路径。
+执行后的解释由 `vibe reflector reflect` 完成。复盘会话读取执行结果清单、
+产物清单、指标产物、日志和 MVE 契约，然后写 `reflect_report.md`，
 结论只能是 `PROCEED`、`REFINE`、`PIVOT`、`STOP` 或 `ASK_HUMAN`。MVE 成功只会生成
-promotion debt，不会直接宣布主线成功；smoke/import 成功只能算 feasibility evidence。
-`vibe ratchet apply` 把 reflection 写回分层 belief memory：feasibility、mechanism、
-metric、robustness 和 negative evidence 分开记录，所以即使最终指标没涨，有价值的机制证据也会保留下来。
-`vibe registry record` 和 `vibe registry check` 维护 immune system：计划会按 failure anchor、
-mechanism、action type、artifact type、metrics、review/reflect decision 和 evidence type 生成 fingerprint。
-旧实验换名重跑会被拦截，除非它带来新机制、新信息源、新 artifact 或新 evidence path。
-`vibe debt list` 和 `vibe debt clear` 约束 WATCH/REFINE 债务：每个 open debt 都记录 missing
-evidence、repayment MVE、TTL、promotion condition、pivot condition、stop condition 和 owner
-session。过期 debt 会变成 STOP negative memory，或变成必须回到 Reviewer 的 PIVOT plan seed。
+晋升债务，不会直接宣布主线成功；冒烟或导入成功只能算可运行性证据。
+`vibe ratchet apply` 把复盘结论写回分层信念记忆：可运行性、机制、指标、鲁棒性和负证据分开记录，
+所以即使最终指标没涨，有价值的机制证据也会保留下来。
+`vibe registry record` 和 `vibe registry check` 维护免疫系统：计划会按失败锚点、
+机制、动作类型、产物类型、指标、审查/复盘决策和证据类型生成指纹。
+旧实验换名重跑会被拦截，除非它带来新机制、新信息源、新产物或新证据路径。
+`vibe debt list` 和 `vibe debt clear` 约束 WATCH/REFINE 债务：每个开放债务都记录缺失证据、
+偿还用的 MVE、时限、晋升条件、转向条件、停止条件和负责人会话。
+过期债务会变成 STOP 负证据，或变成必须回到审查会话的 PIVOT 计划种子。
 `vibe scout mechanism-card` 和 `vibe planner draft-from-card` 把外部知识先转成机制，再进入规划。
-paper、repo、deep research note 和用户想法都必须先形成带 possible MVE 的 `mechanism_card.md`，
-再由 Planner/Reviewer/Compiler 转成执行清单；clone 或 install 本身不能作为实验目标。
-已验证机制卡进入 `PLAN_CANDIDATE` 后，常规 cycle 规划会先消费这张卡，再回退到通用
-baseline / diagnostic 模板。cycle state、`portfolio_plan.md`、`resource_plan.yaml`、Codex
-prompt context 和 dashboard status 都会保留 card id、source、required assets、stop reason、
-active adapter surface 和 expected metric artifact。若 run metadata 里有尚未注册的
-`experiment_id`，collect 会写入 `research_evidence_link_skipped`，保留已产生的 metrics，
+论文、仓库、深度调研笔记和用户想法都必须先形成带可行 MVE 的 `mechanism_card.md`，
+再由计划、审查和编译层转成执行清单；克隆或安装本身不能作为实验目标。
+已验证机制卡进入 `PLAN_CANDIDATE` 后，常规周期规划会先消费这张卡，再回退到通用
+基线或诊断模板。周期状态、`portfolio_plan.md`、`resource_plan.yaml`、Codex
+提示上下文和看板状态都会保留卡片 ID、来源、所需资源、停止原因、
+当前可用的 adapter 能力和预期指标产物。若运行元数据里有尚未注册的
+`experiment_id`，收集阶段会写入 `research_evidence_link_skipped`，保留已产生的指标，
 不会在执行完成后崩溃。
-`vibe knowledge audit` 和 `vibe knowledge advance-ttl` 执行 No Orphan Knowledge：repo、
-paper、deep-note、mechanism-card 和用户想法如果两轮内没有变成 active mechanism、negative
-evidence 或 archived reference，就会过期为 EXPIRED_ORPHAN 并写入 registry。
-`vibe os-beta run` 会跑一个 toy closed-loop harness，串起 Planner、Reviewer、Compiler、
-Executor、Reflector、Registry、Ratchet 和下一轮 Planner artifact。它检查角色边界、budget
-guard、重复路线拦截、debt clearing 和低 quota resume，但不会执行下游 CARE round。
-`vibe anti-stall run` 会给防空转陷阱打分：generic U-Net 重跑、negative-memory repeat、
-clone-only repo、one-case evidence promotion、smoke-only feasibility、WATCH debt clearing、
-orphan knowledge clearing、registry duplicate blocking、角色边界和低 quota checkpoint/resume。
-`vibe brief update` 维护面向人类和未来 dashboard 的 Living Research Brief。它写入
+`vibe knowledge audit` 和 `vibe knowledge advance-ttl` 执行“无孤儿知识”规则：
+仓库、论文、深度调研笔记、机制卡和用户想法如果两轮内没有变成活跃机制、负证据或归档引用，
+就会过期为 `EXPIRED_ORPHAN` 并写入登记表。
+`vibe os-beta run` 会跑一个玩具级闭环，串起计划、审查、编译、执行、复盘、登记、信念推进
+和下一轮计划产物。它检查角色边界、预算保护、重复路线拦截、债务清算和低额度恢复，
+但不会执行下游 CARE 轮次。
+`vibe anti-stall run` 会给防空转陷阱打分：通用 U-Net 重跑、负证据重复、只克隆仓库、
+one-case 证据越级、只做冒烟检查、WATCH 债务清理、孤儿知识清理、登记表重复拦截、
+角色边界和低额度检查点/恢复。
+`vibe brief update` 维护面向人类和未来看板的持续研究态势简报（Living Research Brief）。它写入
 `.vibe/research/CURRENT_RESEARCH_BRIEF.zh.md`、`.vibe/research/CURRENT_RESEARCH_BRIEF.en.md`
 和 `.vibe/research/research_brief.json`；`research.brief_language` 决定默认语言。
-这不是日志，而是从本地 evidence 文件汇总当前项目目标、failure signatures、近期正负证据、
-当前主攻路线、open evidence debt、是否需要用户决策、active human guidance 和未消费机制卡。
-它不能把 smoke/import/clone 说成真实进展，也不能把 WATCH 说成 GO。
-`vibe guidance add` 会把 Human Idea Inbox 记录写入
+这不是日志，而是从本地证据文件汇总当前项目目标、失败签名、近期正负证据、
+当前主攻路线、开放证据债务、是否需要用户决策、活跃用户指导和未消费机制卡。
+它不能把冒烟、导入或克隆说成真实进展，也不能把 WATCH 说成 GO。
+`vibe guidance add` 会把用户想法收件箱（Human Idea Inbox）记录写入
 `.vibe/research/human_guidance.jsonl`，并渲染
-`.vibe/research/HUMAN_IDEA_INBOX.md`。每条记录包含 timestamp、source、raw_text、
-language、priority、linked_failure_signature、suggested_mechanism、status、
-review_decision、applied_in_plan、superseded_by 和 notes。`vibe idea` 也会写入这个 inbox。
-Planner 会说明哪些 active guidance 被吸收、哪些未使用；Reviewer 会要求计划解释或吸收最新
-human guidance；Reflector 会在观察到 evidence 后更新 guidance 状态。
+`.vibe/research/HUMAN_IDEA_INBOX.md`。每条记录包含时间、来源、原文、语言、优先级、
+关联失败签名、建议机制、状态、审查决策、应用到哪个计划、是否被取代以及备注。
+`vibe idea` 也会写入这个收件箱。计划会话会说明哪些活跃指导被吸收、哪些未使用；
+审查会话会要求计划解释或吸收最新用户指导；复盘会话会在观察到证据后更新指导状态。
 
 ```mermaid
 flowchart TD
@@ -155,56 +153,55 @@ flowchart TD
     C -- REVISE --> B
     C -- ACCEPT --> D["通过审查的计划<br/>reviewed_plan_manifest.json"]
 
-    D --> E["Compiler / MVE 编译层<br/>execution_manifest.json<br/>最小可行实验<br/>artifact contract<br/>stop condition"]
+    D --> E["Compiler / MVE 编译层<br/>execution_manifest.json<br/>最小可行实验<br/>产物契约<br/>停止条件"]
 
-    E --> F["Executor 执行会话<br/>execution log<br/>artifact inventory<br/>result_manifest.json<br/>blocker report"]
+    E --> F["Executor 执行会话<br/>执行日志<br/>产物清单<br/>result_manifest.json<br/>阻塞报告"]
 
-    F --> G["产物与指标<br/>prediction files<br/>QC masks<br/>trained verifier<br/>case-level metrics<br/>route manifest<br/>job logs"]
+    F --> G["产物与指标<br/>预测文件<br/>QC 掩膜<br/>训练后的验证器<br/>单例指标<br/>路线清单<br/>作业日志"]
 
     G --> H["Reflector 复盘会话<br/>reflect_report.md<br/>PROCEED / REFINE / PIVOT / STOP<br/>belief update"]
 
-    H --> I["Registry / 免疫系统<br/>EVIDENCE_LEDGER<br/>experiment fingerprints<br/>negative evidence<br/>WATCH TTL<br/>anti-duplication"]
+    H --> I["Registry / 免疫系统<br/>EVIDENCE_LEDGER<br/>实验指纹<br/>负证据<br/>WATCH 时限<br/>反重复"]
 
     I --> A
     I --> B
     I --> C
 
-    J["监控 / 安全 / 预算运行时<br/>Slurm status<br/>quota guard<br/>checkpoint / resume<br/>no auto-upload<br/>no external training data<br/>queue limits"] -. 守护 .-> B
+    J["监控 / 安全 / 预算运行时<br/>Slurm 状态<br/>额度保护<br/>检查点 / 恢复<br/>禁止自动上传<br/>禁止外部训练数据<br/>队列上限"] -. 守护 .-> B
     J -. 守护 .-> C
     J -. 守护 .-> E
     J -. 守护 .-> F
     J -. 守护 .-> H
 
-    K["可选 Scout 检索会话<br/>paper / repo / method search<br/>只输出 mechanism_card.md"] --> B
+    K["可选 Scout 检索会话<br/>论文 / 仓库 / 方法检索<br/>只输出 mechanism_card.md"] --> B
     K --> C
 
-    L["可选 Archivist 归档会话<br/>memory compression<br/>registry cleanup<br/>debt clearing"] --> I
+    L["可选 Archivist 归档会话<br/>记忆压缩<br/>登记表清理<br/>债务清算"] --> I
 ```
 
 ### 标准闭环
 
 标准流程不是 “Codex 生成计划后自己执行”。完整闭环应该是：
 
-1. Problem Kernel 固化目标、失败签名、开放债务、负证据、预算状态和安全边界。
-2. Planner Session 读取这些状态，写出 `draft_plan_manifest.json`。每个候选都要说明
-   失败锚点、假设、机制、预期产物、预期信念更新、最小实验、成本、fallback 和 stop condition。
-3. Reviewer Session 读取 draft plan 和 registry，写出 `plan_review_report.md`，
+1. 问题内核固化目标、失败签名、开放债务、负证据、预算状态和安全边界。
+2. 计划会话读取这些状态，写出 `draft_plan_manifest.json`。每个候选都要说明
+   失败锚点、假设、机制、预期产物、预期信念更新、最小实验、成本、回退方案和停止条件。
+3. 审查会话读取计划草案和登记表，写出 `plan_review_report.md`，
    输出 `ACCEPT`、`REVISE`、`REJECT` 或 `ASK_HUMAN`。只有被接受的计划才会成为
    `reviewed_plan_manifest.json`。
-4. Compiler / MVE Layer 把 reviewed plan 转成 `execution_manifest.json`。
-5. Executor Session 执行 accepted manifest，记录命令 provenance、artifact inventory、
-   result report 和 blocker report，并且不能改写已经审查过的科学决策。
-6. Monitor / Safety / Budget Runtime 用低成本方式监控作业，守住队列、预算和安全边界，并在中断前写 checkpoint。
-7. Reflector Session 读取结果，写 `reflect_report.md`，给出 `PROCEED`、`REFINE`、`PIVOT` 或 `STOP`。
-8. Registry 和 memory 更新后，下一轮 Planner 从新的信念状态继续，而不是从空白 prompt 重新开始。
+4. 编译 / MVE 层把通过审查的计划转成 `execution_manifest.json`。
+5. 执行会话执行已接受的清单，记录命令来源、产物清单、结果报告和阻塞报告，并且不能改写已经审查过的科学决策。
+6. 监控 / 安全 / 预算运行时用低成本方式监控作业，守住队列、预算和安全边界，并在中断前写检查点。
+7. 复盘会话读取结果，写 `reflect_report.md`，给出 `PROCEED`、`REFINE`、`PIVOT` 或 `STOP`。
+8. 登记表和记忆更新后，下一轮计划会话从新的信念状态继续，而不是从空白提示词重新开始。
 
-这里有两次 revise。执行前 revise 由 Reviewer 完成，用来避免浪费算力；执行后 revise
-由 Reflector 完成，用来更新研究信念。
+这里有两次修订。执行前修订由审查会话完成，用来避免浪费算力；执行后修订
+由复盘会话完成，用来更新研究信念。
 
 ### 共享文件协议
 
-不同 session 之间只通过文件交接，不靠聊天记录口头理解。安装后的框架把这些
-kernel 文件放在 `.vibe/kernel/` 下，并用 `vibe kernel` 命令负责初始化、检查、
+不同会话之间只通过文件交接，不靠聊天记录口头理解。安装后的框架把这些
+内核文件放在 `.vibe/kernel/` 下，并用 `vibe kernel` 命令负责初始化、检查、
 追加证据和校验角色边界：
 
 - `PROJECT_KERNEL.md`：长期目标和绝对边界。
@@ -212,36 +209,35 @@ kernel 文件放在 `.vibe/kernel/` 下，并用 `vibe kernel` 命令负责初�
 - `FAILURE_SIGNATURES.md`：当前重点攻击的失败模式。
 - `OPEN_DEBTS.md`：未清研究债务、WATCH 和下一步证据要求。
 - `NEGATIVE_MEMORY.md`：不应重复的失败机制和路线。
-- `EVIDENCE_LEDGER.jsonl`：追加记录每轮证据、决策、artifact pointer 和信念更新。
-- `SESSION_BUDGET_STATE.json`：Codex 5h quota、weekly quota、active session、running job、resume command 和 checkpoint。
+- `EVIDENCE_LEDGER.jsonl`：追加记录每轮证据、决策、产物指针和信念更新。
+- `SESSION_BUDGET_STATE.json`：Codex 5h 额度、周额度、活跃会话、运行中作业、恢复命令和检查点。
 - `draft_plan_manifest.json`：Planner 写入。
 - `plan_review_report.md` 和 `reviewed_plan_manifest.json`：Reviewer 写入。
 - `execution_manifest.json`：Compiler 写入。
-- `artifact_inventory.json`、metrics CSV 和 job logs：Executor 写入。
-- `reflect_report.md`：Reflector 写入。
+- `artifact_inventory.json`、指标 CSV 和作业日志：执行会话写入。
+- `reflect_report.md`：复盘会话写入。
 
 内核命令面保持很小：
 
 - `vibe kernel init`：创建或修复必需 kernel 文件。
-- `vibe kernel status`：确认新 session 能从文件恢复状态。
-- `vibe kernel roles`：列出 Planner、Reviewer、Compiler、Executor、Reflector、
-  Scout 和 Archivist 的角色边界。
+- `vibe kernel status`：确认新会话能从文件恢复状态。
+- `vibe kernel roles`：列出计划、审查、编译、执行、复盘、检索和归档会话的角色边界。
 - `vibe kernel check-role`：在修改文件或执行动作前校验角色动作、输出路径和预算状态。
-- `vibe kernel record-evidence`：追加一条可审计 evidence ledger 记录。
-- `vibe kernel check-protocol`：发现缺失文件和单 session 自闭环越权。
+- `vibe kernel record-evidence`：追加一条可审计的证据台账记录。
+- `vibe kernel check-protocol`：发现缺失文件和单会话自闭环越权。
 
 ### 反偷懒规则
 
 VibeResearch 不靠一句 “不要偷懒” 来约束系统，而是让偷懒动作无法晋级：
 
-- 没有失败锚点的 plan 不能进入 Reviewer。
-- 没有预期产物和预期信念更新的 plan 不能被 `ACCEPT`。
-- repo 或 paper 如果不能转成 mechanism card 和 MVE，就不能进入执行队列。
-- smoke、import、clone、metadata、cache、readiness check 只能算 diagnostic evidence，
-  不能算 progress evidence。
+- 没有失败锚点的计划不能进入审查会话。
+- 没有预期产物和预期信念更新的计划不能被 `ACCEPT`。
+- 仓库或论文如果不能转成机制卡和 MVE，就不能进入执行队列。
+- 冒烟检查、导入、克隆、元数据、缓存和就绪检查只能算诊断证据，
+  不能算进展证据。
 - 每个 WATCH 都必须写明下一步要还的债和 TTL；过期不还就 `STOP` 或 `PIVOT`。
-- 旧失败实验换名重跑会被 Registry 拦截，除非它引入新机制、新信息源、新 artifact 或新 evidence path。
-- one-case positive 不能直接跳 submission，必须经过 subset、fold0，再到 multi-fold 或 packaging。
+- 旧失败实验换名重跑会被登记表拦截，除非它引入新机制、新信息源、新产物或新证据路径。
+- 单个样本的正信号不能直接跳到提交阶段，必须经过小子集、fold0，再到多 fold 或打包交付。
 
 ### 证据升级
 
@@ -253,62 +249,64 @@ VibeResearch 不靠一句 “不要偷懒” 来约束系统，而是让偷懒�
 - 鲁棒性证据（robustness evidence）：证明跨 case、center、fold 或 protected metrics 稳定。
 - 负证据（negative evidence）：证明哪些路线不该再做。
 
-默认升级路径是 feasibility -> one-case -> subset -> fold0 -> multi-fold 或 packaging。
-系统不能从 smoke 直接宣称成功。
+默认升级路径是：可运行性 -> 单样本 -> 小子集 -> fold0 -> 多 fold 或打包交付。
+系统不能从冒烟检查直接宣称成功。
 
 ### 预算感知运行时
 
-所有 Codex session 都必须有 5-hour quota 意识。每个 session 在启动、长任务、revise、
-reflection、sleep 或 resume 前，都要读取 `SESSION_BUDGET_STATE.json`。
+所有 Codex 会话都必须知道当前 5 小时额度。每个会话在启动、长任务、修订、
+复盘、等待或恢复前，都要读取 `SESSION_BUDGET_STATE.json`。
 `vibe session-budget init` 创建共享状态，`vibe session-budget refresh` 记录人工观察到的
-`codex --no-alt-screen` `/status` quota 文本，`vibe session-budget guard --phase PLAN|REVIEW|COMPILE|EXECUTE|REFLECT|SLEEP`
+`codex --no-alt-screen` `/status` 额度文本，`vibe session-budget guard --phase PLAN|REVIEW|COMPILE|EXECUTE|REFLECT|SLEEP`
 判断下一阶段是否允许进入。
 
-当 5h quota 低于 20% 时，只允许收尾、写 checkpoint、提交已经准备好的短 job、
-整理报告或更新 memory。当 5h quota 低于 10% 时，必须停止新推理，写 `RESUME.md`，
-记录当前阶段、下一步命令、未完成债务、job id 和必须避免重复的动作，然后 sleep
-或退出等待 renew。`vibe session-budget checkpoint --phase ...` 用来写这份恢复状态。
+当 5 小时额度低于 20% 时，只允许收尾、写检查点、提交已经准备好的短作业、
+整理报告或更新记忆。当额度低于 10% 时，必须停止新推理，写 `RESUME.md`，
+记录当前阶段、下一步命令、未完成债务、作业 ID 和必须避免重复的动作，然后等待
+或退出等额度恢复。`vibe session-budget checkpoint --phase ...` 用来写这份恢复状态。
 
-低 quota 时，Executor 优先级最高，因为它要保存工程现场；Reflector 次之，因为它要保存
-结果解释；Planner 和 Reviewer 应暂停。Slurm 长任务期间不应让 Codex 反复读日志，
-而应使用 zero-cost monitor 等待作业结束，并留下 resume command。
-`vibe session-budget wait-mode --wait-type slurm-job` 记录 job 轮询，
-`--wait-type quota-wait` 则记录基于 `wait_until_budget_reset.sh` 的 quota renew 等待。
+额度低时，执行会话优先级最高，因为它要保存工程现场；复盘会话次之，因为它要保存
+结果解释；计划和审查会话应暂停。Slurm 长任务期间不应让 Codex 反复读日志，
+而应使用低成本监控等待作业结束，并留下恢复命令。
+`vibe session-budget wait-mode --wait-type slurm-job` 记录作业轮询，
+`--wait-type quota-wait` 则记录基于 `wait_until_budget_reset.sh` 的额度恢复等待。
 
 ### Codex 的角色
 
-Codex 可以扮演 Planner、Reviewer、Executor 或 Reflector，但必须分成不同 session，
-并遵守不同权限。Codex 最适合做 Executor，因为它擅长读代码、改代码、写脚本、修报错、
-提交 Slurm 和整理 artifacts。Codex 也可以做 Reviewer，但必须是只读 Reviewer session。
-同一个 session 不能自己提出计划、自己批准、自己执行、最后自己宣布成功。
+Codex 可以扮演计划、审查、执行或复盘角色，但必须分成不同会话，并遵守不同权限。
+Codex 最适合做执行会话，因为它擅长读代码、改代码、写脚本、修报错、提交 Slurm 和整理产物。
+Codex 也可以做审查会话，但必须保持只读。同一个会话不能自己提出计划、自己批准、
+自己执行，最后再自己宣布成功。
 
-Reviewer 是整套系统最重要的防空转闸门。没有 Reviewer，系统很容易把 “能做”
+审查会话是整套系统最重要的防空转闸门。没有审查会话，系统很容易把 “能做”
 误判成 “值得做”。
 
 ### 版本路线
 
-0.12 之后的路线是 VibeResearch 自己的 OS 架构，不是对外部 auto-research 框架的简单包装：
+0.12 之后的路线是 VibeResearch 自己的 OS 架构，不是对外部自动科研框架的简单包装：
 
-- 0.13：session-oriented kernel 和共享文件协议。
-- 0.14：Planner、Reviewer 和 revision loop。
-- 0.15：Compiler 和 MVE contract。
-- 0.16.0-0.16.1：Executor session 和 boundary guard。
-- 0.16.2：Budget-Aware Session Runtime。
-- 0.17：Reflector 和 Belief Ratchet。
-- 0.18：Research Registry、Immune System 和 WATCH TTL。
-- 0.19：Knowledge-to-Experiment pipeline。
-- 0.20：VibeResearch OS Beta 和 Anti-Stall Benchmark。
+- 0.13：面向多会话的内核和共享文件协议。
+- 0.14：计划、审查和修订闭环。
+- 0.15：编译层和 MVE 契约。
+- 0.16.0-0.16.1：执行会话和边界保护。
+- 0.16.2：预算感知运行时。
+- 0.17：复盘和信念推进。
+- 0.18：研究登记表、免疫系统和 WATCH 时限。
+- 0.19：从知识到实验的管线。
+- 0.20：VibeResearch OS Beta、防空转基准、提示词回归问题收尾，
+  以及持续研究态势简报和用户想法收件箱的 CLI/文件协议实现。
+  其中 0.20.3 明确实现了 v0.19 手工提示词要求的研究态势简报和用户指导入口。
 
 ### 最小运行流程
 
-1. 打开 Planner Codex session，只允许生成 `draft_plan_manifest.json`。
-2. 打开 Reviewer Codex session，只允许生成 `plan_review_report.md` 和
+1. 打开计划 Codex 会话，只允许生成 `draft_plan_manifest.json`。
+2. 打开审查 Codex 会话，只允许生成 `plan_review_report.md` 和
    `reviewed_plan_manifest.json`。
-3. 打开 Executor Codex session，只允许执行通过 review 的 `execution_manifest.json`。
-4. 打开 Reflector Codex session，只读结果，并更新 `reflect_report.md`、
+3. 打开执行 Codex 会话，只允许执行通过审查的 `execution_manifest.json`。
+4. 打开复盘 Codex 会话，只读结果，并更新 `reflect_report.md`、
    `NEGATIVE_MEMORY.md`、`OPEN_DEBTS.md` 和 `EVIDENCE_LEDGER.jsonl`。
-5. 如果需要查新 paper、repo 或方法，再临时打开 Scout Session。
-6. 如果 memory 或 registry 变乱，再临时打开 Archivist Session。
+5. 如果需要查新论文、仓库或方法，再临时打开检索会话。
+6. 如果记忆或登记表变乱，再临时打开归档会话。
 
 ## 安装
 
@@ -392,7 +390,7 @@ VibeResearch 的持久状态都在 `.vibe/` 下：
 
 ```text
 .vibe/
-  project/                 项目 brief 和初始化上下文
+  project/                 项目简报和初始化上下文
   config.yaml              框架配置
   adapter.yaml             项目能力声明
   adapter_questions.yaml   激活前需要回答的问题
@@ -469,7 +467,7 @@ discovery:
 
 更完整的接入、本地试运行、旧状态归档和就绪门控说明见 [Bootstrap 指南](bootstrap/README_CN.md)。
 
-## Adapter 接入
+## Adapter（能力接入）
 
 Adapter 是项目自己的能力声明，用来说明 VibeResearch 可以做什么。真正的训练、评估、推理和提交逻辑仍然属于下游项目，由 `.vibe/scripts/` 中的薄封装脚本调用。VibeResearch 主框架不保存项目特定执行逻辑。
 
@@ -493,7 +491,9 @@ vibe adapter activate metrics_export --confirm "reviewed by project owner"
 
 `.vibe/scripts/` 中生成的封装脚本默认是草案，不能直接视为可信。通常应先建立评估或指标导出能力，再考虑训练自动化；GPU 和长任务能力必须有明确的资源策略。
 
-Instrumentation readiness 和真实实验 readiness 是两件事。环境探针、数据探针和 baseline inventory 可以验证项目表面，但不代表已经可以推进方法或评估实验。真实实验前需要补齐评估命令、指标格式、baseline/proxy、后端策略、collector 和项目安全规则：
+接入就绪和真实实验就绪是两件事。环境探针、数据探针和基线清单可以验证项目表面，
+但不代表已经可以推进方法或评估实验。真实实验前需要补齐评估命令、指标格式、
+基线或代理指标、后端策略、收集器和项目安全规则：
 
 ```bash
 vibe adapter real-gaps
@@ -519,9 +519,11 @@ vibe dashboard export-research
 
 晋升需要可信且符合指标格式的证据，并且受保护指标不能出现不可接受的回退。停止假设需要可信负证据或明确的用户决定。同构重复实验、未知成本、缺脚本、缺指标格式和缺 `active` 能力都会在执行前被阻止。
 
-## 谱系、Scout 与自有框架
+## 谱系、检索与自有框架
 
-VibeResearch 可以记录项目如何从外部工具逐步走向自有实现。它会区分几类不同状态：直接调用外部仓库、封装外部能力、受外部想法启发、正在内部 shadow 复现，以及可以作为 owned core 候选的自有实现。这些状态不能混在一起。
+VibeResearch 可以记录项目如何从外部工具逐步走向自有实现。它会区分几类不同状态：
+直接调用外部仓库、封装外部能力、受外部想法启发、正在内部影子复现，以及可以作为
+自有核心候选的实现。这些状态不能混在一起。
 
 常用谱系和内化命令：
 
@@ -533,7 +535,9 @@ vibe internalization readiness proposal_001
 vibe internalization memory
 ```
 
-Scout 查到的资料必须先结构化，才能影响实验或内化决策。框架会记录 relevance、specificity、actionability、novelty、credibility、实现细节和 failure-mode fit。背景资料会被保留，但不会自动变成实验依据。
+检索会话查到的资料必须先结构化，才能影响实验或内化决策。框架会记录相关性、
+具体程度、可行动性、新颖性、可信度、实现细节和失败模式匹配度。背景资料会被保留，
+但不会自动变成实验依据。
 
 ```bash
 vibe scout query-context
@@ -543,7 +547,7 @@ vibe scout claim --finding-id scout_001 --claim "..."
 vibe scout audit
 ```
 
-Dual-track portfolio 用来让外部路线和内部路线保持可比较：
+双轨组合用来让外部路线和内部路线保持可比较：
 
 ```bash
 vibe portfolio track-plan --experiment-id exp_001 --track external
@@ -553,7 +557,8 @@ vibe portfolio track-audit --track-record-id track_002 --target-level hybrid_int
 vibe portfolio track-memo
 ```
 
-Owned framework alpha 必须来自已经通过审查的 proposal，并且会把项目自有脚手架写入下游仓库。VibeResearch 只提供通用的生成、审计、接口测试和 adapter 机制，不把项目特定模型逻辑写进主框架。
+自有框架 alpha 必须来自已经通过审查的提案，并且会把项目自有脚手架写入下游仓库。
+VibeResearch 只提供通用的生成、审计、接口测试和 adapter 机制，不把项目特定模型逻辑写进主框架。
 
 ```bash
 vibe owned scaffold proposal_001 --framework-name owned_eval
@@ -562,7 +567,7 @@ vibe owned shadow-plan proposal_001
 vibe owned audit owned_eval --proposal-id proposal_001
 ```
 
-当 owned alpha 已经存在后，后续优化应当按 champion/challenger 推进，而不是无边界地扫参数：
+当自有 alpha 已经存在后，后续优化应当按“主版本/挑战版本”推进，而不是无边界地扫参数：
 
 ```bash
 vibe optimize champion --stage shadow --candidate-id owned_eval --evidence-id ev_001 --budget-policy-ok --rationale "trusted comparison"
@@ -623,6 +628,40 @@ vibe ingest-deep-research dr001_idea_001 --kind benchmark
 
 支持 Markdown 和 PDF 报告。PDF 文本抽取优先使用 PyMuPDF，不做 OCR。
 
+## 研究态势简报与用户指导
+
+v0.19 手工提示词已经按后端协议实现，不依赖网页表单。用户可以随时通过
+CLI 输入新想法，系统会把它记录成计划和审查环节必须考虑的高优先级指导：
+
+```bash
+vibe idea "CenterC false positives 可能需要 component-level verifier"
+vibe guidance add "下一轮优先检查 T2 对齐" --language zh --priority high
+vibe guidance list --status ACTIVE
+vibe guidance review guidance_001 --status NEEDS_MORE_EVIDENCE --notes "需要 fold0 证据"
+```
+
+持久文件是 `.vibe/research/human_guidance.jsonl` 和
+`.vibe/research/HUMAN_IDEA_INBOX.md`。计划会话生成草案时，必须说明哪些活跃指导
+被吸收，哪些暂时不用以及原因；审查会话会把没有解释就忽略活跃指导的计划退回修订。
+
+当前研究态势简报用下面命令生成：
+
+```bash
+vibe brief update --language zh
+vibe brief show --language en
+```
+
+它会写入 `.vibe/research/CURRENT_RESEARCH_BRIEF.zh.md`、
+`.vibe/research/CURRENT_RESEARCH_BRIEF.en.md` 和
+`.vibe/research/research_brief.json`。这份简报不是日志，而是从项目状态、
+失败签名、证据、负证据、开放债务、真实实验进度、活跃用户指导和未消费机制卡
+中生成的人类可读判断。它不能把冒烟、导入或克隆当成真实进展，也不能把 WATCH
+说成 GO。
+
+当前静态看板是只读的，可以查看进展和想法；未来网页看板可以直接读取这些简报
+和指导文件。目前输入新想法应使用 `vibe idea`、`vibe guidance add`，或按
+上述文件协议编辑 `.vibe/` 下的记录。
+
 ## 调度与 Slurm
 
 调度器是确定性的，并且会遵守预算。未通过预演、清单无效、依赖未满足、超预算或被审阅阻塞的任务都不会提交。
@@ -648,10 +687,10 @@ vibe submit-queue --backend slurm
 vibe monitor --loop --auto-next
 ```
 
-如果配置了 preferred 和 fallback Slurm 分区，提交时默认使用 preferred 分区。
-`sinfo` 显示 fallback 可用，并不足以绕过 preferred 分区。只有等待策略证据表明 preferred 分区对当前 run 的预算来说明显太慢时，才会选择 fallback。提交记录会区分 `preferred_partition_selected` 和 `fallback_selected_after_wait_policy`。
+如果配置了 preferred（首选）和 fallback（备用）Slurm 分区，提交时默认使用首选分区。
+`sinfo` 显示备用分区可用，并不足以绕过首选分区。只有等待策略证据表明首选分区对当前运行预算来说明显太慢时，才会选择备用分区。提交记录会区分 `preferred_partition_selected` 和 `fallback_selected_after_wait_policy`。
 
-如果发现一个还未开始运行的任务落在 fallback 分区，而策略要求回到 preferred 分区，dry-run 审批材料会给出可直接执行的命令：
+如果发现一个还未开始运行的任务落在备用分区，而策略要求回到首选分区，dry-run 审批材料会给出可直接执行的命令：
 
 ```bash
 vibe scheduler-requeue-fallback

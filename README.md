@@ -378,7 +378,10 @@ around an external auto-research framework:
 - 0.17: Reflector and Belief Ratchet.
 - 0.18: Research Registry, Immune System, and WATCH TTL.
 - 0.19: Knowledge-to-Experiment pipeline.
-- 0.20: VibeResearch OS Beta and Anti-Stall Benchmark.
+- 0.20: VibeResearch OS Beta, Anti-Stall Benchmark, prompt-regression closure,
+  and the CLI/file-protocol implementation of Living Research Brief plus Human
+  Guidance Inbox. In particular, 0.20.3 implements the v0.19 manual prompt for
+  persistent research-state summaries and user guidance intake.
 
 ### Minimal Operating Procedure
 
@@ -760,6 +763,44 @@ vibe ingest-deep-research dr001_idea_001 --kind benchmark
 
 Markdown and PDF reports are supported. PDF extraction uses PyMuPDF when
 available; OCR is not attempted.
+
+## Living Brief And Human Guidance
+
+The v0.19 manual prompt is implemented as a backend protocol, not as a web
+form. Users can provide new ideas through the CLI at any time, and the framework
+records them as high-priority guidance for Planner and Reviewer:
+
+```bash
+vibe idea "CenterC false positives may need a component-level verifier"
+vibe guidance add "Prioritize T2 alignment analysis" --language en --priority high
+vibe guidance list --status ACTIVE
+vibe guidance review guidance_001 --status NEEDS_MORE_EVIDENCE --notes "needs fold0 evidence"
+```
+
+The durable files are `.vibe/research/human_guidance.jsonl` and
+`.vibe/research/HUMAN_IDEA_INBOX.md`. Planner drafts must absorb active
+guidance or explain why it is unused; Reviewer sends plans back for revision
+when active guidance is ignored without justification.
+
+The current research-state summary is generated with:
+
+```bash
+vibe brief update --language zh
+vibe brief show --language en
+```
+
+This writes `.vibe/research/CURRENT_RESEARCH_BRIEF.zh.md`,
+`.vibe/research/CURRENT_RESEARCH_BRIEF.en.md`, and
+`.vibe/research/research_brief.json`. The brief is evidence-grounded: it reads
+local project state, failure signatures, evidence, negative memory, open debts,
+real-experiment progress, active guidance, and unconsumed mechanism cards. It
+does not treat smoke/import/clone checks as real progress or upgrade WATCH
+items to GO.
+
+The static dashboard is currently read-only. It can show progress and ideas,
+and future dashboards can read the brief and guidance files directly. Today,
+new user input should use `vibe idea`, `vibe guidance add`, or edits to the
+documented `.vibe/` files.
 
 ## Scheduler And Slurm
 

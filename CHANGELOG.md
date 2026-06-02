@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.20.4 - 2026-06-02
+
+- Clarify README and Chinese README coverage for the v0.19 manual prompt
+  implemented in 0.20.3.
+- Document the current CLI/file-protocol entry points for Living Research Brief
+  and Human Guidance Inbox usage.
+- State the read-only dashboard boundary explicitly: progress can be viewed
+  through the static dashboard today, while user input is currently accepted
+  through CLI and `.vibe/` files rather than a web form.
+- Run a Chinese README final pass so architecture, CLI entry points, and
+  guidance/brief behavior are readable for Chinese users while preserving
+  required command names, file paths, and schema terms.
+
 ## 0.20.3 - 2026-06-01
 
 - Add a Living Research Brief backend protocol with
