@@ -117,6 +117,12 @@ session。过期 debt 会变成 STOP negative memory，或变成必须回到 Rev
 `vibe scout mechanism-card` 和 `vibe planner draft-from-card` 把外部知识先转成机制，再进入规划。
 paper、repo、deep research note 和用户想法都必须先形成带 possible MVE 的 `mechanism_card.md`，
 再由 Planner/Reviewer/Compiler 转成执行清单；clone 或 install 本身不能作为实验目标。
+已验证机制卡进入 `PLAN_CANDIDATE` 后，常规 cycle 规划会先消费这张卡，再回退到通用
+baseline / diagnostic 模板。cycle state、`portfolio_plan.md`、`resource_plan.yaml`、Codex
+prompt context 和 dashboard status 都会保留 card id、source、required assets、stop reason、
+active adapter surface 和 expected metric artifact。若 run metadata 里有尚未注册的
+`experiment_id`，collect 会写入 `research_evidence_link_skipped`，保留已产生的 metrics，
+不会在执行完成后崩溃。
 `vibe knowledge audit` 和 `vibe knowledge advance-ttl` 执行 No Orphan Knowledge：repo、
 paper、deep-note、mechanism-card 和用户想法如果两轮内没有变成 active mechanism、negative
 evidence 或 archived reference，就会过期为 EXPIRED_ORPHAN 并写入 registry。

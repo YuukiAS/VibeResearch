@@ -156,6 +156,8 @@ def write_decision(paths: VibePaths, decision: ResearchDecision) -> Path:
     path = decision_path(paths, decision.target_id)
     write_json(path, decision.model_dump())
     append_jsonl(paths.state / "decisions.jsonl", decision.model_dump())
+    if decision.decision_type not in BLOCK_DECISIONS:
+        clear_answered_missing_decision_block(paths, decision)
     event = "decision_blocked" if decision.decision_type in BLOCK_DECISIONS else "decision_written"
     record_event(
         paths,
@@ -167,6 +169,64 @@ def write_decision(paths: VibePaths, decision: ResearchDecision) -> Path:
         payload=decision.model_dump(),
     )
     return path
+
+
+def clear_answered_missing_decision_block(paths: VibePaths, decision: ResearchDecision) -> None:
+    state = read_json(paths.state / "state.json", {})
+    target_id = decision.target_id
+    if not block_points_to_target(state, target_id):
+        return
+    state["status"] = "initialized"
+    state["blocked_reason"] = ""
+    if target_id.startswith("r"):
+        run = state.setdefault("runs", {}).setdefault(target_id, {})
+        if (paths.runs / target_id / "revised_plan.md").exists():
+            run["status"] = "revised"
+        elif (paths.runs / target_id / "reflect.md").exists():
+            run["status"] = "reflected"
+        elif (paths.runs / target_id / "metrics.json").exists():
+            run["status"] = "collected"
+        cycle_id = str(run.get("cycle_id") or "")
+        state["next_action"] = next_after_run_decision(paths, state, cycle_id)
+    elif target_id.startswith("c"):
+        cycle = state.setdefault("cycles", {}).setdefault(target_id, {})
+        if (paths.cycles / target_id / "cycle_revised_plan.md").exists():
+            cycle["status"] = "revised"
+            state["next_action"] = "vibe plan-cycle"
+        elif (paths.cycles / target_id / "cycle_reflect.md").exists():
+            cycle["status"] = "reflected"
+            state["next_action"] = f"vibe revise-cycle {target_id}"
+        else:
+            state["next_action"] = f"vibe generate-runs {target_id}"
+    else:
+        state["next_action"] = "vibe next"
+    state["updated_at"] = utc_now()
+    write_json(paths.state / "state.json", state)
+
+
+def block_points_to_target(state: dict[str, Any], target_id: str) -> bool:
+    if str(state.get("next_action", "")) != f"vibe decision show {target_id}":
+        return False
+    status = str(state.get("status", ""))
+    reason = str(state.get("blocked_reason", ""))
+    return status == "blocked_missing_decision" or "missing" in status or "missing decision" in reason
+
+
+def next_after_run_decision(paths: VibePaths, state: dict[str, Any], cycle_id: str) -> str:
+    runs = sorted((state.get("runs", {}) if isinstance(state.get("runs"), dict) else {}).items())
+    for run_id, run in runs:
+        if cycle_id and run.get("cycle_id") != cycle_id:
+            continue
+        status = str(run.get("status", ""))
+        if status in {"finished", "submitted_dry"}:
+            return f"vibe collect {run_id}"
+        if status == "collected":
+            return f"vibe reflect {run_id}"
+        if status == "reflected":
+            return f"vibe revise-plan {run_id}"
+    if cycle_id:
+        return f"vibe reflect-cycle {cycle_id}"
+    return "vibe next"
 
 
 def write_block_decision(paths: VibePaths, target_id: str, reason: str, *, decision_type: DecisionType = "blocked_missing_decision") -> ResearchDecision:

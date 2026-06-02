@@ -156,6 +156,14 @@ knowledge through mechanism extraction before planning. Papers, repositories,
 deep research notes, and user ideas must become a `mechanism_card.md` with a
 possible MVE before Planner/Reviewer/Compiler can turn them into execution
 manifests; clone or install steps alone are not experiment goals.
+When a validated mechanism card reaches `PLAN_CANDIDATE`, regular cycle
+planning consumes it before falling back to generic baseline/diagnostic
+templates. The cycle state, `portfolio_plan.md`, `resource_plan.yaml`, Codex
+prompt context, and dashboard status all carry the card id, source, required
+assets, stop reason, active adapter surface, and expected metric artifact.
+If a run still carries research metadata for an unregistered `experiment_id`,
+collect records `research_evidence_link_skipped` and keeps the metrics instead
+of crashing after execution.
 `vibe knowledge audit` and `vibe knowledge advance-ttl` enforce No Orphan
 Knowledge. Active repo, paper, deep-note, mechanism-card, and user-idea inputs
 expire after two cycles unless they become an active mechanism, negative

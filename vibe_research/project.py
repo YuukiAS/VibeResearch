@@ -18,6 +18,7 @@ from .ideas import ensure_idea_pool
 from .ideas import render_idea_views
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, slugify, utc_now, write_json, write_text, write_yaml
 from .kernel import initialize_kernel
+from .knowledge_lifecycle import mark_card_cycle_planned, unconsumed_plan_candidate_cards
 from .models import IdeaRecord, ProjectConfig, RunManifest, default_budget, default_state
 from .papers import connect
 from .paths import VibePaths
@@ -683,9 +684,10 @@ def create_cycle(paths: VibePaths, *, mode: str | None = None) -> str:
     cycle_dir = paths.cycles / cycle_id
     ensure_dir(cycle_dir)
     selected_mode = mode or state.get("portfolio_mode", "exploration")
-    write_text(cycle_dir / "portfolio_plan.md", portfolio_plan_template(paths, cycle_id, selected_mode))
+    mechanism_card = next(iter(unconsumed_plan_candidate_cards(paths)), {})
+    write_text(cycle_dir / "portfolio_plan.md", portfolio_plan_template(paths, cycle_id, selected_mode, mechanism_card=mechanism_card))
     write_text(cycle_dir / "portfolio_review.md", "# Portfolio Review\n\nVerdict: PENDING\n")
-    write_yaml(cycle_dir / "resource_plan.yaml", default_resource_plan(cycle_id, selected_mode))
+    write_yaml(cycle_dir / "resource_plan.yaml", default_resource_plan(cycle_id, selected_mode, mechanism_card=mechanism_card))
     write_text(cycle_dir / "runs.txt", "")
     state["current_cycle_id"] = cycle_id
     state["portfolio_mode"] = selected_mode
@@ -693,6 +695,14 @@ def create_cycle(paths: VibePaths, *, mode: str | None = None) -> str:
     state["blocked_reason"] = ""
     state["next_action"] = f"vibe review-cycle {cycle_id}"
     state["cycles"][cycle_id] = {"status": "planned", "mode": selected_mode, "created_at": utc_now()}
+    if mechanism_card:
+        state["cycles"][cycle_id]["mechanism_card"] = {
+            "card_id": mechanism_card.get("card_id", ""),
+            "card_path": mechanism_card.get("card_path", ""),
+            "source_type": mechanism_card.get("source_type", ""),
+            "source": mechanism_card.get("source", ""),
+        }
+        mark_card_cycle_planned(paths, mechanism_card, cycle_id=cycle_id)
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
     record_event(paths, "cycle_planned", f"Created portfolio plan for {cycle_id}", cycle_id=cycle_id, status="planned")
@@ -740,7 +750,7 @@ def cycle_revised_plan_block(paths: VibePaths, state: dict[str, Any]) -> str:
     return ""
 
 
-def portfolio_plan_template(paths: VibePaths, cycle_id: str, mode: str) -> str:
+def portfolio_plan_template(paths: VibePaths, cycle_id: str, mode: str, *, mechanism_card: dict[str, Any] | None = None) -> str:
     ideas = read_jsonl(paths.inbox / "triage.jsonl")[-20:]
     idea_lines = "\n".join(f"- {row['idea_id']}: {row['raw_text']}" for row in ideas) or "- none"
     pool_rows = [
@@ -749,6 +759,46 @@ def portfolio_plan_template(paths: VibePaths, cycle_id: str, mode: str) -> str:
         if row.get("status") in {"active", "actionable_next_run", "queued_for_cycle", "needs_literature_refresh"}
     ][-20:]
     pool_lines = "\n".join(f"- {row.get('idea_id', '')} [{row.get('status', '')}]: {row.get('raw_text', '')}" for row in pool_rows) or "- none"
+    card = mechanism_card or {}
+    if card:
+        assets = "\n".join(f"- {item}" for item in card.get("required_assets", [])) or "- none"
+        risks = "\n".join(f"- {item}" for item in card.get("risks", [])) or "- none"
+        active_caps = active_adapter_capability_lines(paths)
+        candidate_directions = (
+            f"- mechanism-card-{card.get('card_id', '')}: {card.get('mechanism_extraction', '')}\n"
+            f"  failure anchor: {card.get('failure_anchor', '')}\n"
+            f"  source: {card.get('source_type', '')} {card.get('source', '')}\n"
+            f"  required assets:\n{indent_lines(assets, '  ')}\n"
+            f"  active adapter capabilities:\n{indent_lines(active_caps, '  ')}"
+        )
+        selected_runs = (
+            f"- {card.get('card_id', 'mechanism_card')}_mve: run the mechanism-card MVE, expected artifact="
+            f"`.vibe/runs/{str(card.get('card_id', 'mechanism_card')).replace('_', '-')}/mechanism_card_metrics.json`"
+        )
+        success = f"Mechanism card `{card.get('card_id', '')}` yields schema-valid metric evidence that can update belief on `{card.get('failure_anchor', '')}`."
+        stop = card.get("stop_reason", "") or "Stop if the mechanism-card MVE produces no interpretable metric artifact."
+        provenance = (
+            "## Mechanism card provenance\n"
+            f"- card_id: `{card.get('card_id', '')}`\n"
+            f"- card_path: `{card.get('card_path', '')}`\n"
+            f"- claim: {card.get('claim', '')}\n"
+            f"- possible MVE: {card.get('possible_mve', '')}\n"
+            f"- risks:\n{indent_lines(risks, '  ')}\n"
+        )
+    else:
+        candidate_directions = (
+            "- d001_baseline: establish or verify a trusted baseline.\n"
+            "- d002_diagnostics: cheap evaluator and provenance checks.\n"
+            "- d003_experiment: first research hypothesis from the inbox or project brief."
+        )
+        selected_runs = (
+            "- r001_baseline_check: direction=d001_baseline, cost=low, expected learning=baseline validity.\n"
+            "- r002_diagnostic_check: direction=d002_diagnostics, cost=low, expected learning=evaluator reliability.\n"
+            "- r003_first_hypothesis: direction=d003_experiment, cost=medium, expected learning=whether the first research hypothesis is promising."
+        )
+        success = "At least one trusted baseline/diagnostic result and one actionable next direction."
+        stop = "Pause a direction after repeated guardrail failures or missing metric provenance."
+        provenance = ""
     return f"""# Portfolio Plan for {cycle_id}
 
 ## Stage
@@ -764,33 +814,89 @@ No trusted improvement has been recorded yet.
 {pool_lines}
 
 ## Candidate directions
-- d001_baseline: establish or verify a trusted baseline.
-- d002_diagnostics: cheap evaluator and provenance checks.
-- d003_experiment: first research hypothesis from the inbox or project brief.
+{candidate_directions}
 
 ## Selected runs
-- r001_baseline_check: direction=d001_baseline, cost=low, expected learning=baseline validity.
-- r002_diagnostic_check: direction=d002_diagnostics, cost=low, expected learning=evaluator reliability.
-- r003_first_hypothesis: direction=d003_experiment, cost=medium, expected learning=whether the first research hypothesis is promising.
+{selected_runs}
 
 ## Dependency graph
-r001 and r002 can run independently. r003 should wait for r001 if baseline validity is unknown.
+Mechanism-card MVEs should run only after required assets and adapter capabilities are present; otherwise Reviewer must block with the missing asset or capability.
 
 ## Resource budget
 Use scheduler budget from `.vibe/scheduler/budget.yaml`; cheap diagnostics first.
 
 ## Portfolio success criteria
-At least one trusted baseline/diagnostic result and one actionable next direction.
+{success}
 
 ## Stop or shrink criteria
-Pause a direction after repeated guardrail failures or missing metric provenance.
+{stop}
+
+{provenance}
 
 ## Idea pool update
 Selected ideas are considered from `.vibe/ideas/registry.jsonl`; defer, reject, or mark deep research candidates during revised planning.
 """
 
 
-def default_resource_plan(cycle_id: str, mode: str) -> dict[str, Any]:
+def active_adapter_capability_lines(paths: VibePaths) -> str:
+    readiness = adapter_readiness(paths)
+    active = readiness.get("active_capabilities", [])
+    if not active:
+        return "- none"
+    return "\n".join(f"- {capability_id}" for capability_id in active)
+
+
+def indent_lines(text: str, prefix: str) -> str:
+    return "\n".join(prefix + line if line else line for line in text.splitlines())
+
+
+def default_resource_plan(cycle_id: str, mode: str, *, mechanism_card: dict[str, Any] | None = None) -> dict[str, Any]:
+    card = mechanism_card or {}
+    if card:
+        card_slug = str(card.get("card_id") or "mechanism_card").replace("_", "-")
+        return {
+            "cycle_id": cycle_id,
+            "mode": mode,
+            "max_parallel_jobs": 1,
+            "max_gpu_jobs": 0,
+            "mechanism_card": {
+                "card_id": card.get("card_id", ""),
+                "card_path": card.get("card_path", ""),
+                "source_type": card.get("source_type", ""),
+                "source": card.get("source", ""),
+                "required_assets": card.get("required_assets", []),
+                "stop_reason": card.get("stop_reason", ""),
+            },
+            "research_metadata": {
+                "hypothesis_id": card.get("card_id", ""),
+                "decision_id": card.get("card_id", ""),
+                "stage": "mechanism_card_mve",
+                "mechanism_card_id": card.get("card_id", ""),
+                "mechanism_card_path": card.get("card_path", ""),
+            },
+            "runs": {
+                f"{card_slug}-mve": {
+                    "priority": 1,
+                    "direction_id": f"mechanism_{card.get('card_id', 'card')}",
+                    "hypothesis": card.get("claim", ""),
+                    "expected_learning": f"Whether {card.get('mechanism_extraction', '')} changes belief on {card.get('failure_anchor', '')}.",
+                    "cost": "low",
+                    "can_parallel": True,
+                    "depends_on": [],
+                    "cancel_if_failed": [],
+                    "outputs": {"expected_output_path": f".vibe/runs/{card_slug}/mechanism_card_metrics.json"},
+                    "evaluation": {"metrics_file_path": f".vibe/runs/{card_slug}/mechanism_card_metrics.json"},
+                    "research_metadata": {
+                        "hypothesis_id": card.get("card_id", ""),
+                        "decision_id": card.get("card_id", ""),
+                        "stage": "mechanism_card_mve",
+                        "mechanism_card_id": card.get("card_id", ""),
+                        "mechanism_card_path": card.get("card_path", ""),
+                    },
+                }
+            },
+            "cancel_rules": [],
+        }
     return {
         "cycle_id": cycle_id,
         "mode": mode,

@@ -614,10 +614,14 @@ def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_route
     if state_status == "blocked_missing_capability" or str(state.get("blocked_reason", "")).startswith("blocked_missing_capability"):
         issues.append("blocked_missing_capability")
     real_progress = summarize_real_experiment_progress(paths)
+    current_cycle_id = str(state.get("current_cycle_id") or "")
+    countable_real_runs = real_progress.get("countable_runs", [])
     real_repair_blockers = [
         row
         for row in real_progress.get("non_counting_real_experiment_runs", [])
-        if row.get("requires_repair") and row.get("status") in {"failed", "timeout", "cancelled", "dryrun_failed"}
+        if row.get("requires_repair")
+        and row.get("status") in {"failed", "timeout", "cancelled", "dryrun_failed"}
+        and real_repair_blocker_in_active_scope(row, countable_real_runs, current_cycle_id=current_cycle_id)
     ]
     if real_repair_blockers:
         issues.append("real_experiment_repair_required")
@@ -655,6 +659,20 @@ def sustained_round_audit(paths: VibePaths, *, target_rounds: int = 3, min_route
     write_text(paths.research / "sustained_round_audit.md", render_sustained_round_audit(result))
     append_research_event(paths, "sustained_round_audit", {"complete": result["complete"], "issues": issues, "completed_round_count": len(completed_rounds)})
     return result
+
+
+def real_repair_blocker_in_active_scope(row: dict[str, Any], countable_rows: list[dict[str, Any]], *, current_cycle_id: str) -> bool:
+    if len(countable_rows) >= 1:
+        row_capability = str(row.get("capability_id") or "")
+        row_direction = str(row.get("direction_id") or "")
+        for counted in countable_rows:
+            if row_capability and counted.get("capability_id") == row_capability:
+                return False
+            if row_direction and counted.get("direction_id") == row_direction:
+                return False
+    if current_cycle_id:
+        return row.get("cycle_id") == current_cycle_id
+    return True
 
 
 def audit_cycle_round(paths: VibePaths, cycle_id: str, runs: dict[str, Any], min_routes_per_round: int) -> dict[str, Any]:
@@ -1737,6 +1755,27 @@ def collect_run_evidence_if_research_linked(paths: VibePaths, run_id: str, metri
     metadata = run.get("research_metadata", {}) if isinstance(run.get("research_metadata"), dict) else {}
     experiment_id = metadata.get("experiment_id", "")
     if not experiment_id:
+        return
+    if experiment_id not in load_experiments(paths):
+        record = {
+            "created_at": utc_now(),
+            "run_id": run_id,
+            "experiment_id": experiment_id,
+            "reason": "unknown_experiment",
+            "action": "skipped_research_manager_evidence_link",
+            "mechanism_card_id": metadata.get("mechanism_card_id", ""),
+            "metrics_file": metrics.get("metrics_file_path", ""),
+        }
+        append_jsonl(paths.research / "evidence_link_skipped.jsonl", record)
+        record_event(
+            paths,
+            "research_evidence_link_skipped",
+            f"{run_id}: unknown experiment {experiment_id}",
+            cycle_id=run.get("cycle_id", ""),
+            run_id=run_id,
+            status="skipped_unknown_experiment",
+            payload=record,
+        )
         return
     add_evidence(
         paths,

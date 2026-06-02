@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.20.2 - 2026-06-01
+
+- Close common v0.19 prompt regressions without running a downstream CARE
+  round.
+- Prioritize unconsumed `PLAN_CANDIDATE` mechanism cards when creating regular
+  portfolio cycles, and preserve card provenance in cycle state, portfolio plan,
+  resource plan, prompt context, and dashboard status.
+- Make Research Manager evidence linking tolerant of unregistered
+  `experiment_id` metadata by recording `research_evidence_link_skipped`
+  instead of crashing collect after metrics are written.
+- Restore `compute-next` as a deprecated compatibility alias for `auto-next`.
+- Clear same-target `blocked_missing_decision` state when `decision write`
+  records a newer non-block decision.
+- Scope stale real-experiment repair blockers to the active cycle unless later
+  counted evidence for the same capability or direction supersedes them.
+
 ## 0.20.1 - 2026-06-01
 
 - Add an Anti-Stall Benchmark for framework-level trap detection and scoring.

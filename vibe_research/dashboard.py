@@ -7,6 +7,7 @@ from typing import Any
 from .adapter_onboarding import adapter_readiness
 from .ideas import ensure_idea_pool, read_ideas, render_idea_views
 from .io import read_json, read_jsonl, write_json, write_text
+from .knowledge_lifecycle import unconsumed_plan_candidate_cards
 from .paths import VibePaths
 from .portal import build_portal, write_portal_text
 from .research_manager import budget_status, load_hypotheses, research_readiness
@@ -55,6 +56,7 @@ def render_status(paths: VibePaths) -> str:
     real_progress = summarize_real_experiment_progress(paths, write=True)
     budget = budget_status(paths)
     hypotheses = load_hypotheses(paths)
+    unconsumed_cards = unconsumed_plan_candidate_cards(paths)
     lines.extend(
         [
             "",
@@ -64,8 +66,13 @@ def render_status(paths: VibePaths) -> str:
             f"Active hypotheses: `{len([row for row in hypotheses.values() if row.get('status') in {'active', 'needs_analysis'}])}`",
             f"Budget remaining today: `{budget.get('remaining_daily_gpu_hours', 0)}` GPU-hours, `{budget.get('remaining_daily_jobs', 0)}` jobs",
             f"Real experiment progress: `{real_progress.get('observed_count', 0)}` / `{real_progress.get('target_count', 3)}`",
+            f"Unconsumed mechanism cards: `{len(unconsumed_cards)}`",
         ]
     )
+    if unconsumed_cards:
+        lines.extend(["", "### Unconsumed Mechanism Cards", ""])
+        for card in unconsumed_cards[:8]:
+            lines.append(f"- `{card.get('card_id', '')}` {card.get('mechanism_extraction', card.get('source', ''))}")
     lines.extend(["", "## Runs", ""])
     runs = state.get("runs", {})
     if not runs:
@@ -221,6 +228,7 @@ def sync_dashboard(paths: VibePaths) -> None:
             "adapter_readiness": adapter_readiness(paths),
             "research_readiness": research_readiness(paths),
             "research_budget": budget_status(paths),
+            "unconsumed_mechanism_cards": unconsumed_plan_candidate_cards(paths),
         },
     )
     sync_timeline_files(paths)

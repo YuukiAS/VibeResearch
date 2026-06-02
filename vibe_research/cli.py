@@ -3060,6 +3060,7 @@ def fallback_requeue_cmd(
 
 
 @app.command("auto-next")
+@app.command("compute-next")
 def auto_next_cmd(
     target: Path = typer.Option(Path("."), "--target", "-t"),
     offline: bool = typer.Option(False, "--offline"),

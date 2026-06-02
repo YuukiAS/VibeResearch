@@ -89,10 +89,10 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     current_run_step = current_cycle_run_lifecycle_step(paths, state)
     if current_run_step:
         return current_run_step, ""
-    progress = summarize_real_experiment_progress(paths)
-    if blocking_real_experiment_repairs(progress):
-        return "vibe experiment real-progress", "real_experiment_repair_required"
     cycle_id = state.get("current_cycle_id", "")
+    progress = summarize_real_experiment_progress(paths)
+    if blocking_real_experiment_repairs(progress, current_cycle_id=str(cycle_id or "")):
+        return "vibe experiment real-progress", "real_experiment_repair_required"
     if cycle_id:
         cycle = state.get("cycles", {}).get(cycle_id, {})
         if cycle.get("status") == "blocked":
@@ -143,13 +143,30 @@ def compute_next_action(paths: VibePaths) -> tuple[str, str]:
     return fallback, ""
 
 
-def blocking_real_experiment_repairs(progress: dict) -> list[dict]:
+def blocking_real_experiment_repairs(progress: dict, *, current_cycle_id: str = "") -> list[dict]:
     blocking_statuses = {"failed", "timeout", "cancelled", "dryrun_failed"}
+    countable = progress.get("countable_runs", [])
+    if len(countable) >= int(progress.get("target_count", 3) or 3):
+        return []
     return [
         row
         for row in progress.get("non_counting_real_experiment_runs", [])
         if row.get("requires_repair") and row.get("status") in blocking_statuses
+        and row_is_current_or_unsuperseded(row, countable, current_cycle_id=current_cycle_id)
     ]
+
+
+def row_is_current_or_unsuperseded(row: dict, countable: list[dict], *, current_cycle_id: str) -> bool:
+    if current_cycle_id and row.get("cycle_id") == current_cycle_id:
+        return True
+    row_capability = str(row.get("capability_id") or "")
+    row_direction = str(row.get("direction_id") or "")
+    for later in countable:
+        if row_capability and later.get("capability_id") == row_capability:
+            return False
+        if row_direction and later.get("direction_id") == row_direction:
+            return False
+    return not current_cycle_id
 
 
 def actionable_queue_rows(state: dict, queue: list[dict]) -> list[dict]:

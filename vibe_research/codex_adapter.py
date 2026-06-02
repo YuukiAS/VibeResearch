@@ -283,6 +283,9 @@ def context_packet(paths: VibePaths, target_id: str) -> str:
         ".vibe/project/brief.md",
         ".vibe/inbox/triage.jsonl",
         ".vibe/ideas/registry.jsonl",
+        ".vibe/research/scout/mechanism_cards.jsonl",
+        ".vibe/research/knowledge/knowledge_lifecycle.jsonl",
+        ".vibe/research/knowledge/orphan_audit.json",
         ".vibe/state/state.json",
     ]:
         path = paths.root / rel

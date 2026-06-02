@@ -14,7 +14,7 @@ from .paths import VibePaths
 LIFECYCLE_FILE = "knowledge_lifecycle.jsonl"
 ORPHAN_AUDIT_FILE = "orphan_audit.json"
 ORPHAN_AUDIT_MD = "orphan_audit.md"
-ACTIVE_STATUSES = {"INGESTED", "MECHANISM_CARD", "PLAN_CANDIDATE"}
+ACTIVE_STATUSES = {"INGESTED", "MECHANISM_CARD", "PLAN_CANDIDATE", "CYCLE_PLANNED"}
 TERMINAL_STATUSES = {"ACTIVE_MECHANISM", "NEGATIVE_EVIDENCE", "ARCHIVED_REFERENCE", "EXPIRED_ORPHAN"}
 LIFECYCLE_STATUSES = ACTIVE_STATUSES | TERMINAL_STATUSES
 DEFAULT_TTL_CYCLES = 2
@@ -82,6 +82,43 @@ def mark_card_active_mechanism(paths: VibePaths, card: dict[str, Any], *, manife
     )
 
 
+def mark_card_cycle_planned(paths: VibePaths, card: dict[str, Any], *, cycle_id: str) -> dict[str, Any]:
+    return record_knowledge_event(
+        paths,
+        source_type=str(card.get("source_type", "")),
+        source=str(card.get("source", "")),
+        status="CYCLE_PLANNED",
+        card_id=str(card.get("card_id", "")),
+        evidence={"cycle_id": cycle_id, "card_path": card.get("card_path", "")},
+    )
+
+
+def unconsumed_plan_candidate_cards(paths: VibePaths) -> list[dict[str, Any]]:
+    latest = load_latest_knowledge(paths)
+    plan_candidate_ids = {
+        row.get("card_id", "")
+        for row in latest.values()
+        if row.get("status") == "PLAN_CANDIDATE" and row.get("card_id")
+    }
+    if not plan_candidate_ids:
+        return []
+    registry = {row.get("card_id", ""): row for row in read_jsonl(paths.research / "scout" / "mechanism_cards.jsonl")}
+    cards: list[dict[str, Any]] = []
+    for card_id in sorted(plan_candidate_ids):
+        card = dict(registry.get(card_id, {}))
+        if not card:
+            lifecycle = next((row for row in latest.values() if row.get("card_id") == card_id), {})
+            card = {
+                "card_id": card_id,
+                "source_type": lifecycle.get("source_type", ""),
+                "source": lifecycle.get("source", ""),
+                "card_path": lifecycle.get("evidence", {}).get("card_path", "") if isinstance(lifecycle.get("evidence"), dict) else "",
+            }
+        card["lifecycle_status"] = "PLAN_CANDIDATE"
+        cards.append(card)
+    return cards
+
+
 def load_latest_knowledge(paths: VibePaths) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
     for row in read_jsonl(lifecycle_path(paths)):
@@ -136,6 +173,7 @@ def orphan_audit(paths: VibePaths) -> dict[str, Any]:
         "new_knowledge": counts.get("INGESTED", 0),
         "mechanism_cards": counts.get("MECHANISM_CARD", 0),
         "plan_candidates": counts.get("PLAN_CANDIDATE", 0),
+        "cycle_planned": counts.get("CYCLE_PLANNED", 0),
         "active_mechanisms": counts.get("ACTIVE_MECHANISM", 0),
         "negative_evidence": counts.get("NEGATIVE_EVIDENCE", 0),
         "archived_references": counts.get("ARCHIVED_REFERENCE", 0),

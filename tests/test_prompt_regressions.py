@@ -13,12 +13,16 @@ from vibe_research.cli import app
 from vibe_research.daemon import daemon_autonomy_audit, daemon_status
 from vibe_research.decisions import ensure_decision_after_revise, load_decision, make_decision, write_decision
 from vibe_research.git_ops import create_branch
-from vibe_research.io import append_jsonl, write_json, write_yaml
+from vibe_research.io import append_jsonl, read_json, read_jsonl, read_yaml, write_json, write_yaml
 from vibe_research.locks import active_advance_lock, advancing_lock
 from vibe_research.loop_guard import apply_loop_guard
+from vibe_research.next_action import blocking_real_experiment_repairs
 from vibe_research.paths import VibePaths
+from vibe_research.planner import build_draft_from_mechanism_card
 from vibe_research.project import create_cycle, sync_resource_plan_from_portfolio
 from vibe_research.promotion import compile_decision, validate_resource_plan
+from vibe_research.research_manager import collect_run_evidence_if_research_linked
+from vibe_research.scout import create_mechanism_card
 from vibe_research.scheduler import dependencies_blocked
 
 
@@ -103,6 +107,145 @@ def test_v0122_post_target_plan_cycle_compiles_active_capability_routes(tmp_path
     capability_ids = {spec["adapter_metadata"]["capability_id"] for spec in plan["runs"].values()}
     assert capability_ids == {"route-1", "route-2", "route-3"}
     assert all(spec["dryrun"]["command"] and spec["entrypoint"]["command"] for spec in plan["runs"].values())
+
+
+def test_v0202_plan_cycle_consumes_unconsumed_mechanism_card(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    activate_three_executable_capabilities(paths)
+    card = create_mechanism_card(
+        paths,
+        source_type="paper",
+        source="https://example.invalid/card",
+        claim="Component-level filtering reduces false positives.",
+        mechanism_extraction="component false-positive veto",
+        why_it_matters="Targets the current false-positive failure anchor.",
+        failure_anchor="remote false positives",
+        possible_mve="run component metrics export",
+        required_assets=["component mask", "baseline prediction"],
+        risks=["may reduce recall"],
+        stop_reason="no precision gain",
+    )
+    build_draft_from_mechanism_card(paths, card)
+
+    cycle = create_cycle(paths)
+
+    portfolio = (paths.cycles / cycle / "portfolio_plan.md").read_text()
+    resource_plan = read_yaml(paths.cycles / cycle / "resource_plan.yaml", {})
+    state = read_json(paths.state / "state.json", {})
+    assert card["card_id"] in portfolio
+    assert "d001_baseline" not in portfolio
+    assert resource_plan["mechanism_card"]["card_id"] == card["card_id"]
+    assert state["cycles"][cycle]["mechanism_card"]["card_id"] == card["card_id"]
+    lifecycle = read_jsonl(paths.research / "knowledge" / "knowledge_lifecycle.jsonl")
+    assert lifecycle[-1]["status"] == "CYCLE_PLANNED"
+
+
+def test_v0202_collect_skips_unknown_research_experiment_without_crashing(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    run_id = "r001_unknown_experiment"
+    (paths.runs / run_id).mkdir(parents=True)
+    state = read_json(paths.state / "state.json", {})
+    state.setdefault("runs", {})[run_id] = {
+        "status": "finished",
+        "cycle_id": "c001",
+        "research_metadata": {
+            "experiment_id": "missing_exp",
+            "mechanism_card_id": "card_001",
+        },
+    }
+    write_json(paths.state / "state.json", state)
+
+    collect_run_evidence_if_research_linked(
+        paths,
+        run_id,
+        {
+            "trusted": True,
+            "trust_status": "trusted",
+            "schema_status": "valid",
+            "metrics_file_path": ".vibe/results/missing.json",
+            "primary_metric": 1.0,
+        },
+    )
+
+    skipped = read_jsonl(paths.research / "evidence_link_skipped.jsonl")
+    assert skipped[-1]["experiment_id"] == "missing_exp"
+    assert skipped[-1]["reason"] == "unknown_experiment"
+
+
+def test_v0202_decision_write_unblocks_same_target_missing_decision(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    cycle_id = "c001"
+    run_id = "r001_metrics"
+    (paths.cycles / cycle_id).mkdir(parents=True)
+    (paths.runs / run_id).mkdir(parents=True)
+    (paths.runs / run_id / "metrics.json").write_text("{}\n")
+    (paths.runs / run_id / "reflect.md").write_text("# reflect\n")
+    (paths.runs / run_id / "revised_plan.md").write_text("# revised\n")
+    state = read_json(paths.state / "state.json", {})
+    state["current_cycle_id"] = cycle_id
+    state["status"] = "blocked_missing_decision"
+    state["blocked_reason"] = "offline fallback cannot make a structured research decision"
+    state["next_action"] = f"vibe decision show {run_id}"
+    state["cycles"][cycle_id] = {"status": "reviewed"}
+    state["runs"][run_id] = {"status": "blocked", "cycle_id": cycle_id}
+    write_json(paths.state / "state.json", state)
+
+    result = invoke(
+        "decision",
+        "write",
+        run_id,
+        "--type",
+        "collect_more_metrics",
+        "--action",
+        "Use schema-valid metrics as cycle evidence.",
+        "--target",
+        str(tmp_path),
+    )
+
+    assert result.exit_code == 0
+    state = read_json(paths.state / "state.json", {})
+    assert state["blocked_reason"] == ""
+    assert state["runs"][run_id]["status"] == "revised"
+    assert state["next_action"] == f"vibe reflect-cycle {cycle_id}"
+
+
+def test_v0202_compute_next_alias_remains_available(tmp_path: Path):
+    paths = initialized_paths(tmp_path)
+    result = invoke("compute-next", "--target", str(paths.root), "--dry-submit")
+
+    assert result.exit_code == 0
+    assert result.output.strip()
+
+
+def test_v0202_old_real_failure_superseded_by_counted_evidence_is_not_blocking():
+    progress = {
+        "target_count": 3,
+        "countable_runs": [
+            {"run_id": "r031", "cycle_id": "c019", "capability_id": "cap-a", "direction_id": "d_a"},
+        ],
+        "non_counting_real_experiment_runs": [
+            {
+                "run_id": "r004",
+                "cycle_id": "c001",
+                "capability_id": "cap-a",
+                "direction_id": "d_a",
+                "status": "failed",
+                "requires_repair": True,
+            },
+            {
+                "run_id": "r040",
+                "cycle_id": "c020",
+                "capability_id": "cap-b",
+                "direction_id": "d_b",
+                "status": "failed",
+                "requires_repair": True,
+            },
+        ],
+    }
+
+    blockers = blocking_real_experiment_repairs(progress, current_cycle_id="c020")
+
+    assert [row["run_id"] for row in blockers] == ["r040"]
 
 
 def test_v0123_auto_cycle_refuses_second_advancing_lock(tmp_path: Path):
