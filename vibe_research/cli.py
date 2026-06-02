@@ -27,6 +27,7 @@ from .adapter_onboarding import (
     script_bootstrap,
     write_real_experiment_gap_report,
 )
+from .anti_stall import run_anti_stall_benchmark, validate_anti_stall_report
 from .artifacts import validate_artifact, validate_hard_rules
 from .audit import current_alignment_audit
 from .automation import auto_cycle as run_auto_cycle
@@ -180,6 +181,7 @@ registry_app = typer.Typer(help="Record and query research registry immune memor
 debt_app = typer.Typer(help="Inspect and clear bounded WATCH/REFINE decision debt.")
 knowledge_app = typer.Typer(help="Track knowledge lifecycle and clear orphan knowledge.")
 os_beta_app = typer.Typer(help="Run and validate the OS beta closed-loop harness.")
+anti_stall_app = typer.Typer(help="Run anti-stall benchmark traps and scoring.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(config_app, name="config")
 app.add_typer(portal_app, name="portal")
@@ -220,6 +222,7 @@ app.add_typer(registry_app, name="registry")
 app.add_typer(debt_app, name="debt")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(os_beta_app, name="os-beta")
+app.add_typer(anti_stall_app, name="anti-stall")
 console = Console()
 
 
@@ -967,6 +970,33 @@ def os_beta_validate_cmd(target: Path = typer.Option(Path("."), "--target", "-t"
     result = validate_closed_loop(paths_)
     console.print_json(data=result)
     if not result.get("ok"):
+        raise typer.Exit(1)
+
+
+@anti_stall_app.command("run")
+def anti_stall_run_cmd(target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Run anti-stall benchmark traps against the framework gates."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    result = run_anti_stall_benchmark(paths_)
+    console.print_json(data=result)
+    if validate_anti_stall_report(result):
+        raise typer.Exit(1)
+
+
+@anti_stall_app.command("validate")
+def anti_stall_validate_cmd(report: Optional[Path] = typer.Argument(None), target: Path = typer.Option(Path("."), "--target", "-t")) -> None:
+    """Validate an anti-stall benchmark report."""
+
+    paths_ = paths(target)
+    paths_.require_initialized()
+    data = read_json(report or (paths_.kernel / "ANTI_STALL_BENCHMARK.json"), {})
+    issues = validate_anti_stall_report(data)
+    console.print(f"Anti-stall validation: {'ok' if not issues else 'blocked'}")
+    for issue in issues:
+        console.print(f"Issue: {issue}")
+    if issues:
         raise typer.Exit(1)
 
 

@@ -123,6 +123,9 @@ evidence 或 archived reference，就会过期为 EXPIRED_ORPHAN 并写入 regis
 `vibe os-beta run` 会跑一个 toy closed-loop harness，串起 Planner、Reviewer、Compiler、
 Executor、Reflector、Registry、Ratchet 和下一轮 Planner artifact。它检查角色边界、budget
 guard、重复路线拦截、debt clearing 和低 quota resume，但不会执行下游 CARE round。
+`vibe anti-stall run` 会给防空转陷阱打分：generic U-Net 重跑、negative-memory repeat、
+clone-only repo、one-case evidence promotion、smoke-only feasibility、WATCH debt clearing、
+orphan knowledge clearing、registry duplicate blocking、角色边界和低 quota checkpoint/resume。
 
 ```mermaid
 flowchart TD

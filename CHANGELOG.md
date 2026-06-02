@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.20.1 - 2026-06-01
+
+- Add an Anti-Stall Benchmark for framework-level trap detection and scoring.
+- Add `vibe anti-stall run` and `vibe anti-stall validate` commands.
+- Test low-value route rejection, negative-memory repeats, clone-only repo work,
+  one-case evidence promotion, smoke-only feasibility, WATCH debt clearing,
+  orphan knowledge clearing, registry duplicate blocking, role boundaries, and
+  low-quota checkpoint/resume.
+- Score benchmark categories for low-value route rejection, orphan clearing,
+  registry duplicate blocking, decision debt clearing, evidence promotion,
+  role-boundary compliance, and budget checkpoint/resume.
+- Keep benchmark traps deterministic and toy-only; it does not run CARE rounds.
+
 ## 0.20.0 - 2026-06-01
 
 - Add a VibeResearch OS Beta closed-loop harness for generic multi-session

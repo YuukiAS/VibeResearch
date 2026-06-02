@@ -164,6 +164,10 @@ evidence, or archived reference; expired orphans are recorded in the registry.
 Compiler, Executor, Reflector, Registry, Ratchet, and next Planner artifacts. It
 checks role boundaries, budget guards, duplicate blocking, debt clearing, and
 low-quota resume behavior without running a downstream CARE round.
+`vibe anti-stall run` scores trap handling for generic U-Net reruns,
+negative-memory repeats, clone-only repo work, one-case evidence promotion,
+smoke-only feasibility, WATCH debt clearing, orphan knowledge clearing,
+registry duplicate blocking, role boundaries, and low-quota checkpoint/resume.
 
 ```mermaid
 flowchart TD
