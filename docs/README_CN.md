@@ -132,6 +132,19 @@ guard、重复路线拦截、debt clearing 和低 quota resume，但不会执行
 `vibe anti-stall run` 会给防空转陷阱打分：generic U-Net 重跑、negative-memory repeat、
 clone-only repo、one-case evidence promotion、smoke-only feasibility、WATCH debt clearing、
 orphan knowledge clearing、registry duplicate blocking、角色边界和低 quota checkpoint/resume。
+`vibe brief update` 维护面向人类和未来 dashboard 的 Living Research Brief。它写入
+`.vibe/research/CURRENT_RESEARCH_BRIEF.zh.md`、`.vibe/research/CURRENT_RESEARCH_BRIEF.en.md`
+和 `.vibe/research/research_brief.json`；`research.brief_language` 决定默认语言。
+这不是日志，而是从本地 evidence 文件汇总当前项目目标、failure signatures、近期正负证据、
+当前主攻路线、open evidence debt、是否需要用户决策、active human guidance 和未消费机制卡。
+它不能把 smoke/import/clone 说成真实进展，也不能把 WATCH 说成 GO。
+`vibe guidance add` 会把 Human Idea Inbox 记录写入
+`.vibe/research/human_guidance.jsonl`，并渲染
+`.vibe/research/HUMAN_IDEA_INBOX.md`。每条记录包含 timestamp、source、raw_text、
+language、priority、linked_failure_signature、suggested_mechanism、status、
+review_decision、applied_in_plan、superseded_by 和 notes。`vibe idea` 也会写入这个 inbox。
+Planner 会说明哪些 active guidance 被吸收、哪些未使用；Reviewer 会要求计划解释或吸收最新
+human guidance；Reflector 会在观察到 evidence 后更新 guidance 状态。
 
 ```mermaid
 flowchart TD

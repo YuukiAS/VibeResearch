@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .io import append_jsonl, read_json, read_jsonl, utc_now, write_json, write_text
+from .human_guidance import active_human_guidance, guidance_tokens
 from .immune_registry import reviewer_registry_criterion
 from .paths import VibePaths
 from .planner import REQUIRED_FIELDS, load_draft_plan, meaningful_artifact
@@ -30,6 +31,7 @@ def reviewer_context(paths: VibePaths) -> dict[str, Any]:
         "negative_memory": read("NEGATIVE_MEMORY.md"),
         "open_debts": read("OPEN_DEBTS.md"),
         "evidence_count": len(read_jsonl(paths.kernel / "EVIDENCE_LEDGER.jsonl")),
+        "active_human_guidance": active_human_guidance(paths),
     }
 
 
@@ -62,6 +64,7 @@ def review_draft_plan(paths: VibePaths, draft: dict[str, Any]) -> dict[str, Any]
             "checked_negative_memory": True,
             "checked_open_debts": True,
             "checked_failure_signatures": True,
+            "checked_human_guidance": True,
         },
     }
     return enforce_loop_limit(draft, review)
@@ -105,9 +108,38 @@ def review_criteria(draft: dict[str, Any], context: dict[str, Any]) -> list[dict
     if not matches_failure_signature(str(body.get("failure_anchor", "")), str(context.get("failure_signatures", ""))):
         criteria.append({"outcome": "revise", "code": "failure_signature_mismatch", "message": "failure anchor does not match current failure signatures"})
 
+    missing_guidance = unaddressed_human_guidance(draft, context.get("active_human_guidance", []))
+    if missing_guidance:
+        criteria.append({"outcome": "revise", "code": "human_guidance_not_addressed", "message": "plan must absorb active human guidance or explain why it is not used: " + ", ".join(missing_guidance)})
+
     if not criteria:
         criteria.append({"outcome": "accept", "code": "reviewable_mve", "message": "plan has a failure anchor, MVE, artifact, belief update, and no blocking risk"})
     return criteria
+
+
+def unaddressed_human_guidance(draft: dict[str, Any], guidance: list[dict[str, Any]]) -> list[str]:
+    if not guidance:
+        return []
+    text = json_like_text(draft)
+    missing = []
+    considered = draft.get("human_guidance_considered", []) if isinstance(draft.get("human_guidance_considered"), list) else []
+    explained = {item.get("guidance_id", "") for item in considered if item.get("status") in {"absorbed", "deferred", "rejected"}}
+    for row in guidance[-20:]:
+        guidance_id = str(row.get("guidance_id", ""))
+        if guidance_id in explained:
+            continue
+        tokens = guidance_tokens(row)
+        if not tokens or not any(token in text for token in tokens):
+            missing.append(guidance_id)
+    return missing
+
+
+def json_like_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return " ".join(json_like_text(item) for item in value.values()).lower()
+    if isinstance(value, list):
+        return " ".join(json_like_text(item) for item in value).lower()
+    return str(value).lower()
 
 
 def matches_failure_signature(failure_anchor: str, failure_signatures: str) -> bool:
@@ -144,6 +176,7 @@ def render_review_report(review: dict[str, Any]) -> str:
         "- Negative memory checked: true",
         "- Open debts checked: true",
         "- Failure signatures checked: true",
+        "- Human guidance checked: true",
         "",
         "## Criteria",
         "",

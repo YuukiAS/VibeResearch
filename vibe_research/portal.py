@@ -16,6 +16,7 @@ ROOT_MIRRORS = [
     "VIBE_TODO.md",
     "VIBE_TIMELINE.md",
     "VIBE_LEADERBOARD.md",
+    "CURRENT_RESEARCH_BRIEF.md",
 ]
 
 

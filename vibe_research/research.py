@@ -9,6 +9,7 @@ from .decisions import BLOCK_DECISIONS, ensure_decision_after_revise
 from .ideas import create_idea as create_pool_idea
 from .ideas import get_idea, update_idea
 from .ideas import sync_plan_idea_updates
+from .human_guidance import sync_guidance_after_reflect
 from .io import append_jsonl, ensure_dir, read_json, read_jsonl, utc_now, write_json, write_text
 from .loop_guard import apply_loop_guard
 from .papers import add_paper, paper_search
@@ -44,6 +45,7 @@ This scaffold records the result and requires a revised plan before NEXT.
     state["updated_at"] = utc_now()
     write_json(paths.state / "state.json", state)
     record_event(paths, "run_reflect_written", f"Wrote reflect.md for {run_id}", cycle_id=run.get("cycle_id", ""), run_id=run_id, status="reflected")
+    sync_guidance_after_reflect(paths, run_id, text + "\n" + str(metrics))
     sync_dashboard(paths)
 
 

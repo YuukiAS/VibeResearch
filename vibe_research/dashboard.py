@@ -8,6 +8,7 @@ from .adapter_onboarding import adapter_readiness
 from .ideas import ensure_idea_pool, read_ideas, render_idea_views
 from .io import read_json, read_jsonl, write_json, write_text
 from .knowledge_lifecycle import unconsumed_plan_candidate_cards
+from .living_brief import update_living_research_brief
 from .paths import VibePaths
 from .portal import build_portal, write_portal_text
 from .research_manager import budget_status, load_hypotheses, research_readiness
@@ -213,6 +214,7 @@ def render_run_table(paths: VibePaths) -> list[dict[str, Any]]:
 def sync_dashboard(paths: VibePaths) -> None:
     ensure_idea_pool(paths)
     render_idea_views(paths)
+    brief = update_living_research_brief(paths)
     status = render_status(paths)
     todo = render_todo(paths)
     leaderboard = render_leaderboard(paths)
@@ -221,6 +223,7 @@ def sync_dashboard(paths: VibePaths) -> None:
     write_text(paths.dashboard / "TODO.md", todo)
     write_portal_text(paths, "VIBE_TODO.md", todo)
     write_portal_text(paths, "VIBE_LEADERBOARD.md", leaderboard)
+    write_portal_text(paths, "CURRENT_RESEARCH_BRIEF.md", (paths.root / brief["path"]).read_text())
     write_json(
         paths.dashboard / "status.json",
         {

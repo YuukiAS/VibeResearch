@@ -176,6 +176,23 @@ low-quota resume behavior without running a downstream CARE round.
 negative-memory repeats, clone-only repo work, one-case evidence promotion,
 smoke-only feasibility, WATCH debt clearing, orphan knowledge clearing,
 registry duplicate blocking, role boundaries, and low-quota checkpoint/resume.
+`vibe brief update` maintains a Living Research Brief for humans and future
+dashboards. It writes `.vibe/research/CURRENT_RESEARCH_BRIEF.zh.md`,
+`.vibe/research/CURRENT_RESEARCH_BRIEF.en.md`, and
+`.vibe/research/research_brief.json`; `research.brief_language` selects the
+preferred language. The brief is not a log. It summarizes the current project
+goal, failure signatures, recent positive and negative evidence, active route,
+open evidence debt, user-decision needs, active human guidance, and unconsumed
+mechanism cards from local evidence files. It must not turn smoke/import/clone
+checks into real progress or upgrade WATCH into GO.
+`vibe guidance add` records Human Idea Inbox entries in
+`.vibe/research/human_guidance.jsonl` and renders
+`.vibe/research/HUMAN_IDEA_INBOX.md`. Each record stores timestamp, source,
+raw text, language, priority, linked failure signature, suggested mechanism,
+status, review decision, applied plan, supersession, and notes. `vibe idea`
+also writes this inbox. Planner drafts list which active guidance was absorbed
+or left unused; Reviewer revises plans that ignore active guidance without an
+explanation; Reflector updates guidance after evidence is observed.
 
 ```mermaid
 flowchart TD

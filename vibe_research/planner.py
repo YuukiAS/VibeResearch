@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .decision_debt import planner_debt_diagnostic
+from .human_guidance import active_human_guidance, guidance_tokens, mark_guidance_considered
 from .immune_registry import planner_registry_diagnostic
 from .io import read_json, read_jsonl, utc_now, write_json
 from .knowledge_lifecycle import mark_card_plan_candidate
@@ -46,6 +47,7 @@ def planner_context(paths: VibePaths) -> dict[str, Any]:
         "negative_memory": read_kernel_text(paths, "NEGATIVE_MEMORY.md"),
         "open_debts": read_kernel_text(paths, "OPEN_DEBTS.md"),
         "evidence_count": len(read_jsonl(paths.kernel / "EVIDENCE_LEDGER.jsonl")),
+        "active_human_guidance": active_human_guidance(paths),
     }
 
 
@@ -94,7 +96,16 @@ def build_draft_plan(
             "evidence_count": context["evidence_count"],
             "has_negative_memory": bool(context["negative_memory"].strip()),
             "has_open_debts": bool(context["open_debts"].strip()),
+            "active_human_guidance_count": len(context["active_human_guidance"]),
         },
+        "human_guidance_considered": human_guidance_considered(context["active_human_guidance"], {
+            "failure_anchor": failure_anchor,
+            "hypothesis": hypothesis,
+            "mechanism": mechanism,
+            "minimum_experiment": minimum_experiment,
+            "fallback": fallback,
+            "stop_condition": stop_condition,
+        }),
         "diagnostics": [],
     }
     plan["diagnostics"] = planner_diagnostics(plan, context)
@@ -110,7 +121,26 @@ def build_draft_plan(
         plan["review_route"] = "requires_revision"
     if any(item["code"] in {"open_decision_debt_priority"} for item in plan["diagnostics"]):
         plan["review_route"] = "requires_revision"
+    if any(item["code"] in {"human_guidance_unaddressed"} for item in plan["diagnostics"]):
+        plan["review_route"] = "requires_revision"
+    mark_guidance_considered(paths, plan)
     return plan
+
+
+def human_guidance_considered(guidance: list[dict[str, Any]], plan_fields: dict[str, str]) -> list[dict[str, str]]:
+    plan_text = " ".join(str(value).lower() for value in plan_fields.values())
+    considered = []
+    for row in guidance[-20:]:
+        tokens = guidance_tokens(row)
+        absorbed = bool(tokens and any(token in plan_text for token in tokens))
+        considered.append(
+            {
+                "guidance_id": str(row.get("guidance_id", "")),
+                "status": "absorbed" if absorbed else "not_used",
+                "reason": "plan text references this guidance" if absorbed else "Planner must explain or revise before execution",
+            }
+        )
+    return considered
 
 
 def build_draft_from_mechanism_card(
@@ -167,6 +197,10 @@ def planner_diagnostics(plan: dict[str, Any], context: dict[str, Any]) -> list[d
         diagnostics.append({"level": "warning", "code": "open_debt_not_addressed", "message": "open WATCH/REFINE debt exists and is not referenced by this draft"})
     if confidence not in REVIEWABLE_CONFIDENCE:
         diagnostics.append({"level": "info", "code": "non_reviewable_confidence", "message": "maintenance/background drafts are non-executable"})
+    guidance = context.get("active_human_guidance", [])
+    considered = plan.get("human_guidance_considered", [])
+    if guidance and not any(item.get("status") == "absorbed" for item in considered):
+        diagnostics.append({"level": "warning", "code": "human_guidance_unaddressed", "message": "active human guidance exists but is not absorbed or explained"})
     return diagnostics
 
 

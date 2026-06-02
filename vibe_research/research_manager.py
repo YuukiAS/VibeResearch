@@ -534,7 +534,7 @@ def write_default_policies(
         "archive_may_run_automatically": True,
         "hypotheses_may_be_stopped_automatically": False,
     }
-    memo = {"version": 1, "language": memo_language, "timezone": timezone, "daily_memo_time": "18:00"}
+    memo = {"version": 1, "language": memo_language, "brief_language": "zh" if memo_language.lower().startswith("zh") else "en", "timezone": timezone, "daily_memo_time": "18:00"}
     policies = {"budget": budget, "stage_gates": stage_gates, "autonomy": autonomy, "memo": memo}
     targets = {
         "budget": paths.vibe / "policies" / "budget.yaml",

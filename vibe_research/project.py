@@ -16,6 +16,7 @@ from .decisions import write_block_decision
 from .ideas import create_idea as create_pool_idea
 from .ideas import ensure_idea_pool
 from .ideas import render_idea_views
+from .human_guidance import add_human_guidance, ensure_human_guidance
 from .io import append_jsonl, ensure_dir, next_numeric_id, read_json, read_jsonl, read_yaml, slugify, utc_now, write_json, write_text, write_yaml
 from .kernel import initialize_kernel
 from .knowledge_lifecycle import mark_card_cycle_planned, unconsumed_plan_candidate_cards
@@ -170,6 +171,7 @@ def init_project(
     write_text(paths.inbox / "questions.md", "# Questions\n\n")
     touch_jsonl(paths.inbox / "triage.jsonl")
     ensure_idea_pool(paths)
+    ensure_human_guidance(paths)
     render_idea_views(paths)
     write_project_brief(paths, project_brief)
     for text in collect_initial_ideas(initial_ideas or [], idea_file):
@@ -644,6 +646,7 @@ def add_idea(paths: VibePaths, text: str, *, source: str = "cli") -> IdeaRecord:
     existing = [row.get("raw_id", row.get("idea_id", "")) for row in read_jsonl(paths.inbox / "triage.jsonl")]
     raw_id = next_numeric_id(existing, "raw_")
     pool_record = create_pool_idea(paths, text, source=source, linked_raw_id=raw_id)
+    add_human_guidance(paths, text, source=source, linked_raw_id=raw_id)
     record = IdeaRecord(idea_id=pool_record["idea_id"], created_at=utc_now(), source=source, raw_text=text)
     raw_record = record.model_dump()
     raw_record["raw_id"] = raw_id

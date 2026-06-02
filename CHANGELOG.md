@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.20.3 - 2026-06-01
+
+- Add a Living Research Brief backend protocol with
+  `.vibe/research/CURRENT_RESEARCH_BRIEF.zh.md`,
+  `.vibe/research/CURRENT_RESEARCH_BRIEF.en.md`, and
+  `.vibe/research/research_brief.json`.
+- Add `research.brief_language` plus `vibe brief update/show` commands.
+- Ground brief text in project state, failure signatures, evidence ledger,
+  negative memory, open debts, real-experiment progress, active human guidance,
+  and unconsumed mechanism cards.
+- Add a structured Human Guidance Inbox at
+  `.vibe/research/human_guidance.jsonl` and
+  `.vibe/research/HUMAN_IDEA_INBOX.md`.
+- Add `vibe guidance add/list/review`; `vibe idea` now also records a high
+  priority guidance item.
+- Connect active human guidance to Planner diagnostics, Reviewer criteria, and
+  Reflector status updates so user ideas do not disappear into chat history.
+
 ## 0.20.2 - 2026-06-01
 
 - Close common v0.19 prompt regressions without running a downstream CARE

@@ -63,6 +63,7 @@ from .git_ops import abandon_run, create_branch, git_available, git_current_bran
 from .ideas import archive_idea as archive_pool_idea
 from .ideas import build_deep_request_from_idea
 from .ideas import clean_ideas, get_idea, promote_idea, read_ideas, reject_idea, triage_ideas
+from .human_guidance import add_human_guidance, read_human_guidance, update_human_guidance
 from .io import read_json, read_jsonl, read_yaml
 from .immune_registry import immune_check, load_budget_recovery, record_registry_event
 from .knowledge_lifecycle import advance_knowledge_ttl, load_orphan_audit, orphan_audit, record_knowledge_event
@@ -70,6 +71,7 @@ from .kernel import SESSION_ROLES, check_role_permission
 from .kernel import check_protocol as kernel_check_protocol
 from .kernel import initialize_kernel, kernel_status, record_evidence
 from .locks import active_advance_lock
+from .living_brief import update_living_research_brief
 from .internalization import (
     add_external_asset,
     add_lineage_relation,
@@ -166,6 +168,8 @@ policy_app = typer.Typer(help="Inspect and lint research policies.")
 budget_app = typer.Typer(help="Reserve, reconcile, and inspect research budget.")
 session_budget_app = typer.Typer(help="Manage Codex session quota guard state.")
 memo_app = typer.Typer(help="Generate daily research memos.")
+brief_app = typer.Typer(help="Generate living research situation briefs.")
+guidance_app = typer.Typer(help="Manage structured human guidance.")
 external_app = typer.Typer(help="Acquire external repositories and method resources with provenance.")
 lineage_app = typer.Typer(help="Manage generic research lineage records.")
 internalization_app = typer.Typer(help="Plan and audit generic internalization readiness.")
@@ -207,6 +211,8 @@ app.add_typer(policy_app, name="policy")
 app.add_typer(budget_app, name="budget")
 app.add_typer(session_budget_app, name="session-budget")
 app.add_typer(memo_app, name="memo")
+app.add_typer(brief_app, name="brief")
+app.add_typer(guidance_app, name="guidance")
 app.add_typer(external_app, name="external")
 app.add_typer(lineage_app, name="lineage")
 app.add_typer(internalization_app, name="internalization")
@@ -2414,6 +2420,80 @@ def memo_daily_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), dat
     result = render_daily_memo(paths(target), date=date, language=language)
     sync_dashboard(paths(target))
     console.print_json(data={"path": result["path"], "json_path": result["json_path"]})
+
+
+@brief_app.command("update")
+def brief_update_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), language: Optional[str] = typer.Option(None, "--language")) -> None:
+    """Write dashboard-readable living research brief files."""
+
+    result = update_living_research_brief(paths(target), language=language)
+    console.print_json(data=result)
+
+
+@brief_app.command("show")
+def brief_show_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), language: Optional[str] = typer.Option(None, "--language")) -> None:
+    """Print the current living research brief, generating it if needed."""
+
+    result = update_living_research_brief(paths(target), language=language)
+    console.print((paths(target).root / result["path"]).read_text())
+
+
+@guidance_app.command("add")
+def guidance_add_cmd(
+    text: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    language: str = typer.Option("auto", "--language"),
+    priority: str = typer.Option("high", "--priority"),
+    linked_failure_signature: str = typer.Option("", "--linked-failure-signature"),
+    suggested_mechanism: str = typer.Option("", "--suggested-mechanism"),
+) -> None:
+    """Record high-priority human guidance for Planner/Reviewer."""
+
+    record = add_human_guidance(
+        paths(target),
+        text,
+        language=language,
+        priority=priority,
+        linked_failure_signature=linked_failure_signature,
+        suggested_mechanism=suggested_mechanism,
+    )
+    sync_dashboard(paths(target))
+    console.print_json(data=record)
+
+
+@guidance_app.command("list")
+def guidance_list_cmd(target: Path = typer.Option(Path("."), "--target", "-t"), status: Optional[str] = typer.Option(None, "--status")) -> None:
+    """List structured human guidance records."""
+
+    rows = read_human_guidance(paths(target))
+    if status:
+        rows = [row for row in rows if row.get("status") == status]
+    console.print_json(data=rows)
+
+
+@guidance_app.command("review")
+def guidance_review_cmd(
+    guidance_id: str,
+    target: Path = typer.Option(Path("."), "--target", "-t"),
+    status: str = typer.Option(..., "--status"),
+    decision: str = typer.Option("", "--decision"),
+    applied_in_plan: str = typer.Option("", "--applied-in-plan"),
+    superseded_by: str = typer.Option("", "--superseded-by"),
+    notes: str = typer.Option("", "--notes"),
+) -> None:
+    """Update Planner/Reviewer disposition for a guidance item."""
+
+    record = update_human_guidance(
+        paths(target),
+        guidance_id,
+        status=status,
+        review_decision=decision or status,
+        applied_in_plan=applied_in_plan,
+        superseded_by=superseded_by,
+        notes=notes,
+    )
+    sync_dashboard(paths(target))
+    console.print_json(data=record)
 
 
 @dashboard_app.command("export-research")
